@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" width="1200" height="780">
+ <defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#dadfd1"/><stop offset="1" stop-color="#edf0df"/></linearGradient><linearGradient id="hill" x2="0" y2="1"><stop stop-color="#8c9c7b"/><stop offset="1" stop-color="#526b4f"/></linearGradient></defs>
+ <path fill="url(#sky)" d="M0 0h1200v780H0z"/>
+ <circle cx="891" cy="180" r="76" fill="#f5f0d5"/>
+ <path d="m0 439 236-229 168 180 148-246 251 304 176-218 221 242v308H0Z" fill="#bec5af"/>
+ <path d="m394 391 158-247 66 80-66-28-55 69-13-23Z" fill="#ecedde"/>
+ <path d="M-60 577C156 330 369 368 573 517c189 139 423-220 703-83v346H-60Z" fill="url(#hill)"/>
+ <path d="M-60 698C162 455 423 613 627 647c226 37 349-100 649-51v184H-60Z" fill="#354f40"/>
+ <path d="M470 780c57-91 185-98 172-137-17-47-117-63-135-88 92 25 193 58 191 96-3 56-108 67-133 129Z" fill="#b3b899" opacity=".85"/>
+ <g fill="#e9eddc" font-family="Georgia,serif"><text x="70" y="113" font-size="17" letter-spacing="5">A STUDY IN STILLNESS</text><text x="65" y="191" font-size="66" letter-spacing="-1">Somewhere, slower.</text></g>
+ <path d="M72 695h47" stroke="#e9eddc" stroke-width="2"/><text x="137" y="701" fill="#e9eddc" font-family="sans-serif" font-size="15" letter-spacing="3">ALPINE NOTES / 012</text>
+</svg>

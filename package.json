@@ -1,0 +1,43 @@
+{
+  "name": "uclip",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.22.0 <23"
+  },
+  "packageManager": "npm@11.12.1",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
+    "tauri:build": "tauri build --no-bundle",
+    "test:core": "cargo test -p uclip-core --locked",
+    "contracts:generate": "node scripts/contracts.mjs",
+    "contracts:check": "node scripts/contracts.mjs --check",
+    "check": "npm run format:check && npm run contracts:check && npm run boundaries:check && npm run known-bugs:check && npm test && npm run build && cargo fmt --all -- --check && cargo test --workspace --locked && cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "boundaries:check": "node scripts/check-boundaries.mjs",
+    "known-bugs:check": "node scripts/check-known-bugs.mjs",
+    "format": "prettier --write --ignore-unknown src scripts package.json tsconfig.json vite.config.ts vitest.config.ts .github",
+    "format:check": "prettier --check --ignore-unknown src scripts package.json tsconfig.json vite.config.ts vitest.config.ts .github"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "prettier": "3.10.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
+  }
+}

@@ -1,0 +1,21 @@
+[package]
+name = "uclip-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[lib]
+name = "uclip_desktop"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+uclip-core = { path = "../crates/uclip-core" }
+tauri = { version = "=2.12.5", features = [] }
+tauri-plugin-single-instance = "=2.5.5"
+serde.workspace = true
+url = "2"
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
