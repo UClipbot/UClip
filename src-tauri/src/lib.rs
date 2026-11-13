@@ -55,6 +55,7 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::history_query,
+            commands::create_text,
             commands::clip_detail,
             commands::clipboard_status,
             commands::update_capture_policy,

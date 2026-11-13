@@ -8,6 +8,7 @@ UClip is a local-first clipboard manager for saving copied content, finding it q
 - **Quick search:** find entries by content or type, with regular expression support.
 - **Copy and paste:** copy a saved entry again, or paste it into the previous application on Linux X11.
 - **Capture controls:** pause or resume capture, set exclusions, and choose a history limit.
+- **Manual entries:** save text snippets directly.
 - **Desktop integration:** use the tray or a shortcut to reopen the window, with pinning, hide-on-blur, and login startup options.
 - **Light and dark themes:** choose an appearance and keep your preference.
 

@@ -5,6 +5,7 @@ fn main() {
             "get_settings",
             "update_settings",
             "history_query",
+            "create_text",
             "clip_detail",
             "clipboard_status",
             "update_capture_policy",

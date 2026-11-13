@@ -158,3 +158,38 @@ def run(checks):
     c.click('[aria-label="清空搜索"]')
     c.policy(enabled=previous_policy['enabled'])
     print('PASS P2: native query deadline, stale Enter guard, late response suppression and explicit retry',flush=True)
+
+
+def run_manual(c):
+    original=c.action('clipboard_status')['policy']
+    c.activate(c.window('^UClip$'))
+    c.policy(enabled=False)
+    wait(lambda:c.execute('return document.querySelector(".capture-toggle")?.textContent.includes("开始采集")'),'paused manual create UI')
+    text='  手工保存合成文本 🦀\n第二行\n\n末尾空白  '
+    c.click('[aria-label="更多选项"]')
+    c.click('[data-testid="new-text"]')
+    c.set('text',text=text)
+    c.click('#clip-content')
+    wait(lambda:c.execute('return document.hasFocus() && document.activeElement===document.querySelector("#clip-content")'),'native manual editor has input focus')
+    c.key('key','--clearmodifiers','ctrl+v')
+    wait(lambda:c.execute('return document.querySelector("#clip-content").value===arguments[0]',[text]),'exact Unicode and multiline manual input')
+    c.click('.new-form .primary-button')
+    wait(lambda:not c.execute('return !!document.querySelector(".new-form")'),'manual form closes only after successful save')
+    items=c.query(text)['items']
+    assert len(items)==1 and items[0]['manual'],items
+    c.manual_id=items[0]['id'];c.manual_text=text
+    other=c.action('create_text',text=text)
+    assert other!=c.manual_id and c.query(text)['total']==2
+    c.action('copy_clip',id=c.manual_id,paste=False)
+    c.received('text',text)
+    c.policy(excludePattern='^private')
+    before=c.query()['revision']
+    c.click('[aria-label="更多选项"]');c.click('[data-testid="new-text"]');c.enter('#clip-content','private fixture')
+    c.click('.new-form .primary-button')
+    wait(lambda:c.execute('return document.querySelector(".toast")?.textContent.includes("排除规则")'),'manual exclusion is reported')
+    assert c.execute('return !!document.querySelector(".new-form")')
+    assert c.query()['revision']==before and c.query('private fixture')['total']==0
+    c.click('[aria-label="关闭面板"]')
+    c.policy(enabled=original['enabled'],excludePattern=original['excludePattern'])
+    c.total=c.query()['total']
+    print('PASS P1: real manual-create UI while paused, distinct identities, exact copy, exclusion failure retains form and revision',flush=True)

@@ -348,7 +348,22 @@ export function App() {
 
   function createClip(event: FormEvent) {
     event.preventDefault();
-    if (!newContent.trim()) return;
+    if (!newContent) return;
+    if (appearance.native) {
+      void (async () => {
+        try {
+          const id = await live.createText(newContent);
+          setSelectedId(id);
+          clearFilters();
+          setNewContent('');
+          closeModal();
+          setToast({ message: '文本已保存' });
+        } catch (error) {
+          setToast({ message: safeError(error).message });
+        }
+      })();
+      return;
+    }
     const clip: Clip = {
       id: `preview-${Date.now()}`,
       type: 'text',
@@ -785,11 +800,11 @@ export function App() {
             <>
               <button
                 role="menuitem"
-                disabled={appearance.native}
+                data-testid="new-text"
                 onClick={() => menuAction(() => openModal('new'))}
               >
                 <Icon name="plus" size={15} />
-                新建示例
+                {appearance.native ? '新建文本' : '新建示例'}
               </button>
               <button role="menuitem" onClick={() => menuAction(() => setGrid(!grid))}>
                 <Icon name={grid ? 'list' : 'grid'} size={15} />
@@ -1044,31 +1059,44 @@ export function App() {
         </Modal>
       )}
       {modal === 'new' && (
-        <Modal title="新建示例" description="仅保存在此次预览，刷新后还原。" onClose={closeModal}>
+        <Modal
+          title={appearance.native ? '新建文本' : '新建示例'}
+          description={
+            appearance.native
+              ? '保存在此设备；采集暂停时也可手动添加，排除与容量规则仍生效。'
+              : '仅保存在此次预览，刷新后还原。'
+          }
+          onClose={closeModal}
+        >
           <form className="new-form" onSubmit={createClip}>
-            <label htmlFor="clip-title">标题（可选）</label>
-            <input
-              id="clip-title"
-              data-autofocus
-              value={newTitle}
-              onChange={(event) => setNewTitle(event.target.value)}
-              maxLength={96}
-            />
+            {!appearance.native && (
+              <>
+                <label htmlFor="clip-title">标题（可选）</label>
+                <input
+                  id="clip-title"
+                  data-autofocus
+                  value={newTitle}
+                  onChange={(event) => setNewTitle(event.target.value)}
+                  maxLength={96}
+                />
+              </>
+            )}
             <label htmlFor="clip-content">内容</label>
             <textarea
               id="clip-content"
               value={newContent}
               onChange={(event) => setNewContent(event.target.value)}
               rows={6}
-              maxLength={8000}
+              maxLength={appearance.native ? 4 * 1024 * 1024 : 8000}
+              data-autofocus={appearance.native ? true : undefined}
               required
             />
             <div className="form-actions">
               <button className="secondary-button" type="button" onClick={closeModal}>
                 取消
               </button>
-              <button className="primary-button" disabled={!newContent.trim()}>
-                添加示例
+              <button className="primary-button" disabled={!newContent || live.mutating}>
+                {appearance.native ? '保存文本' : '添加示例'}
               </button>
             </div>
           </form>

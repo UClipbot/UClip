@@ -600,3 +600,51 @@ fn missing_change_tracking_fails_startup_instead_of_silently_accepting_writes() 
         uclip_core::SCHEMA_VERSION
     );
 }
+
+#[test]
+fn manual_creation_uses_shared_rules_but_preserves_distinct_user_identities_while_paused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("manual.sqlite3");
+    let mut s = Storage::open(&path).unwrap();
+    let text = "  中文\n\n手工副本 🦀  ".to_string();
+    let a = s.create_text(text.clone()).unwrap();
+    let b = s.create_text(text.clone()).unwrap();
+    assert_ne!(a, b);
+    assert!(s.history(query("")).unwrap().items.iter().all(|i| i.manual));
+    enabled(&mut s, 3);
+    let c = s.capture(ClipPayload::Text(text.clone())).unwrap().unwrap();
+    assert_ne!(c, a);
+    assert_ne!(c, b);
+    assert_eq!(
+        s.capture(ClipPayload::Text(text.clone())).unwrap().unwrap(),
+        c
+    );
+    s.capture(ClipPayload::Text("新的采集".into())).unwrap();
+    assert_eq!(s.read_clip(&c).unwrap_err().code, ErrorCode::NotFound);
+    assert_eq!(s.read_clip(&a).unwrap(), ClipPayload::Text(text.clone()));
+    let p = s.capture_policy().unwrap();
+    s.update_capture_policy(UpdateCapturePolicy {
+        enabled: false,
+        exclude_pattern: "private".into(),
+        max_items: 3,
+        expected_revision: p.revision,
+    })
+    .unwrap();
+    let revision = s.history_revision().unwrap();
+    assert_eq!(
+        s.create_text("PRIVATE value".into()).unwrap_err().code,
+        ErrorCode::Excluded
+    );
+    assert_eq!(
+        s.create_text("x".repeat(MAX_TEXT_BYTES + 1))
+            .unwrap_err()
+            .code,
+        ErrorCode::LimitExceeded
+    );
+    assert_eq!(s.history_revision().unwrap(), revision);
+    drop(s);
+    assert_eq!(
+        Storage::open(&path).unwrap().read_clip(&b).unwrap(),
+        ClipPayload::Text(text)
+    );
+}

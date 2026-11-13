@@ -24,6 +24,7 @@ const codes: ReadonlySet<ErrorCode> = new Set([
   'target_lost',
   'shortcut_conflict',
   'query_timeout',
+  'excluded',
 ]);
 
 export function safeError(error: unknown): AppError {
@@ -49,6 +50,7 @@ export function safeError(error: unknown): AppError {
       restricted: '当前平台或权限不支持此操作。',
       target_lost: '原应用目标已变化，未自动粘贴。',
       shortcut_conflict: '快捷键不可用或已被占用，原快捷键保持不变。',
+      excluded: '内容命中排除规则，未保存。',
       query_timeout: '搜索超时，请缩小范围或简化表达式。',
       unavailable: '本地服务不可用，请重启桌面应用。',
     };

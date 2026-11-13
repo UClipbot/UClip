@@ -165,9 +165,20 @@ impl Storage {
         self.capture_policy()
     }
     pub fn capture(&mut self, payload: ClipPayload) -> Result<Option<String>, AppError> {
+        self.save_payload(payload, true)
+    }
+    pub fn create_text(&mut self, text: String) -> Result<String, AppError> {
+        self.save_payload(ClipPayload::Text(text), false)?
+            .ok_or_else(|| AppError::new(ErrorCode::Excluded))
+    }
+    fn save_payload(
+        &mut self,
+        payload: ClipPayload,
+        captured: bool,
+    ) -> Result<Option<String>, AppError> {
         payload.validate()?;
         let policy = self.capture_policy()?;
-        if !policy.enabled {
+        if captured && !policy.enabled {
             return Ok(None);
         }
         let (kind, text, data, width, height, count) = match &payload {
@@ -209,14 +220,18 @@ impl Storage {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Fingerprints are not identities. Only the unclassified, unpinned capture scope deduplicates.
-        let existing: Option<String> = tx.query_row("SELECT id FROM clips WHERE fingerprint=?1 AND origin='capture' AND pinned=0 AND deleted=0 AND collection IS NULL LIMIT 1", [&fingerprint], |r| r.get(0)).optional()?;
+        let existing: Option<String> = if captured {
+            tx.query_row("SELECT id FROM clips WHERE fingerprint=?1 AND origin='capture' AND pinned=0 AND deleted=0 AND collection IS NULL LIMIT 1", [&fingerprint], |r| r.get(0)).optional()?
+        } else {
+            None
+        };
         let sequence: i64 = tx.query_row(
             "SELECT revision+1 FROM history_meta WHERE singleton=1",
             [],
             |r| r.get(0),
         )?;
         let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,captured_at,sequence,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,sequence=excluded.sequence,revision=clips.revision+1", params![id,kind_name(kind),text,data,width,height,count,fingerprint,now(),sequence])?;
+        tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,captured_at,sequence,origin,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,sequence=excluded.sequence,revision=clips.revision+1", params![id,kind_name(kind),text,data,width,height,count,fingerprint,now(),sequence,if captured {"capture"} else {"manual"}])?;
         prune(&tx, policy.max_items, Some(&id))?;
         let pending: u32 = tx.query_row("SELECT count(*) FROM clip_changes", [], |r| r.get(0))?;
         if pending > 100_000 {
@@ -243,7 +258,7 @@ impl Storage {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
         let matcher = pattern(&query.query, !query.regex)?;
-        let mut statement = self.connection.prepare("SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision FROM clips WHERE deleted=0 ORDER BY sequence DESC,id")?;
+        let mut statement = self.connection.prepare("SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision,origin FROM clips WHERE deleted=0 ORDER BY sequence DESC,id")?;
         let mut rows = statement.query([])?;
         let mut total = 0;
         let mut items = vec![];
@@ -292,6 +307,7 @@ impl Storage {
                 items.push(HistoryItem {
                     id: row.get(0)?,
                     kind,
+                    manual: row.get::<_, String>(9)? == "manual",
                     match_ranges: if query.query.is_empty() {
                         vec![]
                     } else {

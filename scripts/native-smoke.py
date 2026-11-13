@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='target/debug/uclip-desktop')
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
+    parser.add_argument('--manual-only',action='store_true',help='Isolated real manual text creation.')
     parser.add_argument('--paste-performance',action='store_true',help='Twenty actual automatic paste receives per payload type.')
     parser.add_argument('--wake-only',action='store_true',help='Twenty isolated shortcut hide/wake cycles.')
     parser.add_argument('--startup-performance',action='store_true',help='Ten disposable process launches, no clipboard fixtures.')
@@ -134,6 +135,24 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.manual_only:
+                    from clipboard_native_check import ClipboardChecks
+                    from desktop_native_check import run_manual
+                    clipboard_checks=ClipboardChecks(invoke,execute,click,enter,env,directory,log)
+                    run_manual(clipboard_checks)
+                    for abrupt in [False,True]:
+                        if abrupt:os.kill(owned_processes()[0][0],signal.SIGKILL)
+                        else:invoke('quit_app')
+                        wait_for(lambda:not owned_processes(),'manual history process termination')
+                        try:request('DELETE',f'/session/{session}')
+                        except (RuntimeError,OSError):pass
+                        session=start()
+                        wait_for(lambda:execute('return !!document.querySelector("#history-search")'),'manual history restart')
+                        assert clipboard_checks.query(clipboard_checks.manual_text)['total']==2
+                        clipboard_checks.action('copy_clip',id=clipboard_checks.manual_id,paste=False)
+                        clipboard_checks.received('text',clipboard_checks.manual_text)
+                    print('PASS P1: manual identities and exact text survive graceful exit and SIGKILL/WAL recovery',flush=True)
+                    return
                 if args.paste_performance:
                     from clipboard_native_check import ClipboardChecks,wait
                     from experience_native_check import measure_continuous_paste
@@ -244,7 +263,8 @@ def main():
                     clipboard_checks = ClipboardChecks(invoke, execute, click, enter, env, directory, log)
                     clipboard_checks.run()
                     capture('local-history')
-                    from desktop_native_check import run as desktop_checks
+                    from desktop_native_check import run as desktop_checks,run_manual
+                    run_manual(clipboard_checks)
                     desktop_checks(clipboard_checks)
                     from experience_native_check import run as experience_checks
                     experience_checks(clipboard_checks)

@@ -186,6 +186,22 @@ export function useHistory(
       await refresh();
     }
   }
+  async function createText(text: string) {
+    if (mutation.current) throw safeError({ code: 'busy' });
+    mutation.current = true;
+    setMutating(true);
+    statusGeneration.current++;
+    try {
+      return await invoke<string>('create_text', { text });
+    } finally {
+      mutation.current = false;
+      if (mounted.current) {
+        setMutating(false);
+        setQueryEpoch((epoch) => epoch + 1);
+      }
+      await refresh();
+    }
+  }
   async function changeDeletion(request: ChangeClipDeletion) {
     if (mutation.current) throw safeError({ code: 'busy' });
     mutation.current = true;
@@ -216,7 +232,7 @@ export function useHistory(
     type: item.kind === 'files' ? 'file' : item.kind,
     title: item.kind === 'files' ? item.preview : '',
     content: item.preview,
-    source: '来源未知',
+    source: item.manual ? '手动创建' : '来源未知',
     time: new Date(Number(item.capturedAt)).toLocaleTimeString('zh-CN', {
       hour: '2-digit',
       minute: '2-digit',
@@ -248,6 +264,7 @@ export function useHistory(
     setOffset,
     updatePolicy,
     changeDeletion,
+    createText,
     mutating,
     copy,
     refresh,

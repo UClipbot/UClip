@@ -143,7 +143,11 @@ class ClipboardChecks:
         large='大文本 fixture\n' + ('x' * (1024 * 1024))
         large_source=subprocess.Popen(['xclip','-selection','clipboard','-in','-quiet'],env=self.env,stdin=subprocess.PIPE,stdout=self.log,stderr=self.log);self.processes.append(large_source)
         large_source.stdin.write(large.encode());large_source.stdin.close()
-        large_item=wait(lambda:next(iter(self.query('大文本 fixture')['items']),None),'xclip INCR large text capture')
+        try:
+            large_item=wait(lambda:next(iter(self.query('大文本 fixture')['items']),None),'xclip INCR large text capture')
+        except Exception:
+            print('INCR DIAGNOSTIC '+json.dumps({'sourceExit':large_source.poll(),'status':self.action('clipboard_status')},ensure_ascii=False),flush=True)
+            raise
         assert self.action('clip_detail',id=large_item['id'],thumbnail=False)['text']==large
         print('PASS A: text/image/ordered file and folder capture, real system writeback, no internal recapture, A-B-A identity',flush=True)
 
@@ -300,6 +304,8 @@ class ClipboardChecks:
         if hasattr(self,'deleted_id'):
             missing=self.invoke('clip_detail',{'id':self.deleted_id,'thumbnail':False})
             assert not missing['ok'] and missing['error']['code']=='not_found'
+        if hasattr(self,'manual_id'):
+            self.action('copy_clip',id=self.manual_id,paste=False);self.received('text',self.manual_text)
         self.action('copy_clip',id=self.ids['text'],paste=False);self.received('text',self.text)
         self.action('copy_clip',id=self.ids['image'],paste=False);self.received('image',self.image)
         self.action('copy_clip',id=self.ids['files'],paste=False);self.received('files',self.files)

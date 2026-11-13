@@ -305,3 +305,14 @@ pub async fn hide_main_window(app: tauri::AppHandle) -> Result<(), AppError> {
 pub async fn quit_app(app: tauri::AppHandle) {
     crate::shutdown(app);
 }
+
+#[tauri::command]
+pub async fn create_text(state: State<'_, AppState>, text: String) -> Result<String, AppError> {
+    uclip_core::ClipPayload::Text(text.clone()).validate()?;
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .create_text(text)
+        .await
+}

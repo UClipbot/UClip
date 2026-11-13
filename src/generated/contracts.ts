@@ -18,7 +18,7 @@ export type UpdateCapturePolicy = { enabled: boolean, excludePattern: string, ma
 
 export type HistoryQuery = { query: string, regex: boolean, kind: ClipKind | null, offset: number, expectedRevision: string | null, };
 
-export type HistoryItem = { id: string, kind: ClipKind, preview: string, capturedAt: string, lastUsedAt: string | null, width: number | null, height: number | null, fileCount: number, revision: string,
+export type HistoryItem = { manual: boolean, id: string, kind: ClipKind, preview: string, capturedAt: string, lastUsedAt: string | null, width: number | null, height: number | null, fileCount: number, revision: string,
 /**
  * UTF-16 offsets into preview. Matching stays in the bounded Rust regex engine.
  */
@@ -42,7 +42,7 @@ revision: string, };
 
 export type UpdateSettings = { theme: Theme, expectedRevision: string, };
 
-export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout";
+export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout" | "excluded";
 
 export type AppError = { code: ErrorCode, message: string, };
 

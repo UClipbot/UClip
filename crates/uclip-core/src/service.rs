@@ -132,6 +132,9 @@ impl CoreService {
         self.operation(move |s| s.update_capture_policy(request))
             .await
     }
+    pub async fn create_text(&self, text: String) -> Result<String, AppError> {
+        self.operation(move |s| s.create_text(text)).await
+    }
     pub async fn capture(&self, payload: crate::ClipPayload) -> Result<Option<String>, AppError> {
         self.operation(move |s| s.capture(payload)).await
     }

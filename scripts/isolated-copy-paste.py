@@ -20,7 +20,7 @@ def main():
         wm = subprocess.Popen(['muffin', '--sm-disable'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             time.sleep(0.8)
-            test_args=['--paste-performance'] if '--paste-performance' in sys.argv else ['--wake-only'] if '--wake-only' in sys.argv else ['--startup-performance'] if '--startup-performance' in sys.argv else ['--clipboard-fixtures','--screenshots','docs/previews/copy-paste']
+            test_args=['--manual-only'] if '--manual-only' in sys.argv else ['--paste-performance'] if '--paste-performance' in sys.argv else ['--wake-only'] if '--wake-only' in sys.argv else ['--startup-performance'] if '--startup-performance' in sys.argv else ['--clipboard-fixtures','--screenshots','docs/previews/copy-paste']
             return subprocess.call(['/usr/bin/python3', 'scripts/native-smoke.py',*test_args])
         finally: stop(wm)
     with tempfile.TemporaryDirectory(prefix='uclip-isolated-display-') as directory:
@@ -46,6 +46,6 @@ def main():
                     time.sleep(0.1)
                 else: raise RuntimeError('nested display timeout')
                 print('Isolated native display ready; only synthetic clipboard contents are used.', flush=True)
-                return subprocess.call(['dbus-run-session', '--', '/usr/bin/python3', __file__, '--inside',*(['--paste-performance'] if '--paste-performance' in sys.argv else ['--wake-only'] if '--wake-only' in sys.argv else ['--startup-performance'] if '--startup-performance' in sys.argv else [])], env=env)
+                return subprocess.call(['dbus-run-session', '--', '/usr/bin/python3', __file__, '--inside',*(['--manual-only'] if '--manual-only' in sys.argv else ['--paste-performance'] if '--paste-performance' in sys.argv else ['--wake-only'] if '--wake-only' in sys.argv else ['--startup-performance'] if '--startup-performance' in sys.argv else [])], env=env)
             finally: stop(server)
 if __name__ == '__main__': sys.exit(main())

@@ -45,6 +45,7 @@ pub enum ErrorCode {
     TargetLost,
     ShortcutConflict,
     QueryTimeout,
+    Excluded,
 }
 
 /// Safe across IPC. Never expose SQLite errors, paths, or user content.
@@ -73,6 +74,7 @@ impl AppError {
             ErrorCode::Restricted => "当前平台或权限不支持此操作。",
             ErrorCode::TargetLost => "原应用目标已变化，未自动粘贴。",
             ErrorCode::ShortcutConflict => "快捷键不可用或已被占用，原快捷键保持不变。",
+            ErrorCode::Excluded => "内容命中排除规则，未保存。",
             ErrorCode::QueryTimeout => "搜索超时，请缩小范围或简化表达式。",
             ErrorCode::Unavailable => "本地服务不可用，请重启应用。",
         };
@@ -176,6 +178,7 @@ pub struct HistoryQuery {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HistoryItem {
+    pub manual: bool,
     pub id: String,
     pub kind: ClipKind,
     pub preview: String,

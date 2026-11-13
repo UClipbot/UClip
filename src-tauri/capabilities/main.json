@@ -21,6 +21,7 @@
     "allow-set-autostart",
     "allow-set-desktop-interaction",
     "allow-hide-main-window",
-    "allow-quit-app"
+    "allow-quit-app",
+    "allow-create-text"
   ]
 }
