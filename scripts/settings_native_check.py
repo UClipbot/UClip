@@ -1,17 +1,21 @@
 """Independent native settings and integrated main-window interaction checks."""
+from pathlib import Path
+import sqlite3
+import subprocess
+import time
 
 
-def run(invoke, invoke_current, execute, execute_main, click, switch_window, wait, capture):
-    wait(lambda: execute('return !!document.querySelector(".window-titlebar #history-search")'), 'integrated search')
-    assert execute('return !document.querySelector(".window-titlebar-brand").textContent.trim() && !document.querySelector(".window-titlebar .capture-toggle") && !!document.querySelector(".statusbar .capture-toggle")')
+def run(invoke, invoke_current, execute, execute_main, click, switch_window, wait, capture, env, directory):
+    wait(lambda: execute('return !!document.querySelector(".topbar #history-search")'), 'search in filter row')
+    assert execute('const search=document.querySelector(".search-box").getBoundingClientRect(), filters=document.querySelector(".filter-bar").getBoundingClientRect();return !document.querySelector(".window-titlebar input") && search.right <= filters.left && Math.abs(search.top-filters.top) <= 1 && !!document.querySelector(".statusbar .capture-toggle")')
     assert execute('return document.querySelector(".filter-bar").getBoundingClientRect().height <= 36')
 
-    # A main-window dialog must block the newly interactive titlebar controls.
+    # Search and filters must remain blocked while a main-window dialog is open.
     click('[aria-label="更多选项"]')
     click('[data-testid="new-text"]')
-    assert execute('return document.querySelector(".titlebar-search").inert && document.querySelector(".app-shell").inert')
+    assert execute('return document.querySelector(".app-shell").inert && !!document.querySelector(".app-shell #history-search")')
     click('[aria-label="关闭面板"]')
-    assert execute('return !document.querySelector(".titlebar-search").inert')
+    assert execute('return !document.querySelector(".app-shell").inert')
 
     assert execute('return !document.querySelector(".filter-bar .app-more") && !document.querySelector(".listening-dot")')
     click('[data-testid="footer-settings"]')
@@ -59,11 +63,64 @@ def run(invoke, invoke_current, execute, execute_main, click, switch_window, wai
         wait(lambda: execute('return !document.querySelector(arguments[0]).disabled', [selector]), 'footer theme ready')
         click(selector)
         wait(lambda: execute('return document.documentElement.dataset.theme===arguments[0]', [theme]), 'footer theme applied')
-    pinned = invoke('desktop_status')['value']['preferences']['alwaysOnTop']
-    for desired in [not pinned, pinned]:
+    def pin(desired):
         wait(lambda: execute('return !document.querySelector(".footer-tools [aria-label=窗口置顶]").disabled'), 'footer pin ready')
         click('.footer-tools [aria-label="窗口置顶"]')
         wait(lambda: invoke('desktop_status')['value']['preferences']['alwaysOnTop'] == desired, 'footer pin preference saved')
+        wait(lambda: execute('return document.querySelector(".footer-tools [aria-label=窗口置顶]").getAttribute("aria-pressed") === arguments[0]', [str(desired).lower()]), 'footer pin reflects committed state')
+
+    receiver = subprocess.Popen(['/usr/bin/python3', 'scripts/paste-receiver.py', str(Path(directory, 'footer-receiver.json'))], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        def receiver_window():
+            result = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', '^UClip native fixture receiver$'], env=env, text=True, capture_output=True)
+            return result.stdout.splitlines()[-1] if result.returncode == 0 and result.stdout.strip() else None
+        receiver_xid = wait(receiver_window, 'real external window for pin blur')
+        main_xid = subprocess.check_output(['xdotool', 'search', '--onlyvisible', '--name', '^UClip$'], env=env, text=True).splitlines()[-1]
+        subprocess.run(['xdotool', 'windowactivate', '--sync', main_xid], env=env, check=True)
+        wait(lambda: execute('return document.hasFocus()'), 'main ready for pin toggle')
+        # Start from the default autoHide=false; unpin must also enable hiding atomically.
+        assert not invoke('desktop_status')['value']['preferences']['autoHide']
+        pin(False)
+        assert invoke('desktop_status')['value']['preferences']['autoHide']
+        subprocess.run(['xdotool', 'windowactivate', '--sync', receiver_xid], env=env, check=True)
+        wait(lambda: not execute('return document.hasFocus()'), 'main actually loses focus')
+        def visible():
+            return subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', '^UClip$'], env=env, capture_output=True).returncode == 0
+        wait(lambda: not visible(), 'unpinned footer hides the native window on blur')
+        subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+shift+v'], env=env, check=True)
+        wait(lambda: visible() and execute('return document.hasFocus()'), 'shortcut recovers unpinned window')
+        pin(True)
+        subprocess.run(['xdotool', 'windowactivate', '--sync', receiver_xid], env=env, check=True)
+        wait(lambda: not execute('return document.hasFocus()'), 'pinned main actually loses focus')
+        time.sleep(.5)
+        assert visible(), 'pinned window must remain visible after blur'
+        xid = subprocess.check_output(['xdotool', 'search', '--onlyvisible', '--name', '^UClip$'], env=env, text=True).splitlines()[-1]
+        assert '_NET_WM_STATE_ABOVE' in subprocess.check_output(['xprop', '-id', xid, '_NET_WM_STATE'], env=env, text=True)
+        subprocess.run(['xdotool', 'windowactivate', '--sync', xid], env=env, check=True)
+        wait(lambda: execute('return document.hasFocus()'), 'main refocused')
+
+        # Failed unpin keeps both the saved state and actual native topmost behavior.
+        before = invoke('desktop_status')['value']['preferences']
+        database = next(Path(directory, 'data').rglob('foundation.sqlite3'))
+        with sqlite3.connect(database) as connection:
+            connection.execute("CREATE TRIGGER fixture_footer_pin_failure BEFORE UPDATE ON desktop_preferences BEGIN SELECT RAISE(ABORT,'fixture'); END")
+        try:
+            wait(lambda: execute('return !document.querySelector(".footer-tools [aria-label=窗口置顶]").disabled'), 'pin failure fixture ready')
+            click('.footer-tools [aria-label="窗口置顶"]')
+            wait(lambda: execute('return document.querySelector(".toast")?.textContent.includes("本地保存失败")'), 'unpin save failure feedback')
+            assert invoke('desktop_status')['value']['preferences'] == before
+            wait(lambda: execute('const e=document.querySelector(".footer-tools [aria-label=窗口置顶]");return !e.disabled && e.getAttribute("aria-pressed")==="true"'), 'failed unpin remains highlighted')
+            assert '_NET_WM_STATE_ABOVE' in subprocess.check_output(['xprop', '-id', xid, '_NET_WM_STATE'], env=env, text=True)
+        finally:
+            with sqlite3.connect(database) as connection:
+                connection.execute('DROP TRIGGER fixture_footer_pin_failure')
+    finally:
+        receiver.terminate()
+        try:
+            receiver.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            receiver.kill()
+            receiver.wait()
 
     status = invoke('clipboard_status')['value']
     if status['available']:
@@ -82,4 +139,4 @@ def run(invoke, invoke_current, execute, execute_main, click, switch_window, wai
     capture('compact-main-window')
     from history_viewport_native_check import run as check_scroll
     check_scroll(invoke, execute, click, wait, capture)
-    print('PASS settings window: main modal guard, separate settings UI, limited IPC, cross-window updates, concurrent open, close/reopen, compact filters and listener state', flush=True)
+    print('PASS settings window: search/filter row, main modal guard, separate settings UI, limited IPC, cross-window updates, concurrent open, close/reopen, pin blur/hide/recovery and failed-save rollback, listener state', flush=True)

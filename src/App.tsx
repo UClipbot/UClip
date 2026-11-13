@@ -662,12 +662,10 @@ export function App() {
     <>
       {customChrome && (
         <WindowTitlebar
-          blocked={!!modal}
           onDrag={() => void windowAction(desktop.startDrag)}
           onMinimize={() => void windowAction(desktop.minimize)}
           onToggleMaximized={() => void windowAction(desktop.toggleMaximized)}
           onClose={() => void windowAction(desktop.close)}
-          search={searchBox}
         />
       )}
       <div
@@ -677,7 +675,7 @@ export function App() {
         data-testid="app-ready"
       >
         <header className="topbar">
-          {!customChrome && searchBox}
+          {searchBox}
           <div className="filter-bar">
             <label className="scope-control">
               <Icon
@@ -994,14 +992,19 @@ export function App() {
               title={
                 appearance.native
                   ? desktop.status?.preferences.alwaysOnTop
-                    ? '取消窗口置顶'
-                    : '窗口置顶'
+                    ? '已固定窗口 · 点击取消，失焦后自动隐藏'
+                    : desktop.status?.preferences.autoHide
+                      ? '失焦后自动隐藏 · 点击固定窗口'
+                      : '点击固定窗口，保持显示'
                   : '窗口置顶仅在桌面可用'
               }
               aria-pressed={!!desktop.status?.preferences.alwaysOnTop}
               disabled={!appearance.native || !desktop.status || desktop.busy}
               onClick={() =>
-                void saveDesktop({ alwaysOnTop: !desktop.status?.preferences.alwaysOnTop })
+                void saveDesktop({
+                  alwaysOnTop: !desktop.status?.preferences.alwaysOnTop,
+                  ...(desktop.status?.preferences.alwaysOnTop ? { autoHide: true } : {}),
+                })
               }
             >
               <Icon name="pin" size={17} />

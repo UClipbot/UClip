@@ -286,10 +286,19 @@ try {
                   e.getBoundingClientRect().left < -1),
             )
             .map((e) => e.textContent),
+          toolbar: ['.search-box', '.filter-bar'].map((selector) => {
+            const r = document.querySelector(selector).getBoundingClientRect();
+            return { left: r.left, right: r.right, top: r.top };
+          }),
         };
       });
       assert.ok(report.document[0] <= width, JSON.stringify(report));
       assert.equal(report.overflow.length, 0, JSON.stringify(report));
+      assert.ok(report.toolbar[0].right <= report.toolbar[1].left, JSON.stringify(report));
+      assert.ok(
+        Math.abs(report.toolbar[0].top - report.toolbar[1].top) <= 1,
+        JSON.stringify(report),
+      );
       if (width === 640) assert.ok(report.visibleRecords >= 5);
       if (width === 640) {
         const samples = await page.evaluate(() => {

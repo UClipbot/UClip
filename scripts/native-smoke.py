@@ -191,7 +191,7 @@ def main():
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
                 if args.settings_only:
                     from settings_native_check import run
-                    run(invoke, invoke_current, execute, execute_main, click, switch_window, wait_for, capture)
+                    run(invoke, invoke_current, execute, execute_main, click, switch_window, wait_for, capture, env, directory)
                     return
                 if args.source_only:
                     from source_native_check import run

@@ -1,28 +1,22 @@
 import { Icon } from './Icon';
-import type { ReactNode } from 'react';
 
 export function WindowTitlebar({
   onDrag,
   onMinimize,
   onToggleMaximized,
   onClose,
-  search,
-  blocked = false,
 }: {
   onDrag: () => void;
   onMinimize: () => void;
   onToggleMaximized: () => void;
   onClose: () => void;
-  search: ReactNode;
-  blocked?: boolean;
 }) {
   return (
     <div
       className="window-titlebar"
       aria-label="窗口标题栏"
       onMouseDown={(event) => {
-        if (event.button !== 0 || (event.target as Element).closest('button, input, .search-box'))
-          return;
+        if (event.button !== 0 || (event.target as Element).closest('button')) return;
         event.preventDefault();
         if (event.detail === 2) onToggleMaximized();
         else onDrag();
@@ -30,9 +24,7 @@ export function WindowTitlebar({
     >
       <div className="window-titlebar-brand" title="拖动窗口">
         <Icon name="copy" size={16} />
-      </div>
-      <div className="titlebar-search" inert={blocked ? true : undefined}>
-        {search}
+        <span>UClip</span>
       </div>
       <div className="window-controls">
         <button aria-label="最小化窗口" title="最小化" onClick={onMinimize}>
