@@ -45,6 +45,7 @@ def main():
     parser.add_argument('--manual-only',action='store_true',help='Isolated real manual text creation.')
     parser.add_argument('--titlebar-only',action='store_true',help='Isolated native/custom titlebar and window controls.')
     parser.add_argument('--settings-only',action='store_true',help='Independent settings window, IPC grants and integrated main chrome.')
+    parser.add_argument('--source-only',action='store_true',help='Real Google Chrome copy source attribution on isolated X11.')
     parser.add_argument('--desktop-defaults-only',action='store_true',help='Fresh desktop defaults and one-time OS autostart, with optional failure fixture.')
     parser.add_argument('--pinned-only',action='store_true',help='Isolated pin, pinned page and explicit deduplication checks.')
     parser.add_argument('--collections-only',action='store_true',help='Isolated real collection forms, transfers, query scopes and persistence.')
@@ -191,6 +192,10 @@ def main():
                 if args.settings_only:
                     from settings_native_check import run
                     run(invoke, invoke_current, execute, execute_main, click, switch_window, wait_for, capture)
+                    return
+                if args.source_only:
+                    from source_native_check import run
+                    run(invoke, execute, env, log, wait_for)
                     return
                 if args.desktop_defaults_only:
                     desktop = invoke('desktop_status')['value']

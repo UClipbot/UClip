@@ -167,6 +167,14 @@ impl CoreService {
     pub async fn capture(&self, payload: crate::ClipPayload) -> Result<Option<String>, AppError> {
         self.operation(move |s| s.capture(payload)).await
     }
+    pub async fn capture_with_source(
+        &self,
+        payload: crate::ClipPayload,
+        source_app: Option<String>,
+    ) -> Result<Option<String>, AppError> {
+        self.operation(move |s| s.capture_with_source(payload, source_app))
+            .await
+    }
     pub async fn history(
         &self,
         request: crate::HistoryQuery,

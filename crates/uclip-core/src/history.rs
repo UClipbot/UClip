@@ -165,7 +165,14 @@ impl Storage {
         self.capture_policy()
     }
     pub fn capture(&mut self, payload: ClipPayload) -> Result<Option<String>, AppError> {
-        self.save_payload(payload, true, None)
+        self.capture_with_source(payload, None)
+    }
+    pub fn capture_with_source(
+        &mut self,
+        payload: ClipPayload,
+        source_app: Option<String>,
+    ) -> Result<Option<String>, AppError> {
+        self.save_payload(payload, true, None, source_app)
     }
     pub fn create_text(&mut self, text: String) -> Result<String, AppError> {
         self.create_text_in_collection(text, None)
@@ -175,7 +182,7 @@ impl Storage {
         text: String,
         collection_id: Option<String>,
     ) -> Result<String, AppError> {
-        self.save_payload(ClipPayload::Text(text), false, collection_id)?
+        self.save_payload(ClipPayload::Text(text), false, collection_id, None)?
             .ok_or_else(|| AppError::new(ErrorCode::Excluded))
     }
     fn save_payload(
@@ -183,7 +190,13 @@ impl Storage {
         payload: ClipPayload,
         captured: bool,
         collection_id: Option<String>,
+        source_app: Option<String>,
     ) -> Result<Option<String>, AppError> {
+        if source_app.as_ref().is_some_and(|name| {
+            name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control)
+        }) {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
         let policy = self.capture_policy()?;
         if !validate_save_payload(&payload, &policy)? {
             return Ok(None);
@@ -233,7 +246,7 @@ impl Storage {
             |r| r.get(0),
         )?;
         let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,captured_at,sequence,origin,collection,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,sequence=excluded.sequence,revision=clips.revision+1", params![id,kind_name(kind),text,data,width,height,count,fingerprint,now(),sequence,if captured {"capture"} else {"manual"},collection_id])?;
+        tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,captured_at,sequence,origin,collection,revision,source_app) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,sequence=excluded.sequence,revision=clips.revision+1,source_app=excluded.source_app", params![id,kind_name(kind),text,data,width,height,count,fingerprint,now(),sequence,if captured {"capture"} else {"manual"},collection_id,source_app])?;
         prune(&tx, policy.max_items, Some(&id))?;
         check_change_budget(&tx)?;
         tx.execute(
@@ -260,7 +273,7 @@ impl Storage {
         if let Some(id) = &query.collection_id {
             crate::collections::ensure_collection(&self.connection, id)?;
         }
-        let mut statement = self.connection.prepare("SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision,origin,pinned,collection FROM clips WHERE deleted=0 AND (?1=0 OR pinned=1) AND (?2 IS NULL OR collection=?2) ORDER BY pinned DESC,sequence DESC,id")?;
+        let mut statement = self.connection.prepare("SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision,origin,pinned,collection,source_app FROM clips WHERE deleted=0 AND (?1=0 OR pinned=1) AND (?2 IS NULL OR collection=?2) ORDER BY pinned DESC,sequence DESC,id")?;
         let mut rows = statement.query(params![query.pinned_only, query.collection_id])?;
         let mut total = 0;
         let mut items = vec![];
@@ -310,6 +323,7 @@ impl Storage {
                     id: row.get(0)?,
                     kind,
                     manual: row.get::<_, String>(9)? == "manual",
+                    source_app: row.get(12)?,
                     pinned: row.get(10)?,
                     collection_id: row.get(11)?,
                     match_ranges: if query.query.is_empty() {

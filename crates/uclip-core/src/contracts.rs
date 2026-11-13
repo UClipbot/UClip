@@ -184,6 +184,7 @@ pub struct HistoryQuery {
 #[serde(rename_all = "camelCase")]
 pub struct HistoryItem {
     pub manual: bool,
+    pub source_app: Option<String>,
     pub pinned: bool,
     pub collection_id: Option<String>,
     pub id: String,

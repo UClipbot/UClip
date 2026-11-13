@@ -16,7 +16,7 @@ def stop(process):
         except subprocess.TimeoutExpired: process.kill(); process.wait()
 
 def main():
-    mode = next((flag for flag in ['--settings-only','--desktop-defaults-only','--titlebar-only','--collections-only','--pinned-only','--manual-only','--paste-performance','--wake-only','--startup-performance'] if flag in sys.argv), None)
+    mode = next((flag for flag in ['--source-only','--settings-only','--desktop-defaults-only','--titlebar-only','--collections-only','--pinned-only','--manual-only','--paste-performance','--wake-only','--startup-performance'] if flag in sys.argv), None)
     if '--inside' in sys.argv:
         wm = subprocess.Popen(['muffin', '--sm-disable'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:

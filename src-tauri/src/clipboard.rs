@@ -13,11 +13,17 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::oneshot;
 use uclip_core::{
     AppError, CapturePolicy, ClipDetail, ClipPayload, ClipboardStatus, CopyResult, CoreService,
     ErrorCode, UpdateCapturePolicy,
 };
+
+#[derive(Clone)]
+struct Captured {
+    payload: ClipPayload,
+    source_app: Option<String>,
+}
+use tokio::sync::oneshot;
 pub(super) const MARKER: &str = "application/x-uclip-internal";
 type Reply<T> = oneshot::Sender<Result<T, AppError>>;
 enum Request {
@@ -89,7 +95,7 @@ impl ClipboardService {
                 let mut failed_attempts = 0u32;
                 let mut attempted_generation = seen;
                 let mut rejected_generation = None;
-                let mut pending_payload: Option<(u64, ClipPayload)> = None;
+                let mut pending_payload: Option<(u64, Captured)> = None;
                 if let Ok(mut s) = state.lock() {
                     s.available = true;
                 }
@@ -193,22 +199,23 @@ impl ClipboardService {
                     }
                     // Retain one bounded complete snapshot on write failure. A later OS
                     // clipboard change cannot replace an already-read, uncommitted payload.
-                    let captured =
-                        (|| {
-                            if pending_payload.is_none() {
-                                if let Some(payload) =
-                                    stable_read(&context, &marker, &mut watch, observed)?
-                                {
-                                    pending_payload = Some((observed, payload));
-                                } else {
-                                    return Ok(false);
-                                }
+                    let captured = (|| {
+                        if pending_payload.is_none() {
+                            if let Some(payload) =
+                                stable_read(&context, &marker, &mut watch, observed)?
+                            {
+                                pending_payload = Some((observed, payload));
+                            } else {
+                                return Ok(false);
                             }
-                            block(core.capture(
-                                pending_payload.as_ref().expect("snapshot ready").1.clone(),
-                            ))
-                            .map(|id| id.is_some())
-                        })();
+                        }
+                        let snapshot = &pending_payload.as_ref().expect("snapshot ready").1;
+                        block(core.capture_with_source(
+                            snapshot.payload.clone(),
+                            snapshot.source_app.clone(),
+                        ))
+                        .map(|id| id.is_some())
+                    })();
                     match captured {
                         Ok(saved) => {
                             seen = attempt_generation;
@@ -326,7 +333,7 @@ fn stable_read(
     marker: &[u8],
     watch: &mut crate::clipboard_watch::Watch,
     expected_generation: u64,
-) -> Result<Option<ClipPayload>, AppError> {
+) -> Result<Option<Captured>, AppError> {
     let before = watch.generation()?;
     if before != expected_generation {
         return Err(AppError::new(ErrorCode::Busy));
@@ -338,7 +345,10 @@ fn stable_read(
     if let Some(payload) = &payload {
         payload.validate()?;
     }
-    Ok(payload)
+    Ok(payload.map(|payload| Captured {
+        payload,
+        source_app: None,
+    }))
 }
 
 pub fn normalize_files(files: Vec<String>) -> Result<Vec<String>, AppError> {
@@ -461,12 +471,13 @@ fn stable_read(
     marker: &[u8],
     watch: &mut crate::clipboard_watch::Watch,
     expected_generation: u64,
-) -> Result<Option<ClipPayload>, AppError> {
+) -> Result<Option<Captured>, AppError> {
     let before = watch.generation()?;
     if before != expected_generation {
         return Err(AppError::new(ErrorCode::Busy));
     }
     let reader = crate::clipboard_x11::Reader::new()?;
+    let owner = reader.owner()?;
     let formats = reader.formats()?;
     if sensitive(&formats, |f| reader.buffer(f, 16)) {
         return Ok(None);
@@ -475,13 +486,17 @@ fn stable_read(
         return Ok(None);
     }
     let payload = reader.payload(&formats)?;
-    if before != watch.generation()? {
+    let source_app = payload.as_ref().and_then(|_| reader.source_app(owner));
+    if before != watch.generation()? || owner != reader.owner()? {
         return Err(AppError::new(ErrorCode::Busy));
     }
     if let Some(payload) = &payload {
         payload.validate()?;
     }
-    Ok(payload)
+    Ok(payload.map(|payload| Captured {
+        payload,
+        source_app,
+    }))
 }
 
 #[cfg(test)]

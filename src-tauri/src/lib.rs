@@ -2,6 +2,8 @@ mod autostart;
 pub mod clipboard;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod clipboard_native;
+#[cfg(target_os = "linux")]
+mod clipboard_source;
 mod clipboard_watch;
 #[cfg(target_os = "linux")]
 mod clipboard_x11;

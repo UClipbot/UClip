@@ -290,7 +290,7 @@ export function useHistory(
     type: item.kind === 'files' ? 'file' : item.kind,
     title: item.kind === 'files' ? item.preview : '',
     content: item.preview,
-    source: item.manual ? '手动创建' : '来源未知',
+    source: item.manual ? '手动创建' : (item.sourceApp ?? '来源未知'),
     time: new Date(Number(item.capturedAt)).toLocaleTimeString('zh-CN', {
       hour: '2-digit',
       minute: '2-digit',

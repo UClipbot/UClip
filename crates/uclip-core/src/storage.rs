@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 const APPLICATION_ID: i64 = 0x434c4e58; // CLNX: never open the previous application's database.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -122,12 +122,19 @@ impl Storage {
             }
             tx.pragma_update(None, "user_version", 7)?;
         }
+        if version < 8 {
+            tx.execute_batch("ALTER TABLE clips ADD COLUMN source_app TEXT CHECK(source_app IS NULL OR length(CAST(source_app AS BLOB)) BETWEEN 1 AND 256);")?;
+            tx.pragma_update(None, "user_version", 8)?;
+        }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         connection.pragma_update(None, "foreign_keys", true)?;
         let storage = Self { connection };
         storage.capture_policy()?;
+        storage
+            .connection
+            .prepare("SELECT source_app FROM clips LIMIT 0")?;
         storage.history_revision()?;
         storage.desktop_preferences()?;
         storage.connection.query_row(

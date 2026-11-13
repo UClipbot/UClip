@@ -31,6 +31,17 @@ pub struct Reader {
     incr: Atom,
 }
 impl Reader {
+    pub fn owner(&self) -> Result<Window, AppError> {
+        self.conn
+            .get_selection_owner(self.clipboard)
+            .map_err(|_| error())?
+            .reply()
+            .map(|reply| reply.owner)
+            .map_err(|_| error())
+    }
+    pub fn source_app(&self, owner: Window) -> Option<String> {
+        crate::clipboard_source::application(&self.conn, self.root, owner)
+    }
     pub fn new() -> Result<Self, AppError> {
         let (conn, screen) = RustConnection::connect(None).map_err(|_| error())?;
         let atom = |name: &[u8]| {

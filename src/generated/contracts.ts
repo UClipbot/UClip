@@ -52,7 +52,7 @@ export type UpdateCapturePolicy = { enabled: boolean, excludePattern: string, ma
 
 export type HistoryQuery = { query: string, regex: boolean, kind: ClipKind | null, pinnedOnly: boolean, collectionId: string | null, offset: number, expectedRevision: string | null, };
 
-export type HistoryItem = { manual: boolean, pinned: boolean, collectionId: string | null, id: string, kind: ClipKind, preview: string, capturedAt: string, lastUsedAt: string | null, width: number | null, height: number | null, fileCount: number, revision: string,
+export type HistoryItem = { manual: boolean, sourceApp: string | null, pinned: boolean, collectionId: string | null, id: string, kind: ClipKind, preview: string, capturedAt: string, lastUsedAt: string | null, width: number | null, height: number | null, fileCount: number, revision: string,
 /**
  * UTF-16 offsets into preview. Matching stays in the bounded Rust regex engine.
  */
