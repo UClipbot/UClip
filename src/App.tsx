@@ -767,7 +767,8 @@ export function App() {
                       onFocus={() => setSelectedId(clip.id)}
                       onClick={() => setSelectedId(clip.id)}
                       onDoubleClick={() => {
-                        if (appearance.native) void copyClip(clip, true);
+                        if (appearance.native)
+                          void copyClip(clip, live.status?.pasteAvailable ?? false);
                       }}
                     >
                       {clip.image ? (
