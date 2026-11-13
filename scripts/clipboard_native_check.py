@@ -263,6 +263,72 @@ class ClipboardChecks:
             if kind=='text': assert value['text']==self.text,value
             if kind=='image': assert {k:value[k] for k in ['width','height','rgba']}==self.image,value
             if kind=='files': assert [unquote(urlparse(uri).path) for uri in value['uris']]==self.files,value
+        # Change the actual server map after startup, then require GTK to receive
+        # the original text through the newly mapped V key. Only this nested display is touched.
+        from Xlib import X, XK, display as xdisplay
+        from Xlib.ext import xtest
+        import concurrent.futures
+        import signal
+        display = xdisplay.Display()
+        try:
+            self.activate(window);self.key('key','--clearmodifiers','ctrl+a');self.key('key','--clearmodifiers','BackSpace')
+            self.key('key','--clearmodifiers','ctrl+shift+v')
+            wait(lambda:self.execute('return document.hasFocus()'),'main focus before key remap')
+            v = display.keysym_to_keycode(XK.string_to_keysym('v'))
+            x = display.keysym_to_keycode(XK.string_to_keysym('x'))
+            original_v = display.get_keyboard_mapping(v, 1)
+            original_x = display.get_keyboard_mapping(x, 1)
+            try:
+                display.change_keyboard_mapping(v, original_x)
+                display.change_keyboard_mapping(x, original_v)
+                display.sync();time.sleep(0.2)
+                result.unlink(missing_ok=True)
+                copied = self.action('copy_clip',id=self.ids['text'],paste=True)
+                assert copied['copied'] and copied['pasteRequested'],copied
+                value = wait(received_result,'GTK actual paste after live V/X remap')
+                assert value['kind']=='text' and value['text']==self.text,value
+            finally:
+                display.change_keyboard_mapping(v, original_v)
+                display.change_keyboard_mapping(x, original_x)
+                display.sync();time.sleep(0.2)
+            print('PASS B: live X11 V/X remapping resolves fresh keycodes and GTK receives exact text',flush=True)
+
+            # Pause only the isolated WM. Observe the app activation request after
+            # its initial modifier check, hold Shift, then let the WM restore focus.
+            # This deterministically exercises the final check, not the initial one.
+            wm_pid = int(self.env['UCLIP_FIXTURE_WM_PID'])
+            root = display.screen().root
+            root.change_attributes(event_mask=X.SubstructureNotifyMask)
+            active_atom = display.intern_atom('_NET_ACTIVE_WINDOW')
+            shift = display.keysym_to_keycode(XK.string_to_keysym('Shift_L'))
+            self.activate(window);self.key('key','--clearmodifiers','ctrl+shift+v')
+            wait(lambda:self.execute('return document.hasFocus()'),'main focus before modifier race')
+            display.sync()
+            while display.pending_events():display.next_event()
+            result.unlink(missing_ok=True)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                os.kill(wm_pid,signal.SIGSTOP)
+                try:
+                    pending = pool.submit(self.action,'copy_clip',id=self.ids['text'],paste=True)
+                    def activation_requested():
+                        while display.pending_events():
+                            event = display.next_event()
+                            if event.type == X.ClientMessage and event.client_type == active_atom and event.window.id == int(window):return True
+                        return False
+                    wait(activation_requested,'paste activation sent while isolated WM paused',timeout=2)
+                    xtest.fake_input(display,X.KeyPress,shift);display.sync()
+                    os.kill(wm_pid,signal.SIGCONT)
+                    copied = pending.result(timeout=6)
+                    assert copied['copied'] and not copied['pasteRequested'],copied
+                    assert copied['warning']['code']=='target_lost',copied
+                    time.sleep(0.15)
+                    assert not result.exists(),'unexpected paste during held Shift'
+                finally:
+                    os.kill(wm_pid,signal.SIGCONT)
+                    xtest.fake_input(display,X.KeyRelease,shift);display.sync()
+            print('PASS B: Shift pressed during WM activation prevents final key injection',flush=True)
+        finally:
+            display.close()
         self.activate(window);self.key('key','--clearmodifiers','ctrl+shift+v');wait(lambda:self.execute('return document.hasFocus()'),'app focus before closed target')
         subprocess.run(['wmctrl','-ic',hex(int(window))],env=self.env,check=True);wait(lambda:receiver.poll() is not None,'target closed')
         failed=self.invoke('copy_clip',{'id':self.ids['text'],'paste':True});assert not failed['ok'] and failed['error']['code']=='target_lost',failed

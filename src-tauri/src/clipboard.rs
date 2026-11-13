@@ -1,10 +1,10 @@
 //! All clipboard reads/writes live on a bounded actor, independently of the WebView.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use crate::clipboard_native::Context as ClipboardContext;
 use base64::{engine::general_purpose::STANDARD, Engine};
-#[cfg(not(target_os = "linux"))]
-use clipboard_rs::ContentFormat;
-use clipboard_rs::{
-    common::RustImage, Clipboard, ClipboardContent, ClipboardContext, RustImageData,
-};
+use clipboard_rs::{common::RustImage, RustImageData};
+#[cfg(target_os = "linux")]
+use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -14,13 +14,11 @@ use std::{
     time::Duration,
 };
 use tokio::sync::oneshot;
-#[cfg(not(target_os = "linux"))]
-use uclip_core::MAX_IMAGE_PIXELS;
 use uclip_core::{
     AppError, CapturePolicy, ClipDetail, ClipPayload, ClipboardStatus, CopyResult, CoreService,
     ErrorCode, UpdateCapturePolicy,
 };
-const MARKER: &str = "application/x-uclip-internal";
+pub(super) const MARKER: &str = "application/x-uclip-internal";
 type Reply<T> = oneshot::Sender<Result<T, AppError>>;
 enum Request {
     Policy(UpdateCapturePolicy, Reply<CapturePolicy>),
@@ -97,6 +95,8 @@ impl ClipboardService {
                 }
                 let _ = ready_tx.send(Ok(()));
                 loop {
+                    #[cfg(target_os = "windows")]
+                    context.pump();
                     match receiver.recv_timeout(Duration::from_millis(20)) {
                         Ok(Request::Policy(input, reply)) => {
                             let response = block(core.update_capture_policy(input));
@@ -300,7 +300,10 @@ impl ClipboardService {
     }
 }
 
-fn sensitive(formats: &[String], get_buffer: impl Fn(&str) -> Result<Vec<u8>, AppError>) -> bool {
+pub(super) fn sensitive(
+    formats: &[String],
+    get_buffer: impl Fn(&str) -> Result<Vec<u8>, AppError>,
+) -> bool {
     formats.iter().any(|format| {
         let lower = format.to_ascii_lowercase();
         if lower.contains("concealed")
@@ -328,57 +331,16 @@ fn stable_read(
     if before != expected_generation {
         return Err(AppError::new(ErrorCode::Busy));
     }
-    let formats = context.available_formats().map_err(|_| error())?;
-    if sensitive(&formats, |f| context.get_buffer(f).map_err(|_| error())) {
-        return Ok(None);
-    }
-    if formats.iter().any(|f| f == MARKER)
-        && context
-            .get_buffer(MARKER)
-            .is_ok_and(|value| value == marker)
-    {
-        return Ok(None);
-    }
-    let first = read(context)?;
-    let second = read(context)?;
-    let after_formats = context.available_formats().map_err(|_| error())?;
-    if before != watch.generation()? || formats != after_formats || first != second {
+    let payload = context.read(marker)?;
+    if before != watch.generation()? {
         return Err(AppError::new(ErrorCode::Busy));
     }
-    if let Some(payload) = &first {
+    if let Some(payload) = &payload {
         payload.validate()?;
     }
-    Ok(first)
+    Ok(payload)
 }
-#[cfg(not(target_os = "linux"))]
-fn read(context: &ClipboardContext) -> Result<Option<ClipPayload>, AppError> {
-    if context.has(ContentFormat::Files) {
-        let files = context.get_files().map_err(|_| error())?;
-        return Ok(Some(ClipPayload::Files(normalize_files(files)?)));
-    }
-    if context.has(ContentFormat::Image) {
-        #[cfg(not(target_os = "linux"))]
-        let image = context.get_image().map_err(|_| error())?;
-        let (width, height) = image.get_size();
-        if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
-            return Err(AppError::new(ErrorCode::LimitExceeded));
-        }
-        return Ok(Some(ClipPayload::Image {
-            width,
-            height,
-            rgba: image.to_rgba8().map_err(|_| error())?.into_raw(),
-        }));
-    }
-    if context.has(ContentFormat::Text) {
-        let text = context.get_text().map_err(|_| error())?;
-        return Ok(if text.is_empty() {
-            None
-        } else {
-            Some(ClipPayload::Text(text))
-        });
-    }
-    Ok(None)
-}
+
 pub fn normalize_files(files: Vec<String>) -> Result<Vec<String>, AppError> {
     files
         .into_iter()
@@ -406,6 +368,7 @@ pub fn normalize_files(files: Vec<String>) -> Result<Vec<String>, AppError> {
         })
         .collect()
 }
+#[cfg(target_os = "linux")]
 fn write(context: &ClipboardContext, payload: ClipPayload, marker: &[u8]) -> Result<(), AppError> {
     payload.validate()?;
     let content = match payload {
@@ -444,6 +407,19 @@ fn write(context: &ClipboardContext, payload: ClipPayload, marker: &[u8]) -> Res
             ClipboardContent::Other(MARKER.into(), marker.to_vec()),
         ])
         .map_err(|_| error())
+}
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn write(context: &ClipboardContext, payload: ClipPayload, marker: &[u8]) -> Result<(), AppError> {
+    payload.validate()?;
+    if let ClipPayload::Files(paths) = &payload {
+        if paths
+            .iter()
+            .any(|p| !PathBuf::from(p).try_exists().unwrap_or(false))
+        {
+            return Err(AppError::new(ErrorCode::MissingFile));
+        }
+    }
+    context.write(payload, marker)
 }
 pub fn detail(id: String, payload: ClipPayload, thumbnail: bool) -> Result<ClipDetail, AppError> {
     let (text, image_data_url) = match payload {

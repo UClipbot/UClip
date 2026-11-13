@@ -97,8 +97,10 @@ impl Watch {
         Ok(watch)
     }
     pub fn generation(&mut self) -> Result<u64, AppError> {
-        u64::try_from(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount())
-            .map_err(|_| error())
+        objc2::rc::autoreleasepool(|_| {
+            u64::try_from(objc2_app_kit::NSPasteboard::generalPasteboard().changeCount())
+                .map_err(|_| error())
+        })
     }
     pub fn stop(&mut self) -> Result<(), AppError> {
         Ok(())

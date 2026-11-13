@@ -21,7 +21,9 @@ def main():
         try:
             time.sleep(0.8)
             test_args=['--manual-only'] if '--manual-only' in sys.argv else ['--paste-performance'] if '--paste-performance' in sys.argv else ['--wake-only'] if '--wake-only' in sys.argv else ['--startup-performance'] if '--startup-performance' in sys.argv else ['--clipboard-fixtures','--screenshots','docs/previews/copy-paste']
-            return subprocess.call(['/usr/bin/python3', 'scripts/native-smoke.py',*test_args])
+            env = os.environ.copy()
+            env['UCLIP_FIXTURE_WM_PID'] = str(wm.pid)
+            return subprocess.call(['/usr/bin/python3', 'scripts/native-smoke.py',*test_args], env=env)
         finally: stop(wm)
     with tempfile.TemporaryDirectory(prefix='uclip-isolated-display-') as directory:
         display = next(f':{n}' for n in range(97, 120) if not Path(f'/tmp/.X{n}-lock').exists() and not Path(f'/tmp/.X11-unix/X{n}').exists())

@@ -171,7 +171,7 @@ mod x11 {
     use std::time::{Duration, Instant};
     use x11rb::{
         connection::Connection,
-        protocol::{xproto::*, xtest, Event},
+        protocol::{xproto::*, xtest},
         rust_connection::RustConnection,
         CURRENT_TIME, NONE,
     };
@@ -187,6 +187,19 @@ mod x11 {
             let _ = self.0.flush();
         }
     }
+    fn paste_keys(first: u8, per_key: u8, symbols: &[u32]) -> Result<(u8, u8), AppError> {
+        if per_key == 0 || !symbols.len().is_multiple_of(usize::from(per_key)) {
+            return Err(fail());
+        }
+        let find = |symbol| {
+            symbols
+                .chunks(usize::from(per_key))
+                .position(|key| key[0] == symbol)
+                .and_then(|i| u8::try_from(i).ok()?.checked_add(first))
+                .ok_or_else(fail)
+        };
+        Ok((find(u32::from(b'v'))?, find(0xffe3)?))
+    }
     pub struct Desktop {
         conn: RustConnection,
         root: Window,
@@ -197,8 +210,6 @@ mod x11 {
         pub target: Option<(Window, u32, Instant)>,
         previous: Window,
         last_external: Option<(Window, u32)>,
-        v_key: Keycode,
-        ctrl_key: Keycode,
     }
     impl Desktop {
         pub fn new() -> Result<Self, AppError> {
@@ -225,22 +236,6 @@ mod x11 {
                 .map_err(|_| fail())?
                 .reply()
                 .map_err(|_| fail())?;
-            let first = conn.setup().min_keycode;
-            let count = conn.setup().max_keycode - first + 1;
-            let map = conn
-                .get_keyboard_mapping(first, count)
-                .map_err(|_| fail())?
-                .reply()
-                .map_err(|_| fail())?;
-            let find = |symbol: u32| {
-                map.keysyms
-                    .chunks(usize::from(map.keysyms_per_keycode))
-                    .position(|chunk| chunk.contains(&symbol))
-                    .map(|i| first + i as u8)
-                    .ok_or_else(fail)
-            };
-            let v_key = find(u32::from(b'v'))?;
-            let ctrl_key = find(0xffe3)?;
             conn.flush().map_err(|_| fail())?;
             Ok(Self {
                 conn,
@@ -252,8 +247,6 @@ mod x11 {
                 target: None,
                 previous: NONE,
                 last_external: None,
-                v_key,
-                ctrl_key,
             })
         }
         fn property(&self, window: Window, atom: Atom) -> Result<u32, AppError> {
@@ -288,17 +281,10 @@ mod x11 {
                 }
                 self.previous = active;
             }
-            let mut show = false;
-            while let Some(event) = self.conn.poll_for_event().map_err(|_| fail())? {
-                if matches!(event,Event::KeyPress(ref e) if e.detail==self.v_key) {
-                    if pid != 0 && pid != std::process::id() {
-                        self.target = Some((active, pid, Instant::now()));
-                    }
-                    show = true;
-                }
-            }
-            Ok(show)
+            while self.conn.poll_for_event().map_err(|_| fail())?.is_some() {}
+            Ok(false)
         }
+
         pub fn capture_target(&mut self) -> Result<(), AppError> {
             self.target = None;
             self.last_external = None;
@@ -388,6 +374,47 @@ mod x11 {
                 .check()
                 .map_err(|_| fail())?;
             let _server = ServerGuard(&self.conn);
+            // Recheck after activation: the user may press a modifier while the WM
+            // is restoring focus. Resolve the current map under the same guard so
+            // xmodmap/layout changes cannot leave us injecting cached keycodes.
+            if self
+                .conn
+                .query_pointer(self.root)
+                .map_err(|_| fail())?
+                .reply()
+                .map_err(|_| fail())?
+                .mask
+                .intersects(
+                    KeyButMask::SHIFT
+                        | KeyButMask::CONTROL
+                        | KeyButMask::MOD1
+                        | KeyButMask::MOD3
+                        | KeyButMask::MOD4
+                        | KeyButMask::MOD5,
+                )
+            {
+                return Err(fail());
+            }
+            let first = self.conn.setup().min_keycode;
+            let count = self.conn.setup().max_keycode - first + 1;
+            let map = self
+                .conn
+                .get_keyboard_mapping(first, count)
+                .map_err(|_| fail())?
+                .reply()
+                .map_err(|_| fail())?;
+            let (v_key, ctrl_key) = paste_keys(first, map.keysyms_per_keycode, &map.keysyms)?;
+            let modifiers = self
+                .conn
+                .get_modifier_mapping()
+                .map_err(|_| fail())?
+                .reply()
+                .map_err(|_| fail())?;
+            let stride = usize::from(modifiers.keycodes_per_modifier());
+            if stride == 0 || !modifiers.keycodes[2 * stride..3 * stride].contains(&ctrl_key) {
+                return Err(fail());
+            }
+
             let mut focus = self
                 .conn
                 .get_input_focus()
@@ -421,10 +448,10 @@ mod x11 {
                 return Err(fail());
             }
             for (event, key) in [
-                (KEY_PRESS_EVENT, self.ctrl_key),
-                (KEY_PRESS_EVENT, self.v_key),
-                (KEY_RELEASE_EVENT, self.v_key),
-                (KEY_RELEASE_EVENT, self.ctrl_key),
+                (KEY_PRESS_EVENT, ctrl_key),
+                (KEY_PRESS_EVENT, v_key),
+                (KEY_RELEASE_EVENT, v_key),
+                (KEY_RELEASE_EVENT, ctrl_key),
             ] {
                 if xtest::fake_input(&self.conn, event, key, CURRENT_TIME, NONE, 0, 0, 0)
                     .map_err(|_| fail())
@@ -434,7 +461,7 @@ mod x11 {
                     let _ = xtest::fake_input(
                         &self.conn,
                         KEY_RELEASE_EVENT,
-                        self.v_key,
+                        v_key,
                         CURRENT_TIME,
                         NONE,
                         0,
@@ -444,7 +471,7 @@ mod x11 {
                     let _ = xtest::fake_input(
                         &self.conn,
                         KEY_RELEASE_EVENT,
-                        self.ctrl_key,
+                        ctrl_key,
                         CURRENT_TIME,
                         NONE,
                         0,
@@ -458,6 +485,33 @@ mod x11 {
             self.conn.flush().map_err(|_| fail())?;
             self.target = None;
             Ok(())
+        }
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn paste_keys_follow_remapping_and_refuse_symbols_only_on_shifted_levels() {
+            let old = [
+                u32::from(b'v'),
+                u32::from(b'V'),
+                0xffe3,
+                0,
+                u32::from(b'x'),
+                0,
+            ];
+            assert_eq!(paste_keys(8, 2, &old).unwrap(), (8, 9));
+            let remapped = [
+                u32::from(b'x'),
+                0,
+                0xffe3,
+                0,
+                u32::from(b'v'),
+                u32::from(b'V'),
+            ];
+            assert_eq!(paste_keys(8, 2, &remapped).unwrap(), (10, 9));
+            assert!(paste_keys(8, 2, &[u32::from(b'x'), u32::from(b'v'), 0xffe3, 0]).is_err());
+            assert!(paste_keys(8, 0, &[]).is_err());
         }
     }
 }
