@@ -63,6 +63,7 @@ pub fn run() {
             commands::change_clip_deletion,
             commands::desktop_status,
             commands::update_desktop_preferences,
+            commands::update_key_bindings,
             commands::set_autostart,
             commands::set_desktop_interaction,
             commands::hide_main_window,

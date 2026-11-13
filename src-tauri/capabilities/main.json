@@ -22,6 +22,7 @@
     "allow-set-desktop-interaction",
     "allow-hide-main-window",
     "allow-quit-app",
-    "allow-create-text"
+    "allow-create-text",
+    "allow-update-key-bindings"
   ]
 }

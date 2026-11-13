@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import type { DesktopStatus, UpdateDesktopPreferences } from '../generated/contracts';
+import type {
+  DesktopStatus,
+  UpdateDesktopPreferences,
+  UpdateKeyBindings,
+} from '../generated/contracts';
 import { safeError } from './client';
 
 export function useDesktop(native: boolean, interaction: boolean) {
@@ -71,6 +75,7 @@ export function useDesktop(native: boolean, interaction: boolean) {
     error,
     busy,
     save: (request: UpdateDesktopPreferences) => change('update_desktop_preferences', { request }),
+    saveKeys: (request: UpdateKeyBindings) => change('update_key_bindings', { request }),
     autostart: (enabled: boolean) => change('set_autostart', { enabled }),
     hide: () => invoke('hide_main_window'),
     quit: () => invoke('quit_app'),

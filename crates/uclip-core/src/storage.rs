@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 const APPLICATION_ID: i64 = 0x434c4e58; // CLNX: never open the previous application's database.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -82,6 +82,15 @@ impl Storage {
             CREATE TABLE window_placement(singleton INTEGER PRIMARY KEY CHECK(singleton=1),x INTEGER NOT NULL,y INTEGER NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,maximized INTEGER NOT NULL CHECK(maximized IN (0,1))) STRICT;")?;
             tx.pragma_update(None, "user_version", 3)?;
         }
+        if version < 4 {
+            tx.execute_batch("CREATE TABLE keyboard_bindings(singleton INTEGER PRIMARY KEY CHECK(singleton=1),value TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;")?;
+            tx.execute(
+                "INSERT INTO keyboard_bindings VALUES(1,?1,0)",
+                [serde_json::to_string(&crate::KeyBindings::default())
+                    .map_err(|_| AppError::new(ErrorCode::Storage))?],
+            )?;
+            tx.pragma_update(None, "user_version", 4)?;
+        }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -90,6 +99,7 @@ impl Storage {
         storage.capture_policy()?;
         storage.history_revision()?;
         storage.desktop_preferences()?;
+        storage.keyboard_bindings()?;
         storage
             .connection
             .prepare("SELECT id,revision,operation,ordinal FROM clip_changes LIMIT 0")?;

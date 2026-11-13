@@ -14,6 +14,8 @@ import {
 } from './demo/clips';
 import { useClipQuery } from './demo/useClipQuery';
 import { useHistory } from './platform/useHistory';
+import { KeyboardSettings } from './components/KeyboardSettings';
+import { DEFAULT_KEYS, matchesKey, formatKey } from './platform/keyboard';
 import { useDesktop } from './platform/useDesktop';
 import { safeError } from './platform/client';
 import { useAppearance } from './platform/useAppearance';
@@ -107,6 +109,7 @@ export function App() {
     (!appearance.native && /Mac|iPhone|iPad/.test(navigator.platform))
       ? '⌘'
       : 'Ctrl';
+  const activeKeys = desktop.status?.keyboard.bindings ?? DEFAULT_KEYS;
   const ready = !result.pending && !result.error;
 
   function changeClip(id: string, update: Partial<Clip>) {
@@ -276,13 +279,17 @@ export function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.isComposing || event.keyCode === 229 || event.defaultPrevented || menu) return;
-      if ((event.metaKey || event.ctrlKey) && event.key === ',' && !modal) {
+      const keys = appearance.native ? desktop.status?.keyboard.bindings : DEFAULT_KEYS;
+      if (!keys) return;
+      const is = (action: keyof typeof keys) =>
+        matchesKey(event, keys[action], modifier === '⌘', action === 'up' || action === 'down');
+      if (is('settings') && !modal) {
         event.preventDefault();
         openModal('settings');
         return;
       }
       if (modal) return;
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' || is('dismiss')) {
         if (preview) {
           event.preventDefault();
           closePreview();
@@ -295,7 +302,7 @@ export function App() {
         }
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      if (is('search')) {
         event.preventDefault();
         if (preview) closePreview();
         requestAnimationFrame(() => search.current?.focus());
@@ -305,17 +312,22 @@ export function App() {
       const target = event.target as HTMLElement;
       const inList = target === list.current || target.matches('[data-row-main]');
       if (target !== search.current && !inList) return;
-      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      // Option/Alt character entry in the search field keeps its native editing behavior.
+      if (
+        target === search.current &&
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        /^(Key|Digit|Comma|Period|Slash)/.test(event.code)
+      )
+        return;
+      if (is('down') || is('up')) {
         if (!ready || !result.items.length) return;
         event.preventDefault();
         const index = result.items.findIndex((clip) => clip.id === selected?.id);
         const next =
           result.items[
-            Math.max(
-              0,
-              Math.min(result.items.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)),
-            )
+            Math.max(0, Math.min(result.items.length - 1, index + (is('down') ? 1 : -1)))
           ];
         if (next) {
           setSelectedId(next.id);
@@ -328,16 +340,16 @@ export function App() {
               ?.focus({ preventScroll: true });
         }
       }
-      if (event.key === 'Delete' && inList) {
+      if (is('remove') && inList) {
         event.preventDefault();
         if (ready && selected) removeClip(selected);
         return;
       }
-      if (event.key === 'Enter') {
+      if (is('copy')) {
         event.preventDefault();
         if (ready && selected) void copyClip(selected);
       }
-      if (event.key === ' ' && inList) {
+      if (is('preview') && inList) {
         event.preventDefault();
         if (ready && selected) openPreview(selected);
       }
@@ -826,7 +838,8 @@ export function App() {
                 onClick={() => menuAction(() => openModal('settings'))}
               >
                 <Icon name="settings" size={15} />
-                设置<span className="menu-shortcut">{modifier} ,</span>
+                设置
+                <span className="menu-shortcut">{formatKey(activeKeys.settings, modifier)}</span>
               </button>
               <button role="menuitem" onClick={() => menuAction(() => openModal('shortcuts'))}>
                 <Icon name="keyboard" size={15} />
@@ -1002,6 +1015,14 @@ export function App() {
               </p>
             </section>
           )}
+          {appearance.native && (
+            <KeyboardSettings
+              snapshot={desktop.status?.keyboard}
+              busy={desktop.busy}
+              primary={modifier}
+              save={desktop.saveKeys}
+            />
+          )}
           <section className="settings-section">
             <h3>外观</h3>
             <label className="setting-row" htmlFor="theme">
@@ -1107,37 +1128,39 @@ export function App() {
           <div className="shortcut-list">
             <div>
               <span>聚焦搜索</span>
-              <kbd>{modifier} K</kbd>
+              <kbd>{formatKey(activeKeys.search, modifier)}</kbd>
             </div>
             <div>
               <span>选择记录</span>
-              <kbd>↑ / ↓</kbd>
+              <kbd>
+                {formatKey(activeKeys.up, modifier)} / {formatKey(activeKeys.down, modifier)}
+              </kbd>
             </div>
             <div>
               <span>复制 / 在回收站恢复</span>
-              <kbd>Enter</kbd>
+              <kbd>{formatKey(activeKeys.copy, modifier)}</kbd>
             </div>
             <div>
               <span>查看完整内容（列表焦点）</span>
-              <kbd>Space</kbd>
+              <kbd>{formatKey(activeKeys.preview, modifier)}</kbd>
             </div>
             <div>
               <span>删除记录（列表焦点）</span>
-              <kbd>Delete</kbd>
+              <kbd>{formatKey(activeKeys.remove, modifier)}</kbd>
             </div>
             <div>
               <span>关闭当前面板 / 清空搜索</span>
-              <kbd>Esc</kbd>
+              <kbd>{formatKey(activeKeys.dismiss, modifier)}</kbd>
             </div>
             <div>
               <span>设置</span>
-              <kbd>{modifier} ,</kbd>
+              <kbd>{formatKey(activeKeys.settings, modifier)}</kbd>
             </div>
           </div>
           <p className="settings-feedback">
             以上快捷键仅在当前窗口内生效；
             {appearance.native
-              ? 'Enter 只复制；自动回粘需单独选择，失败不会向任意窗口粘贴。'
+              ? '复制快捷键只复制；自动回粘需单独选择，失败不会向任意窗口粘贴。'
               : '浏览器只支持示例文本复制。'}
           </p>
         </Modal>

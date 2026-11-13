@@ -157,6 +157,16 @@ impl CoreService {
     pub async fn mark_used(&self, id: String) -> Result<(), AppError> {
         self.operation(move |s| s.mark_used(&id)).await
     }
+    pub async fn keyboard_bindings(&self) -> Result<crate::KeyboardSnapshot, AppError> {
+        self.operation(|s| s.keyboard_bindings()).await
+    }
+    pub async fn update_key_bindings(
+        &self,
+        request: crate::UpdateKeyBindings,
+    ) -> Result<crate::KeyboardSnapshot, AppError> {
+        self.operation(move |s| s.update_key_bindings(request))
+            .await
+    }
     pub async fn desktop_preferences(&self) -> Result<crate::DesktopPreferences, AppError> {
         self.operation(|s| s.desktop_preferences()).await
     }

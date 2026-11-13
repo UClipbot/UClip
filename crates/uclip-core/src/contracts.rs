@@ -73,7 +73,7 @@ impl AppError {
             ErrorCode::MissingFile => "部分文件或文件夹已失效，未写入剪贴板。",
             ErrorCode::Restricted => "当前平台或权限不支持此操作。",
             ErrorCode::TargetLost => "原应用目标已变化，未自动粘贴。",
-            ErrorCode::ShortcutConflict => "快捷键不可用或已被占用，原快捷键保持不变。",
+            ErrorCode::ShortcutConflict => "快捷键重复、被占用或属于系统保留组合，原设置保持不变。",
             ErrorCode::Excluded => "内容命中排除规则，未保存。",
             ErrorCode::QueryTimeout => "搜索超时，请缩小范围或简化表达式。",
             ErrorCode::Unavailable => "本地服务不可用，请重启应用。",
@@ -268,6 +268,7 @@ pub struct UpdateDesktopPreferences {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopStatus {
+    pub keyboard: crate::KeyboardSnapshot,
     pub preferences: DesktopPreferences,
     pub tray_available: bool,
     pub shortcut_available: bool,

@@ -13,6 +13,7 @@ fn main() {
             "change_clip_deletion",
             "desktop_status",
             "update_desktop_preferences",
+            "update_key_bindings",
             "set_autostart",
             "set_desktop_interaction",
             "hide_main_window",

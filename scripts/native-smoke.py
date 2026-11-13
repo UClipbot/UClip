@@ -263,12 +263,14 @@ def main():
                     clipboard_checks = ClipboardChecks(invoke, execute, click, enter, env, directory, log)
                     clipboard_checks.run()
                     capture('local-history')
-                    from desktop_native_check import run as desktop_checks,run_manual
+                    from desktop_native_check import run as desktop_checks,run_manual,run_keyboard
                     run_manual(clipboard_checks)
+                    run_keyboard(clipboard_checks)
                     desktop_checks(clipboard_checks)
                     from experience_native_check import run as experience_checks
                     experience_checks(clipboard_checks)
 
+                saved_keyboard=invoke('desktop_status').get('value',{}).get('keyboard')
                 stale = invoke('update_settings', {'request': {'theme': 'light', 'expectedRevision': '0'}})
                 assert not stale['ok'] and stale['error']['code'] == 'conflict', stale
                 assert not invoke('update_settings', {'request': {'theme': 'invalid', 'expectedRevision': '1'}})['ok']
@@ -307,6 +309,7 @@ def main():
                 click('[data-testid="open-settings"]')
                 wait_for(lambda: execute('return !!document.querySelector("#theme") && !document.querySelector("#theme").disabled'), 'restarted UI ready')
                 assert invoke('get_settings')['value'] == saved
+                assert invoke('desktop_status')['value']['keyboard']==saved_keyboard
                 if clipboard_checks:
                     assert execute('return innerWidth===700 && innerHeight===600'), execute('return {width:innerWidth,height:innerHeight}')
                     print('PASS P2: restored native window size after process restart',flush=True)

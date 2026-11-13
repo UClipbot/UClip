@@ -169,6 +169,12 @@ pub async fn desktop_status(
             .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
     let desktop = app.state::<crate::desktop::DesktopState>();
     Ok(uclip_core::DesktopStatus {
+        keyboard: state
+            .core
+            .as_ref()
+            .map_err(Clone::clone)?
+            .keyboard_bindings()
+            .await?,
         preferences,
         tray_available: desktop
             .tray_available
@@ -314,5 +320,18 @@ pub async fn create_text(state: State<'_, AppState>, text: String) -> Result<Str
         .as_ref()
         .map_err(Clone::clone)?
         .create_text(text)
+        .await
+}
+
+#[tauri::command]
+pub async fn update_key_bindings(
+    state: State<'_, AppState>,
+    request: uclip_core::UpdateKeyBindings,
+) -> Result<uclip_core::KeyboardSnapshot, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .update_key_bindings(request)
         .await
 }
