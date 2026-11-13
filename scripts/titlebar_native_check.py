@@ -43,9 +43,19 @@ def run(invoke, execute, click, env, directory, capture):
         click('[data-testid="open-settings"]')
         wait(lambda: execute('const e=document.querySelector(arguments[0]); return e && !e.disabled', ['[aria-label="使用系统原生标题栏"]']), 'titlebar setting ready')
 
-    assert action('desktop_status')['preferences']['nativeTitlebar']
-    assert not execute('return !!document.querySelector(".window-titlebar")')
+    initial = action('desktop_status')
+    assert initial['preferences']['closeToTray'] and initial['preferences']['alwaysOnTop'], initial
+    assert initial['autostartEnabled'] and not initial['preferences']['nativeTitlebar'], initial
+    wait(lambda: execute('return !!document.querySelector(".window-titlebar")'), 'custom titlebar by default')
+    wait(lambda: decorations(False), 'custom native window by default')
+    wait(lambda: '_NET_WM_STATE_ABOVE' in output('xprop', '-id', window(), '_NET_WM_STATE'), 'topmost by default')
     settings()
+    assert execute('const rows=Array.from(document.querySelectorAll(".setting-row")).filter(e=>["关闭窗口后常驻","窗口置顶","登录时启动"].some(t=>e.textContent.includes(t)));return rows.length===3 && rows.every(e=>e.querySelector("input").checked)')
+    click('[aria-label="使用系统原生标题栏"]')
+    wait(lambda: action('desktop_status')['preferences']['nativeTitlebar'], 'native titlebar can be enabled')
+    wait(lambda: decorations(True), 'native decorations can be enabled')
+    wait(lambda: not execute('return !!document.querySelector(".window-titlebar")'), 'custom controls removed')
+    wait(lambda: execute('return !document.querySelector(arguments[0]).disabled', ['[aria-label="使用系统原生标题栏"]']), 'native setting settled')
     click('[aria-label="使用系统原生标题栏"]')
     wait(lambda: not action('desktop_status')['preferences']['nativeTitlebar'], 'custom titlebar committed')
     wait(lambda: execute('return !!document.querySelector(".window-titlebar")'), 'custom controls rendered')

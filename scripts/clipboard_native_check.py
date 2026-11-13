@@ -293,14 +293,44 @@ class ClipboardChecks:
                 display.sync();time.sleep(0.2)
             print('PASS B: live X11 V/X remapping resolves fresh keycodes and GTK receives exact text',flush=True)
 
-            # Pause only the isolated WM. Observe the app activation request after
-            # its initial modifier check, hold Shift, then let the WM restore focus.
-            # This deterministically exercises the final check, not the initial one.
+            # Pause only the isolated WM to control activation and modifier races.
             wm_pid = int(self.env['UCLIP_FIXTURE_WM_PID'])
             root = display.screen().root
             root.change_attributes(event_mask=X.SubstructureNotifyMask)
             active_atom = display.intern_atom('_NET_ACTIVE_WINDOW')
             shift = display.keysym_to_keycode(XK.string_to_keysym('Shift_L'))
+            # Model a WM publishing the active window before it moves input focus.
+            # The app must allow that transition to finish outside its server guard.
+            from Xlib import Xatom
+            self.activate(window);self.key('key','--clearmodifiers','ctrl+a');self.key('key','--clearmodifiers','BackSpace')
+            self.key('key','--clearmodifiers','ctrl+shift+v')
+            wait(lambda:self.execute('return document.hasFocus()'),'main focus before delayed input focus')
+            display.sync()
+            while display.pending_events():display.next_event()
+            result.unlink(missing_ok=True)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                os.kill(wm_pid,signal.SIGSTOP)
+                try:
+                    pending = pool.submit(self.action,'copy_clip',id=self.ids['text'],paste=True)
+                    def activation_requested():
+                        while display.pending_events():
+                            event = display.next_event()
+                            if event.type == X.ClientMessage and event.client_type == active_atom and event.window.id == int(window):return True
+                        return False
+                    wait(activation_requested,'activation before delayed input focus',timeout=2)
+                    root.change_property(active_atom,Xatom.WINDOW,32,[int(window)])
+                    display.sync();time.sleep(.1)
+                    assert not pending.done(),'activation was rejected before the WM could move input focus'
+                    os.kill(wm_pid,signal.SIGCONT)
+                    copied = pending.result(timeout=6)
+                    assert copied['copied'] and copied['pasteRequested'],copied
+                    value = wait(received_result,'GTK receive after delayed WM focus')
+                    assert value['kind']=='text' and value['text']==self.text,value
+                finally:
+                    os.kill(wm_pid,signal.SIGCONT)
+            print('PASS B: delayed input focus after active-window publication is awaited before guarded paste',flush=True)
+
+            # Hold Shift after activation is requested to exercise the final check.
             self.activate(window);self.key('key','--clearmodifiers','ctrl+shift+v')
             wait(lambda:self.execute('return document.hasFocus()'),'main focus before modifier race')
             display.sync()

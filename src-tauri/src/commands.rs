@@ -207,7 +207,9 @@ pub async fn desktop_status(
             .load(std::sync::atomic::Ordering::SeqCst),
         shortcut_available: state_desktop_shortcut(&app),
         autostart_enabled: enabled.as_ref().ok().copied(),
-        error: enabled.err(),
+        error: enabled
+            .err()
+            .or_else(|| desktop.autostart_error.lock().ok()?.clone()),
     })
 }
 
@@ -316,9 +318,20 @@ pub async fn update_desktop_preferences(
 
 #[tauri::command]
 pub async fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, AppError> {
-    tauri::async_runtime::spawn_blocking(move || crate::autostart::set(&app, enabled))
-        .await
-        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+    use tauri::Manager;
+    let registration = app.clone();
+    let actual =
+        tauri::async_runtime::spawn_blocking(move || crate::autostart::set(&registration, enabled))
+            .await
+            .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))??;
+    if let Ok(mut error) = app
+        .state::<crate::desktop::DesktopState>()
+        .autostart_error
+        .lock()
+    {
+        *error = None;
+    }
+    Ok(actual)
 }
 
 #[tauri::command]

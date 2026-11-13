@@ -12,6 +12,15 @@ pub struct WindowPlacement {
 }
 
 impl Storage {
+    /// Consume the fresh-install default before an OS side effect. Never re-enable a
+    /// user's disabled login item on later launches, including after a failed attempt.
+    pub fn take_autostart_default(&mut self) -> Result<bool, AppError> {
+        Ok(self.connection.execute(
+            "UPDATE desktop_preferences SET autostart_initialized=1 WHERE singleton=1 AND autostart_initialized=0",
+            [],
+        )? == 1)
+    }
+
     pub fn desktop_preferences(&self) -> Result<DesktopPreferences, AppError> {
         Ok(self.connection.query_row("SELECT close_to_tray,always_on_top,auto_hide,shortcut,revision,native_titlebar FROM desktop_preferences WHERE singleton=1", [], |r| Ok(DesktopPreferences {
             close_to_tray: r.get(0)?, always_on_top: r.get(1)?, auto_hide: r.get(2)?, shortcut: r.get(3)?, revision: r.get::<_, i64>(4)?.to_string(), native_titlebar: r.get(5)?

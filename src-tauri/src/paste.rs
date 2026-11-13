@@ -319,6 +319,34 @@ mod x11 {
             }
             Ok(())
         }
+        fn focus_in_target(&self, target: Window) -> Result<bool, AppError> {
+            let mut focus = self
+                .conn
+                .get_input_focus()
+                .map_err(|_| fail())?
+                .reply()
+                .map_err(|_| fail())?
+                .focus;
+            let mut in_target = focus == target;
+            for _ in 0..16 {
+                if in_target
+                    || focus == NONE
+                    || focus == self.root
+                    || focus == u32::from(InputFocus::POINTER_ROOT)
+                {
+                    break;
+                }
+                focus = self
+                    .conn
+                    .query_tree(focus)
+                    .map_err(|_| fail())?
+                    .reply()
+                    .map_err(|_| fail())?
+                    .parent;
+                in_target = focus == target;
+            }
+            Ok(in_target)
+        }
         pub fn paste(&mut self) -> Result<(), AppError> {
             self.validate()?;
             let (target, _, _) = self.target.ok_or_else(fail)?;
@@ -358,10 +386,12 @@ mod x11 {
             let deadline = Instant::now() + Duration::from_millis(400);
             loop {
                 let current = self.active()?;
-                if current == target {
+                // Some WMs publish the active window before moving input focus.
+                // Wait outside the server guard so the WM can finish both requests.
+                if current == target && self.focus_in_target(target)? {
                     break;
                 }
-                if current != original || Instant::now() >= deadline {
+                if (current != original && current != target) || Instant::now() >= deadline {
                     return Err(fail());
                 }
                 std::thread::sleep(Duration::from_millis(10));
@@ -415,32 +445,7 @@ mod x11 {
                 return Err(fail());
             }
 
-            let mut focus = self
-                .conn
-                .get_input_focus()
-                .map_err(|_| fail())?
-                .reply()
-                .map_err(|_| fail())?
-                .focus;
-            let mut in_target = focus == target;
-            for _ in 0..16 {
-                if in_target
-                    || focus == NONE
-                    || focus == self.root
-                    || focus == u32::from(InputFocus::POINTER_ROOT)
-                {
-                    break;
-                }
-                focus = self
-                    .conn
-                    .query_tree(focus)
-                    .map_err(|_| fail())?
-                    .reply()
-                    .map_err(|_| fail())?
-                    .parent;
-                in_target = focus == target;
-            }
-            if !in_target {
+            if !self.focus_in_target(target)? {
                 return Err(fail());
             }
             // Never inject into an arbitrary active window; recheck immediately before dispatch.

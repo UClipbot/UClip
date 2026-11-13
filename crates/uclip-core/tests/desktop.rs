@@ -7,18 +7,18 @@ fn desktop_preferences_and_geometry_survive_restart_with_conflict_and_failure_pr
     let path = dir.path().join("desktop.sqlite3");
     let mut s = Storage::open(&path).unwrap();
     let p = s.desktop_preferences().unwrap();
-    assert!(!p.close_to_tray && !p.always_on_top && !p.auto_hide);
-    assert!(p.native_titlebar);
+    assert!(p.close_to_tray && p.always_on_top && !p.auto_hide);
+    assert!(!p.native_titlebar);
     let mut update = UpdateDesktopPreferences {
-        close_to_tray: true,
-        always_on_top: true,
+        close_to_tray: false,
+        always_on_top: false,
         auto_hide: false,
-        native_titlebar: false,
+        native_titlebar: true,
         shortcut: "Control+Alt+K".into(),
         expected_revision: p.revision,
     };
     let saved = s.update_desktop_preferences(update.clone()).unwrap();
-    assert!(!saved.native_titlebar);
+    assert!(saved.native_titlebar);
     assert_eq!(
         s.update_desktop_preferences(update.clone())
             .unwrap_err()
@@ -34,7 +34,7 @@ fn desktop_preferences_and_geometry_survive_restart_with_conflict_and_failure_pr
     );
     update.expected_revision = saved.revision.clone();
     update.auto_hide = true;
-    update.native_titlebar = true;
+    update.native_titlebar = false;
     let c = Connection::open(&path).unwrap();
     c.execute_batch("CREATE TRIGGER fail_desktop BEFORE UPDATE ON desktop_preferences BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
     assert_eq!(
@@ -96,7 +96,7 @@ fn v5_titlebar_migration_preserves_existing_preferences_and_content() {
     drop(s);
     let c = Connection::open(&path).unwrap();
     c.execute_batch(
-        "ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; PRAGMA user_version=5;",
+        "ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; PRAGMA user_version=5;",
     )
     .unwrap();
     let s = Storage::open(&path).unwrap();
@@ -132,5 +132,59 @@ fn v5_titlebar_migration_preserves_existing_preferences_and_content() {
             .get::<_, i64>(0))
             .unwrap(),
         0
+    );
+}
+
+#[test]
+fn fresh_autostart_default_is_consumed_once_and_storage_failure_does_not_consume_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("fresh.sqlite3");
+    let mut s = Storage::open(&path).unwrap();
+    let preferences = s.desktop_preferences().unwrap();
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch("CREATE TRIGGER fail_default BEFORE UPDATE ON desktop_preferences BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+    assert_eq!(
+        s.take_autostart_default().unwrap_err().code,
+        ErrorCode::Storage
+    );
+    c.execute_batch("DROP TRIGGER fail_default;").unwrap();
+    assert!(s.take_autostart_default().unwrap());
+    assert!(!s.take_autostart_default().unwrap());
+    assert_eq!(s.desktop_preferences().unwrap(), preferences);
+    drop(s);
+    let mut s = Storage::open(&path).unwrap();
+    assert!(!s.take_autostart_default().unwrap());
+    assert_eq!(s.desktop_preferences().unwrap(), preferences);
+}
+
+#[test]
+fn v6_upgrade_preserves_disabled_preferences_and_never_requests_autostart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v6.sqlite3");
+    let mut s = Storage::open(&path).unwrap();
+    let id = s.create_text("v6 fixture".into()).unwrap();
+    drop(s);
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch("UPDATE desktop_preferences SET close_to_tray=0,always_on_top=0,native_titlebar=1; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; PRAGMA user_version=6;").unwrap();
+    let mut s = Storage::open(&path).unwrap();
+    let p = s.desktop_preferences().unwrap();
+    assert!(!p.close_to_tray && !p.always_on_top && p.native_titlebar);
+    assert_eq!(p.revision, "0");
+    assert!(!s.take_autostart_default().unwrap());
+    assert_eq!(
+        s.read_clip(&id).unwrap(),
+        uclip_core::ClipPayload::Text("v6 fixture".into())
+    );
+    drop(s);
+    assert_eq!(
+        Storage::open(&path).unwrap().desktop_preferences().unwrap(),
+        p
+    );
+    c.execute_batch("PRAGMA user_version=6;").unwrap();
+    assert!(Storage::open(&path).is_err());
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        6
     );
 }

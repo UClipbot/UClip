@@ -115,6 +115,19 @@ pub fn run() {
                     Err(error) => Err(error.clone()),
                 };
                 if let Ok(core) = &startup {
+                    if let Err(error) = autostart::initialize(&handle, core).await {
+                        eprintln!(
+                            "autostart_default_failed: {:?}: {}",
+                            error.code, error.message
+                        );
+                        if let Ok(mut failure) = handle
+                            .state::<desktop::DesktopState>()
+                            .autostart_error
+                            .lock()
+                        {
+                            *failure = Some(error);
+                        }
+                    }
                     if let Ok(preferences) = core.desktop_preferences().await {
                         handle
                             .state::<desktop::DesktopState>()

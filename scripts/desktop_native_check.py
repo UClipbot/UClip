@@ -11,7 +11,8 @@ def run(checks):
     c = checks
     status = c.action('desktop_status')
     assert status['shortcutAvailable'], status
-    assert not status['preferences']['closeToTray']
+    assert status['preferences']['closeToTray'] and status['preferences']['alwaysOnTop']
+    assert status['autostartEnabled'] and not status['preferences']['nativeTitlebar']
     window = c.window('^UClip$')
 
     pid=subprocess.check_output(['xdotool','getwindowpid',window],env=c.env,text=True).strip()

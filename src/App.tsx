@@ -1400,7 +1400,7 @@ export function App() {
                   <input
                     type="checkbox"
                     aria-label="使用系统原生标题栏"
-                    checked={desktop.status?.preferences.nativeTitlebar ?? true}
+                    checked={desktop.status?.preferences.nativeTitlebar ?? false}
                     disabled={!desktop.status || desktop.busy}
                     onChange={(event) => void saveDesktop({ nativeTitlebar: event.target.checked })}
                   />

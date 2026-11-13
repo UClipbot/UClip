@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 const APPLICATION_ID: i64 = 0x434c4e58; // CLNX: never open the previous application's database.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -114,6 +114,14 @@ impl Storage {
             tx.execute_batch("ALTER TABLE desktop_preferences ADD COLUMN native_titlebar INTEGER NOT NULL DEFAULT 1 CHECK(native_titlebar IN (0,1));")?;
             tx.pragma_update(None, "user_version", 6)?;
         }
+        if version < 7 {
+            // Existing installations keep their OS autostart choice, including disabled.
+            tx.execute_batch("ALTER TABLE desktop_preferences ADD COLUMN autostart_initialized INTEGER NOT NULL DEFAULT 1 CHECK(autostart_initialized IN (0,1));")?;
+            if version == 0 {
+                tx.execute_batch("UPDATE desktop_preferences SET close_to_tray=1,always_on_top=1,native_titlebar=0,autostart_initialized=0 WHERE singleton=1;")?;
+            }
+            tx.pragma_update(None, "user_version", 7)?;
+        }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -122,6 +130,11 @@ impl Storage {
         storage.capture_policy()?;
         storage.history_revision()?;
         storage.desktop_preferences()?;
+        storage.connection.query_row(
+            "SELECT autostart_initialized FROM desktop_preferences WHERE singleton=1",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
         storage.keyboard_bindings()?;
         storage.collections()?;
         storage

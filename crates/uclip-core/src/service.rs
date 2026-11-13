@@ -211,6 +211,9 @@ impl CoreService {
     pub async fn desktop_preferences(&self) -> Result<crate::DesktopPreferences, AppError> {
         self.operation(|s| s.desktop_preferences()).await
     }
+    pub async fn take_autostart_default(&self) -> Result<bool, AppError> {
+        self.operation(|s| s.take_autostart_default()).await
+    }
     pub async fn update_desktop_preferences(
         &self,
         request: crate::UpdateDesktopPreferences,

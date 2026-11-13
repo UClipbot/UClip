@@ -44,6 +44,7 @@ def main():
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
     parser.add_argument('--manual-only',action='store_true',help='Isolated real manual text creation.')
     parser.add_argument('--titlebar-only',action='store_true',help='Isolated native/custom titlebar and window controls.')
+    parser.add_argument('--desktop-defaults-only',action='store_true',help='Fresh desktop defaults and one-time OS autostart, with optional failure fixture.')
     parser.add_argument('--pinned-only',action='store_true',help='Isolated pin, pinned page and explicit deduplication checks.')
     parser.add_argument('--collections-only',action='store_true',help='Isolated real collection forms, transfers, query scopes and persistence.')
     parser.add_argument('--paste-performance',action='store_true',help='Twenty actual automatic paste receives per payload type.')
@@ -75,6 +76,10 @@ def main():
         env = os.environ.copy()
         for name, suffix in [('XDG_DATA_HOME', 'data'), ('XDG_CONFIG_HOME', 'config'), ('XDG_CACHE_HOME', 'cache')]:
             env[name] = str(Path(directory, suffix))
+        autostart_failure = args.desktop_defaults_only and env.get('UCLIP_FIXTURE_AUTOSTART_FAILURE') == '1'
+        if autostart_failure:
+            Path(env['XDG_CONFIG_HOME']).mkdir()
+            Path(env['XDG_CONFIG_HOME'], 'autostart').write_text('blocked fixture')
         with open(Path(directory, 'driver.log'), 'w+') as log:
             driver = subprocess.Popen(['dbus-run-session', '--', 'tauri-driver', '--port', str(port), '--native-port', str(native_port)], env=env, stdout=log, stderr=log, start_new_session=True)
             session = None
@@ -138,6 +143,40 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.desktop_defaults_only:
+                    desktop = invoke('desktop_status')['value']
+                    preferences = desktop['preferences']
+                    assert preferences['closeToTray'] and preferences['alwaysOnTop'] and not preferences['nativeTitlebar'], desktop
+                    wait_for(lambda: execute('return !!document.querySelector(".window-titlebar")'), 'default custom titlebar')
+                    directory_path = Path(env['XDG_CONFIG_HOME'], 'autostart')
+                    if autostart_failure:
+                        assert desktop['error']['code'] == 'restricted' and desktop['autostartEnabled'] is None, desktop
+                        assert directory_path.read_text() == 'blocked fixture'
+                        directory_path.unlink()
+                        click('[data-testid="open-settings"]')
+                        wait_for(lambda: execute('return document.querySelector(".settings-feedback[role=status]")?.textContent.includes("当前平台或权限不支持此操作")'), 'default OS registration failure visible')
+                        click('[aria-label="关闭面板"]')
+                        assert invoke('set_autostart', {'enabled': False}) == {'ok': True, 'value': False}
+                        assert invoke('desktop_status')['value']['error'] is None
+                    else:
+                        assert desktop['autostartEnabled'] and desktop['error'] is None, desktop
+                        entries = list(directory_path.glob('*.desktop'))
+                        assert len(entries) == 1 and binary in entries[0].read_text(), entries
+                        assert invoke('set_autostart', {'enabled': False}) == {'ok': True, 'value': False}
+                    assert invoke('quit_app')['ok']
+                    wait_for(lambda: not owned_processes(), 'defaults process exits')
+                    try: request('DELETE', f'/session/{session}')
+                    except (OSError, RuntimeError): pass
+                    session = start()
+                    wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'defaults restart')
+                    restored = invoke('desktop_status')['value']
+                    assert restored['preferences'] == preferences and restored['autostartEnabled'] is False and restored['error'] is None, restored
+                    assert not list(directory_path.glob('*.desktop')), 'startup retried or re-enabled disabled autostart'
+                    assert invoke('set_autostart', {'enabled': True}) == {'ok': True, 'value': True}
+                    assert invoke('desktop_status')['value']['error'] is None
+                    assert invoke('set_autostart', {'enabled': False}) == {'ok': True, 'value': False}
+                    print('PASS desktop defaults: resident/topmost/custom titlebar; OS autostart initialized once, failed registration visible, manual changes and restart respected', flush=True)
+                    return
                 if args.titlebar_only:
                     from titlebar_native_check import run, verify_restart
                     run(invoke,execute,click,env,directory,capture)
@@ -344,6 +383,10 @@ def main():
                 print('PASS: second launch reuses the existing desktop instance', flush=True)
 
                 # Send an ordinary window-manager close request to this test's exact PID.
+                desktop = invoke('desktop_status')['value']['preferences']
+                if desktop['closeToTray']:
+                    request_preferences = {key: value for key, value in desktop.items() if key != 'revision'}
+                    assert invoke('update_desktop_preferences', {'request': {**request_preferences, 'closeToTray': False, 'expectedRevision': desktop['revision']}})['ok']
                 window_ids = subprocess.check_output(['xdotool', 'search', '--onlyvisible', '--pid', str(pid)], text=True).split()
                 assert window_ids
                 subprocess.run(['wmctrl', '-ic', hex(int(window_ids[0]))], check=True)

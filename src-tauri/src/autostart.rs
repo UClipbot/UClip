@@ -4,6 +4,24 @@ fn failure() -> AppError {
     AppError::new(ErrorCode::Restricted)
 }
 
+pub async fn initialize(
+    app: &tauri::AppHandle,
+    core: &uclip_core::CoreService,
+) -> Result<(), AppError> {
+    if core.take_autostart_default().await? {
+        let app = app.clone();
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), AppError> {
+            if !enabled(&app)? {
+                set(&app, true)?;
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| AppError::new(ErrorCode::Unavailable))??;
+    }
+    Ok(())
+}
+
 #[cfg(not(target_os = "linux"))]
 pub fn enabled(app: &tauri::AppHandle) -> Result<bool, AppError> {
     use tauri_plugin_autostart::ManagerExt;
@@ -35,7 +53,14 @@ fn entry(app: &tauri::AppHandle) -> Result<(std::path::PathBuf, String), AppErro
         .map_err(|_| failure())?
         .join("autostart")
         .join(format!("{}.desktop", app.config().identifier));
-    let executable = std::env::current_exe().map_err(|_| failure())?;
+    // current_exe points into a temporary mount/extraction when running an AppImage.
+    let executable = app
+        .env()
+        .appimage
+        .map(std::path::PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(std::env::current_exe)
+        .map_err(|_| failure())?;
     Ok((file, contents(executable.to_str().ok_or_else(failure)?)?))
 }
 #[cfg(target_os = "linux")]

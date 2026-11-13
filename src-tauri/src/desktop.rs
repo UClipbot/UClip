@@ -10,6 +10,7 @@ use uclip_core::{AppError, DesktopPreferences, ErrorCode, WindowPlacement};
 #[derive(Default)]
 pub struct DesktopState {
     pub preferences: Mutex<Option<DesktopPreferences>>,
+    pub autostart_error: Mutex<Option<AppError>>,
     pub updating: AtomicBool,
     pub tray_available: AtomicBool,
     pub shortcut_available: AtomicBool,
