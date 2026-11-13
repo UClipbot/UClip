@@ -28,6 +28,7 @@ export function useHistory(
   pinnedOnly: boolean,
   collectionId: string | null,
   previewId?: string,
+  settingsOnly = false,
 ) {
   const [status, setStatus] = useState<ClipboardStatus | null>(null);
   const [page, setPage] = useState<HistoryPage | null>(null);
@@ -65,7 +66,7 @@ export function useHistory(
     try {
       const [next, categories] = await Promise.all([
         invoke<ClipboardStatus>('clipboard_status'),
-        invoke<CollectionsSnapshot>('collections_list'),
+        settingsOnly ? Promise.resolve(null) : invoke<CollectionsSnapshot>('collections_list'),
       ]);
       if (mounted.current && generation === statusGeneration.current) {
         setStatus(next);
@@ -76,7 +77,7 @@ export function useHistory(
       if (mounted.current && generation === statusGeneration.current)
         setStatusError(safeError(error).message);
     }
-  }, [native]);
+  }, [native, settingsOnly]);
   useEffect(() => {
     mounted.current = true;
     if (!native) return;
@@ -98,7 +99,7 @@ export function useHistory(
     setOffset(0);
   }, [query, regex, type, pinnedOnly, collectionId]);
   useEffect(() => {
-    if (!native) return;
+    if (!native || settingsOnly) return;
     let active = true;
     setPending(true);
     setError('');
@@ -166,6 +167,7 @@ export function useHistory(
     historyRevision,
     refresh,
     requestKey,
+    settingsOnly,
   ]);
   useEffect(() => {
     if (!native || !previewId) {

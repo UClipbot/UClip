@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const config = JSON.parse(read('src-tauri/tauri.conf.json'));
 const capability = JSON.parse(read('src-tauri/capabilities/main.json'));
+const settingsCapability = JSON.parse(read('src-tauri/capabilities/settings.json'));
 const registered = read('src-tauri/src/lib.rs').match(/generate_handler!\[([\s\S]*?)\]/)?.[1];
 const manifested = read('src-tauri/build.rs').match(/\.commands\(&\[([\s\S]*?)\]\)/)?.[1];
 assert(registered && manifested, 'Command registration must remain inspectable.');
@@ -23,9 +24,32 @@ assert.equal(capability.local, true);
 assert.equal(capability.remote, undefined);
 assert.deepEqual(
   capability.permissions.toSorted(),
-  commands.map((name) => `allow-${name.replaceAll('_', '-')}`).sort(),
+  [
+    ...commands.map((name) => `allow-${name.replaceAll('_', '-')}`),
+    'core:event:allow-listen',
+    'core:event:allow-unlisten',
+  ].sort(),
 );
-assert.deepEqual(config.app.security.capabilities, ['main']);
+assert.deepEqual(config.app.security.capabilities, ['main', 'settings']);
+assert.deepEqual(settingsCapability.windows, ['settings']);
+assert.equal(settingsCapability.local, true);
+assert.equal(settingsCapability.remote, undefined);
+assert.deepEqual(
+  settingsCapability.permissions.toSorted(),
+  [
+    'core:event:allow-listen',
+    'core:event:allow-unlisten',
+    'allow-bootstrap',
+    'allow-update-settings',
+    'allow-clipboard-status',
+    'allow-update-capture-policy',
+    'allow-desktop-status',
+    'allow-update-desktop-preferences',
+    'allow-update-key-bindings',
+    'allow-set-autostart',
+    'allow-close-main-window',
+  ].toSorted(),
+);
 assert.equal(config.app.withGlobalTauri, false);
 assert(config.app.security.csp.includes("frame-src 'none'"));
 assert(config.app.security.csp.includes("object-src 'none'"));

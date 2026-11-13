@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { desktop, safeError } from './client';
 import { latestQuery } from './latest';
+import { useSettingsRefresh } from './useSettingsRefresh';
 import type { BootstrapSnapshot, Theme } from '../generated/contracts';
 
 const native = isTauri();
@@ -43,6 +44,7 @@ export function useAppearance() {
       },
     );
   }, [gate]);
+  useSettingsRefresh(native, refresh);
   useEffect(() => {
     void refresh();
     const onFocus = () => {

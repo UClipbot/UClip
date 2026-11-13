@@ -7,7 +7,7 @@ from pathlib import Path
 from clipboard_native_check import wait
 
 
-def run(invoke, execute, click, env, directory, capture):
+def run(invoke, execute, click, env, directory, capture, execute_main, capture_main):
     if env.get('UCLIP_FIXTURE_DISPLAY') != '1' or env.get('DISPLAY') in (None, ':0', ':0.0'):
         raise RuntimeError('Titlebar checks require an isolated display.')
 
@@ -27,7 +27,7 @@ def run(invoke, execute, click, env, directory, capture):
 
     def layout():
         g = geometry()
-        return execute('return [innerWidth,innerHeight]') == [g['WIDTH'], g['HEIGHT']]
+        return execute_main('return [innerWidth,innerHeight]') == [g['WIDTH'], g['HEIGHT']]
 
     def decorations(native):
         text = output('xprop', '-id', window(), '_MOTIF_WM_HINTS')
@@ -46,7 +46,7 @@ def run(invoke, execute, click, env, directory, capture):
     initial = action('desktop_status')
     assert initial['preferences']['closeToTray'] and initial['preferences']['alwaysOnTop'], initial
     assert initial['autostartEnabled'] and not initial['preferences']['nativeTitlebar'], initial
-    wait(lambda: execute('return !!document.querySelector(".window-titlebar")'), 'custom titlebar by default')
+    wait(lambda: execute_main('return !!document.querySelector(".window-titlebar")'), 'custom titlebar by default')
     wait(lambda: decorations(False), 'custom native window by default')
     wait(lambda: '_NET_WM_STATE_ABOVE' in output('xprop', '-id', window(), '_NET_WM_STATE'), 'topmost by default')
     settings()
@@ -54,16 +54,17 @@ def run(invoke, execute, click, env, directory, capture):
     click('[aria-label="使用系统原生标题栏"]')
     wait(lambda: action('desktop_status')['preferences']['nativeTitlebar'], 'native titlebar can be enabled')
     wait(lambda: decorations(True), 'native decorations can be enabled')
-    wait(lambda: not execute('return !!document.querySelector(".window-titlebar")'), 'custom controls removed')
+    wait(lambda: not execute_main('return !!document.querySelector(".window-titlebar")'), 'custom controls removed')
     wait(lambda: execute('return !document.querySelector(arguments[0]).disabled', ['[aria-label="使用系统原生标题栏"]']), 'native setting settled')
     click('[aria-label="使用系统原生标题栏"]')
     wait(lambda: not action('desktop_status')['preferences']['nativeTitlebar'], 'custom titlebar committed')
-    wait(lambda: execute('return !!document.querySelector(".window-titlebar")'), 'custom controls rendered')
+    wait(lambda: execute_main('return !!document.querySelector(".window-titlebar")'), 'custom controls rendered')
     wait(lambda: decorations(False), 'OS decorations removed')
     for theme in ('light', 'dark'):
         click(f'#theme option[value="{theme}"]')
         wait(lambda: execute('return document.documentElement.dataset.theme===arguments[0]', [theme]), theme + ' titlebar theme')
-        capture('titlebar-' + theme)
+        wait(lambda: execute_main('return document.documentElement.dataset.theme===arguments[0]', [theme]), theme + ' main window theme')
+        capture_main('titlebar-' + theme)
 
     # Stale writes cannot apply a window side effect; failed storage restores the real decorations.
     before = action('desktop_status')['preferences']
@@ -84,7 +85,9 @@ def run(invoke, execute, click, env, directory, capture):
         with sqlite3.connect(database) as connection:
             connection.execute('DROP TRIGGER fixture_titlebar_failure')
 
-    # Window controls remain usable while the settings modal is open.
+    click('[aria-label="关闭面板"]')
+
+    # The independent settings window closes without changing the main window controls.
     wait(layout, 'custom window layout settled')
     click('[aria-label="最大化或还原窗口"]')
     wait(lambda: '_NET_WM_STATE_MAXIMIZED_VERT' in output('xprop', '-id', window(), '_NET_WM_STATE'), 'custom maximize button')
@@ -101,23 +104,22 @@ def run(invoke, execute, click, env, directory, capture):
         raise
     subprocess.run(['xdotool', 'windowactivate', xid], env=env, check=True)
     wait(lambda: execute('return document.hasFocus()'), 'restore minimized window')
-    click('[aria-label="关闭面板"]')
 
     # Exercise an actual pointer drag, including the native start-drag command.
     def position():
         values = geometry()
         return values['X'], values['Y']
     x, y = position()
-    subprocess.run(['xdotool', 'mousemove', str(x + 140), str(y + 17), 'mousedown', '1'], env=env, check=True)
+    subprocess.run(['xdotool', 'mousemove', str(x + 20), str(y + 17), 'mousedown', '1'], env=env, check=True)
     try:
         time.sleep(.15)
-        subprocess.run(['xdotool', 'mousemove', str(x + 220), str(y + 72)], env=env, check=True)
+        subprocess.run(['xdotool', 'mousemove', str(x + 100), str(y + 72)], env=env, check=True)
         time.sleep(.15)
     finally:
         subprocess.run(['xdotool', 'mouseup', '1'], env=env, check=True)
     wait(lambda: position() != (x, y), 'custom titlebar moves the native window')
     x, y = position()
-    subprocess.run(['xdotool', 'mousemove', str(x + 140), str(y + 17), 'click', '--repeat', '2', '--delay', '100', '1'], env=env, check=True)
+    subprocess.run(['xdotool', 'mousemove', str(x + 20), str(y + 17), 'click', '--repeat', '2', '--delay', '100', '1'], env=env, check=True)
     wait(lambda: '_NET_WM_STATE_MAXIMIZED_VERT' in output('xprop', '-id', window(), '_NET_WM_STATE'), 'titlebar double-click maximizes')
     wait(layout, 'double-click maximized layout settled')
     click('[aria-label="最大化或还原窗口"]')
@@ -129,11 +131,11 @@ def run(invoke, execute, click, env, directory, capture):
     settings()
     click('[aria-label="使用系统原生标题栏"]')
     wait(lambda: action('desktop_status')['preferences']['nativeTitlebar'], 'native titlebar committed')
-    wait(lambda: not execute('return !!document.querySelector(".window-titlebar")'), 'custom controls removed')
+    wait(lambda: not execute_main('return !!document.querySelector(".window-titlebar")'), 'custom controls removed')
     wait(lambda: decorations(True), 'native OS decorations restored')
     wait(lambda: execute('return !document.querySelector(arguments[0]).disabled', ['[aria-label="使用系统原生标题栏"]']), 'native setting settled')
     click('[aria-label="使用系统原生标题栏"]')
-    wait(lambda: execute('return !!document.querySelector(".window-titlebar")'), 'custom controls restored')
+    wait(lambda: execute_main('return !!document.querySelector(".window-titlebar")'), 'custom controls restored')
     click('[aria-label="关闭面板"]')
     save(closeToTray=True)
     xid = window()

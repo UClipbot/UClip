@@ -6,8 +6,9 @@ import type {
   UpdateKeyBindings,
 } from '../generated/contracts';
 import { safeError } from './client';
+import { useSettingsRefresh } from './useSettingsRefresh';
 
-export function useDesktop(native: boolean, interaction: boolean) {
+export function useDesktop(native: boolean, interaction: boolean, manageInteraction = true) {
   const [status, setStatus] = useState<DesktopStatus | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -26,6 +27,7 @@ export function useDesktop(native: boolean, interaction: boolean) {
       if (current === generation.current) setError(safeError(failure).message);
     }
   }, [native]);
+  useSettingsRefresh(native, refresh);
   useEffect(() => {
     void refresh();
     window.addEventListener('focus', refresh);
@@ -35,7 +37,7 @@ export function useDesktop(native: boolean, interaction: boolean) {
     };
   }, [refresh]);
   useEffect(() => {
-    if (!native) return;
+    if (!native || !manageInteraction) return;
     // Native blur timers use this only as a veto; the Rust lifetime is independent.
     void invoke('set_desktop_interaction', { active: interaction }).catch(() => {});
     const guard = () => void invoke('set_desktop_interaction', { active: true }).catch(() => {});
@@ -51,7 +53,7 @@ export function useDesktop(native: boolean, interaction: boolean) {
       document.removeEventListener('compositionstart', guard, true);
       document.removeEventListener('compositionend', release, true);
     };
-  }, [native, interaction]);
+  }, [native, interaction, manageInteraction]);
   async function change(command: string, args: Record<string, unknown>) {
     if (changing.current) return;
     changing.current = true;
@@ -86,6 +88,7 @@ export function useDesktop(native: boolean, interaction: boolean) {
         void invoke('set_desktop_interaction', { active: interaction }).catch(() => {});
       }),
     close: () => invoke('close_main_window'),
+    openSettings: () => invoke('open_settings_window'),
     quit: () => invoke('quit_app'),
   };
 }

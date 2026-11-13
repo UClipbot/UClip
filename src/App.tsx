@@ -61,6 +61,7 @@ export function App() {
   const [preview, setPreview] = useState<{ id: string; focus: HTMLElement | null } | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [modal, setModal] = useState<AppModal | null>(null);
+  const [settingsPage, setSettingsPage] = useState('capture');
   const [collectionName, setCollectionName] = useState('');
   const [editingCollection, setEditingCollection] = useState<CollectionItem | null>(null);
   const [collectionError, setCollectionError] = useState('');
@@ -70,7 +71,15 @@ export function App() {
   const [dedupRevision, setDedupRevision] = useState('');
   const [dedupError, setDedupError] = useState('');
   const [toast, setToast] = useState<Toast | null>(null);
-  const desktop = useDesktop(appearance.native, !!(modal || menu || preview));
+  const settingsWindow =
+    appearance.native && new URLSearchParams(window.location.search).get('window') === 'settings';
+  const desktop = useDesktop(appearance.native, !!(modal || menu || preview), !settingsWindow);
+  const customChrome =
+    appearance.native && !settingsWindow && desktop.status?.preferences.nativeTitlebar === false;
+  useEffect(() => {
+    document.body.classList.toggle('settings-window', settingsWindow);
+    return () => document.body.classList.remove('settings-window');
+  }, [settingsWindow]);
   const [shortcut, setShortcut] = useState('CommandOrControl+Shift+V');
   const copying = useRef(false);
   useEffect(() => {
@@ -91,6 +100,7 @@ export function App() {
     view === 'pinned',
     nativeCollectionId,
     preview?.id,
+    settingsWindow,
   );
   const currentCollection = live.collections.find((item) => item.id === nativeCollectionId);
   const demoResult = useClipQuery(
@@ -298,6 +308,10 @@ export function App() {
     action();
   }
   function closeModal() {
+    if (settingsWindow) {
+      void windowAction(desktop.close);
+      return;
+    }
     setModal(null);
     requestAnimationFrame(() => {
       const previous = modalFocus.current;
@@ -305,6 +319,11 @@ export function App() {
     });
   }
   function openModal(next: AppModal) {
+    if (next === 'settings' && appearance.native && !settingsWindow) {
+      setMenu(null);
+      void desktop.openSettings().catch((error) => setToast({ message: safeError(error).message }));
+      return;
+    }
     modalFocus.current = menu?.anchor ?? (document.activeElement as HTMLElement);
     setMenu(null);
     setModal(next);
@@ -396,7 +415,14 @@ export function App() {
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.isComposing || event.keyCode === 229 || event.defaultPrevented || menu) return;
+      if (
+        settingsWindow ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        event.defaultPrevented ||
+        menu
+      )
+        return;
       const keys = appearance.native ? desktop.status?.keyboard.bindings : DEFAULT_KEYS;
       if (!keys) return;
       const is = (action: keyof typeof keys) =>
@@ -566,55 +592,84 @@ export function App() {
     }
   }
 
+  const searchBox = (
+    <div className={`search-box ${result.error ? 'has-error' : ''}`}>
+      <Icon name="search" size={18} />
+      <label className="sr-only" htmlFor="history-search">
+        搜索历史
+      </label>
+      <input
+        ref={search}
+        id="history-search"
+        value={query}
+        placeholder="搜索历史…"
+        onChange={(event) => setQuery(event.target.value)}
+        autoComplete="off"
+        spellCheck={false}
+        aria-invalid={!!result.error}
+        aria-describedby={result.error ? 'search-error' : undefined}
+      />
+      {query && (
+        <button
+          className="icon-button"
+          aria-label="清空搜索"
+          onClick={() => {
+            setQuery('');
+            search.current?.focus();
+          }}
+        >
+          <Icon name="close" size={16} />
+        </button>
+      )}
+      <button
+        className={`regex-toggle ${regex ? 'active' : ''}`}
+        aria-label="正则表达式搜索"
+        aria-pressed={regex}
+        onClick={() => setRegex(!regex)}
+      >
+        .*
+      </button>
+    </div>
+  );
+
   return (
     <>
-      {appearance.native && desktop.status?.preferences.nativeTitlebar === false && (
+      {customChrome && (
         <WindowTitlebar
+          blocked={!!modal}
           onDrag={() => void windowAction(desktop.startDrag)}
           onMinimize={() => void windowAction(desktop.minimize)}
           onToggleMaximized={() => void windowAction(desktop.toggleMaximized)}
           onClose={() => void windowAction(desktop.close)}
+          search={searchBox}
+          listening={!!live.status?.policy.enabled}
+          listeningDisabled={
+            !live.status || live.mutating || (!live.status.available && !live.status.policy.enabled)
+          }
+          listeningLabel={
+            !live.status
+              ? '正在连接监听服务'
+              : !live.status.available
+                ? live.status.policy.enabled
+                  ? '监听不可用 · 点击暂停'
+                  : '监听服务不可用'
+                : live.mutating
+                  ? '正在保存…'
+                  : live.status.policy.enabled
+                    ? '监听中 · 点击暂停记录新复制'
+                    : '已暂停 · 点击开始记录新复制'
+          }
+          onToggleListening={() => void saveCapture(!live.status?.policy.enabled)}
         />
       )}
-      <div className="app-shell" inert={modal ? true : undefined} data-testid="app-ready">
+      <div
+        className="app-shell"
+        hidden={settingsWindow}
+        inert={modal || settingsWindow ? true : undefined}
+        data-testid="app-ready"
+      >
         <header className="topbar">
-          <div className={`search-box ${result.error ? 'has-error' : ''}`}>
-            <Icon name="search" size={20} />
-            <label className="sr-only" htmlFor="history-search">
-              搜索历史
-            </label>
-            <input
-              ref={search}
-              id="history-search"
-              value={query}
-              placeholder="搜索历史…"
-              onChange={(event) => setQuery(event.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={!!result.error}
-              aria-describedby={result.error ? 'search-error' : undefined}
-            />
-            {query && (
-              <button
-                className="icon-button"
-                aria-label="清空搜索"
-                onClick={() => {
-                  setQuery('');
-                  search.current?.focus();
-                }}
-              >
-                <Icon name="close" size={16} />
-              </button>
-            )}
-            <button
-              className={`regex-toggle ${regex ? 'active' : ''}`}
-              aria-label="正则表达式搜索"
-              aria-pressed={regex}
-              onClick={() => setRegex(!regex)}
-            >
-              .*
-            </button>
-          </div>
+          {!customChrome && searchBox}
           <div className="filter-bar">
             <label className="scope-control">
               <Icon
@@ -876,7 +931,7 @@ export function App() {
           )}
         </main>
         <footer className="statusbar">
-          {appearance.native ? (
+          {appearance.native && !customChrome ? (
             <button
               className="text-button capture-toggle"
               disabled={
@@ -896,9 +951,9 @@ export function App() {
                     ? '● 采集中 · 点击暂停'
                     : '开始采集'}
             </button>
-          ) : (
+          ) : !appearance.native ? (
             <span>示例数据 · 刷新后还原</span>
-          )}
+          ) : null}
           {appearance.native && live.total > 25 && (
             <div className="pagination">
               <button
@@ -1249,219 +1304,280 @@ export function App() {
           </div>
         </Modal>
       )}
-      {modal === 'settings' && (
+      {(modal === 'settings' || settingsWindow) && (
         <Modal title="设置" onClose={closeModal}>
-          {appearance.native && (
-            <section className="capture-settings">
-              <h3>采集</h3>
-              <label className="setting-row">
-                记录新复制
-                <input
-                  type="checkbox"
-                  checked={!!live.status?.policy.enabled}
-                  disabled={
-                    !live.status ||
-                    live.mutating ||
-                    (!live.status.available && !live.status.policy.enabled)
-                  }
-                  onChange={(event) => void saveCapture(event.target.checked)}
-                />
-              </label>
-              <p className="settings-feedback">
-                只记录开启后的新复制，不补采已有剪贴板。来源无法可靠获取时标为未知。
-              </p>
-              <label className="policy-field">
-                排除正则（文本与文件路径）
-                <input
-                  aria-label="排除正则"
-                  value={policyPattern}
-                  maxLength={4096}
-                  onChange={(event) => setPolicyPattern(event.target.value)}
-                />
-              </label>
-              <label className="policy-field">
-                最多保留条数
-                <input
-                  aria-label="最多保留条数"
-                  type="number"
-                  min={1}
-                  max={1000}
-                  value={policyMax}
-                  onChange={(event) => setPolicyMax(Number(event.target.value))}
-                />
-              </label>
+          {settingsWindow && (appearance.error || live.statusError || live.status?.error) && (
+            <p className="settings-feedback" role="alert">
+              {appearance.error ||
+                live.statusError ||
+                (live.status?.error ? safeError(live.status.error).message : '')}
               <button
-                className="secondary-button"
-                disabled={
-                  !live.status ||
-                  live.mutating ||
-                  !Number.isInteger(policyMax) ||
-                  policyMax < 1 ||
-                  policyMax > 1000
-                }
-                onClick={() => void saveCapture(!!live.status?.policy.enabled, true)}
-              >
-                保存采集规则
-              </button>
-              <p className="settings-feedback">
-                文本上限 4MiB；图片上限 8M 像素；文件引用最多 256 项。总历史载荷最多
-                128MiB，超限不截断。
-                {desktop.status?.shortcutAvailable
-                  ? ` ${desktop.status.preferences.shortcut} 唤起窗口。`
-                  : ''}
-              </p>
-            </section>
-          )}
-          {appearance.native && (
-            <section className="settings-section">
-              <h3>桌面</h3>
-              <label className="setting-row">
-                关闭窗口后常驻
-                <input
-                  type="checkbox"
-                  checked={!!desktop.status?.preferences.closeToTray}
-                  disabled={!desktop.status || desktop.busy}
-                  onChange={(event) => void saveDesktop({ closeToTray: event.target.checked })}
-                />
-              </label>
-              <label className="setting-row">
-                窗口置顶
-                <input
-                  type="checkbox"
-                  checked={!!desktop.status?.preferences.alwaysOnTop}
-                  disabled={!desktop.status || desktop.busy}
-                  onChange={(event) => void saveDesktop({ alwaysOnTop: event.target.checked })}
-                />
-              </label>
-              <label className="setting-row">
-                失焦自动隐藏
-                <input
-                  type="checkbox"
-                  checked={!!desktop.status?.preferences.autoHide}
-                  disabled={!desktop.status || desktop.busy}
-                  onChange={(event) => void saveDesktop({ autoHide: event.target.checked })}
-                />
-              </label>
-              <label className="setting-row">
-                登录时启动
-                <input
-                  type="checkbox"
-                  checked={!!desktop.status?.autostartEnabled}
-                  disabled={
-                    !desktop.status || desktop.status.autostartEnabled === null || desktop.busy
-                  }
-                  onChange={(event) => {
-                    void desktop
-                      .autostart(event.target.checked)
-                      .then(() => setToast({ message: '自启动设置已生效' }))
-                      .catch((error) => setToast({ message: safeError(error).message }));
-                  }}
-                />
-              </label>
-              <label className="policy-field">
-                唤起快捷键
-                <input
-                  aria-label="唤起快捷键"
-                  value={shortcut}
-                  maxLength={100}
-                  onChange={(event) => setShortcut(event.target.value)}
-                />
-              </label>
-              <button
-                className="secondary-button"
-                disabled={!desktop.status || desktop.busy}
-                onClick={() => void saveDesktop({ shortcut })}
-              >
-                保存快捷键
-              </button>
-              <p className="settings-feedback" role="status">
-                {desktop.error ||
-                  (desktop.status?.shortcutAvailable
-                    ? '唤起快捷键可用；Esc 可隐藏窗口。'
-                    : '唤起快捷键不可用。')}{' '}
-                置顶时不自动隐藏；菜单、设置和预览打开时保留窗口。Linux 无可靠恢复入口时关闭会退出。
-              </p>
-            </section>
-          )}
-          {appearance.native && (
-            <KeyboardSettings
-              snapshot={desktop.status?.keyboard}
-              busy={desktop.busy}
-              primary={modifier}
-              save={desktop.saveKeys}
-            />
-          )}
-          <section className="settings-section">
-            <h3>外观</h3>
-            {appearance.native && (
-              <>
-                <label className="setting-row">
-                  使用系统原生标题栏
-                  <input
-                    type="checkbox"
-                    aria-label="使用系统原生标题栏"
-                    checked={desktop.status?.preferences.nativeTitlebar ?? false}
-                    disabled={!desktop.status || desktop.busy}
-                    onChange={(event) => void saveDesktop({ nativeTitlebar: event.target.checked })}
-                  />
-                </label>
-                <p className="settings-feedback">
-                  关闭后使用自定义标题栏，可拖动、最小化、最大化和关闭窗口。立即生效，重启后保留。
-                </p>
-              </>
-            )}
-            <label className="setting-row" htmlFor="theme">
-              主题
-              <select
-                id="theme"
-                value={appearance.theme}
-                disabled={
-                  appearance.saving ||
-                  appearance.loading ||
-                  (appearance.native && !appearance.snapshot)
-                }
-                onChange={(event) => void chooseTheme(event.target.value as Theme)}
-              >
-                <option value="system">跟随系统</option>
-                <option value="light">浅色</option>
-                <option value="dark">深色</option>
-              </select>
-              <Icon name="chevron" size={12} />
-            </label>
-            <p className="settings-feedback" role="status">
-              {appearance.saving
-                ? '正在保存…'
-                : appearance.error ||
-                  (appearance.native ? '外观保存在此设备。' : '浏览器只记住外观偏好。')}
-            </p>
-          </section>
-          <details className="about-section">
-            <summary>关于与状态</summary>
-            <p>UClip · 0.1.0</p>
-            <p>
-              {appearance.native
-                ? '历史保存在此设备。文件仅保存引用；云同步、CLI 和完整管理尚未接入。自动回粘与跨平台验证状态单独报告。'
-                : '当前为浏览器界面预览，记录全部为内存示例。'}
-            </p>
-            {appearance.snapshot?.platform.capabilities.map((item) => (
-              <div className="capability-row" key={item.id}>
-                <span>{capabilityNames[item.id] ?? item.id}</span>
-                <span>{stateNames[item.state]}</span>
-              </div>
-            ))}
-            {appearance.native && (
-              <button
-                className="secondary-button"
-                disabled={appearance.loading || appearance.saving}
+                className="text-button"
                 onClick={() => {
                   void appearance.refresh();
                   void live.refresh();
                 }}
               >
-                刷新服务状态
+                刷新状态
               </button>
+            </p>
+          )}
+          <div className={settingsWindow ? 'settings-layout' : undefined}>
+            {settingsWindow && (
+              <nav className="settings-nav" aria-label="设置分类">
+                {(
+                  [
+                    ['capture', '采集', 'history'],
+                    ['desktop', '桌面', 'monitor'],
+                    ['keyboard', '快捷键', 'keyboard'],
+                    ['appearance', '外观', 'sun'],
+                    ['about', '关于与状态', 'info'],
+                  ] as const
+                ).map(([id, label, icon]) => (
+                  <button
+                    key={id}
+                    data-settings-page={id}
+                    aria-current={settingsPage === id ? 'page' : undefined}
+                    onClick={() => setSettingsPage(id)}
+                  >
+                    <Icon name={icon} size={17} />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </nav>
             )}
-          </details>
+            <div className={settingsWindow ? 'settings-content' : undefined}>
+              {appearance.native && (
+                <section
+                  className="capture-settings"
+                  hidden={settingsWindow && settingsPage !== 'capture'}
+                >
+                  <h3>采集</h3>
+                  <label className="setting-row">
+                    记录新复制
+                    <input
+                      type="checkbox"
+                      checked={!!live.status?.policy.enabled}
+                      disabled={
+                        !live.status ||
+                        live.mutating ||
+                        (!live.status.available && !live.status.policy.enabled)
+                      }
+                      onChange={(event) => void saveCapture(event.target.checked)}
+                    />
+                  </label>
+                  <p className="settings-feedback">
+                    只记录开启后的新复制，不补采已有剪贴板。来源无法可靠获取时标为未知。
+                  </p>
+                  <label className="policy-field">
+                    排除正则（文本与文件路径）
+                    <input
+                      aria-label="排除正则"
+                      value={policyPattern}
+                      maxLength={4096}
+                      onChange={(event) => setPolicyPattern(event.target.value)}
+                    />
+                  </label>
+                  <label className="policy-field">
+                    最多保留条数
+                    <input
+                      aria-label="最多保留条数"
+                      type="number"
+                      min={1}
+                      max={1000}
+                      value={policyMax}
+                      onChange={(event) => setPolicyMax(Number(event.target.value))}
+                    />
+                  </label>
+                  <button
+                    className="secondary-button"
+                    disabled={
+                      !live.status ||
+                      live.mutating ||
+                      !Number.isInteger(policyMax) ||
+                      policyMax < 1 ||
+                      policyMax > 1000
+                    }
+                    onClick={() => void saveCapture(!!live.status?.policy.enabled, true)}
+                  >
+                    保存采集规则
+                  </button>
+                  <p className="settings-feedback">
+                    文本上限 4MiB；图片上限 8M 像素；文件引用最多 256 项。总历史载荷最多
+                    128MiB，超限不截断。
+                    {desktop.status?.shortcutAvailable
+                      ? ` ${desktop.status.preferences.shortcut} 唤起窗口。`
+                      : ''}
+                  </p>
+                </section>
+              )}
+              {appearance.native && (
+                <section
+                  className="settings-section"
+                  hidden={settingsWindow && settingsPage !== 'desktop'}
+                >
+                  <h3>桌面</h3>
+                  <label className="setting-row">
+                    关闭窗口后常驻
+                    <input
+                      type="checkbox"
+                      checked={!!desktop.status?.preferences.closeToTray}
+                      disabled={!desktop.status || desktop.busy}
+                      onChange={(event) => void saveDesktop({ closeToTray: event.target.checked })}
+                    />
+                  </label>
+                  <label className="setting-row">
+                    窗口置顶
+                    <input
+                      type="checkbox"
+                      checked={!!desktop.status?.preferences.alwaysOnTop}
+                      disabled={!desktop.status || desktop.busy}
+                      onChange={(event) => void saveDesktop({ alwaysOnTop: event.target.checked })}
+                    />
+                  </label>
+                  <label className="setting-row">
+                    失焦自动隐藏
+                    <input
+                      type="checkbox"
+                      checked={!!desktop.status?.preferences.autoHide}
+                      disabled={!desktop.status || desktop.busy}
+                      onChange={(event) => void saveDesktop({ autoHide: event.target.checked })}
+                    />
+                  </label>
+                  <label className="setting-row">
+                    登录时启动
+                    <input
+                      type="checkbox"
+                      checked={!!desktop.status?.autostartEnabled}
+                      disabled={
+                        !desktop.status || desktop.status.autostartEnabled === null || desktop.busy
+                      }
+                      onChange={(event) => {
+                        void desktop
+                          .autostart(event.target.checked)
+                          .then(() => setToast({ message: '自启动设置已生效' }))
+                          .catch((error) => setToast({ message: safeError(error).message }));
+                      }}
+                    />
+                  </label>
+                  <label className="policy-field">
+                    唤起快捷键
+                    <input
+                      aria-label="唤起快捷键"
+                      value={shortcut}
+                      maxLength={100}
+                      onChange={(event) => setShortcut(event.target.value)}
+                    />
+                  </label>
+                  <button
+                    className="secondary-button"
+                    disabled={!desktop.status || desktop.busy}
+                    onClick={() => void saveDesktop({ shortcut })}
+                  >
+                    保存快捷键
+                  </button>
+                  <p className="settings-feedback" role="status">
+                    {desktop.error ||
+                      (desktop.status?.shortcutAvailable
+                        ? '唤起快捷键可用；Esc 可隐藏窗口。'
+                        : '唤起快捷键不可用。')}{' '}
+                    置顶时不自动隐藏；菜单、设置和预览打开时保留窗口。Linux
+                    无可靠恢复入口时关闭会退出。
+                  </p>
+                </section>
+              )}
+              {appearance.native && (
+                <div hidden={settingsWindow && settingsPage !== 'keyboard'}>
+                  <KeyboardSettings
+                    expanded={settingsWindow}
+                    snapshot={desktop.status?.keyboard}
+                    busy={desktop.busy}
+                    primary={modifier}
+                    save={desktop.saveKeys}
+                  />
+                </div>
+              )}
+              <section
+                className="settings-section"
+                hidden={settingsWindow && settingsPage !== 'appearance'}
+              >
+                <h3>外观</h3>
+                {appearance.native && (
+                  <>
+                    <label className="setting-row">
+                      使用系统原生标题栏
+                      <input
+                        type="checkbox"
+                        aria-label="使用系统原生标题栏"
+                        checked={desktop.status?.preferences.nativeTitlebar ?? false}
+                        disabled={!desktop.status || desktop.busy}
+                        onChange={(event) =>
+                          void saveDesktop({ nativeTitlebar: event.target.checked })
+                        }
+                      />
+                    </label>
+                    <p className="settings-feedback">
+                      关闭后使用自定义标题栏，可拖动、最小化、最大化和关闭窗口。立即生效，重启后保留。
+                    </p>
+                  </>
+                )}
+                <label className="setting-row" htmlFor="theme">
+                  主题
+                  <select
+                    id="theme"
+                    value={appearance.theme}
+                    disabled={
+                      appearance.saving ||
+                      appearance.loading ||
+                      (appearance.native && !appearance.snapshot)
+                    }
+                    onChange={(event) => void chooseTheme(event.target.value as Theme)}
+                  >
+                    <option value="system">跟随系统</option>
+                    <option value="light">浅色</option>
+                    <option value="dark">深色</option>
+                  </select>
+                </label>
+                <p className="settings-feedback" role="status">
+                  {appearance.saving
+                    ? '正在保存…'
+                    : appearance.error ||
+                      (appearance.native ? '外观保存在此设备。' : '浏览器只记住外观偏好。')}
+                </p>
+              </section>
+              <details
+                className="about-section"
+                open={settingsWindow || undefined}
+                hidden={settingsWindow && settingsPage !== 'about'}
+              >
+                <summary>关于与状态</summary>
+                <p>UClip · 0.1.0</p>
+                <p>
+                  {appearance.native
+                    ? '历史保存在此设备。文件仅保存引用；云同步、CLI 和完整管理尚未接入。自动回粘与跨平台验证状态单独报告。'
+                    : '当前为浏览器界面预览，记录全部为内存示例。'}
+                </p>
+                {appearance.snapshot?.platform.capabilities.map((item) => (
+                  <div className="capability-row" key={item.id}>
+                    <span>{capabilityNames[item.id] ?? item.id}</span>
+                    <span>{stateNames[item.state]}</span>
+                  </div>
+                ))}
+                {appearance.native && (
+                  <button
+                    className="secondary-button"
+                    disabled={appearance.loading || appearance.saving}
+                    onClick={() => {
+                      void appearance.refresh();
+                      void live.refresh();
+                    }}
+                  >
+                    刷新服务状态
+                  </button>
+                )}
+              </details>
+            </div>
+          </div>
         </Modal>
       )}
       {modal === 'new' && (

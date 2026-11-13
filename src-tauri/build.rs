@@ -27,6 +27,7 @@ fn main() {
             "toggle_main_window_maximized",
             "start_main_window_drag",
             "close_main_window",
+            "open_settings_window",
             "quit_app",
         ]),
     ))

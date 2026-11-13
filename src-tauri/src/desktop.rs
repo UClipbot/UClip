@@ -300,6 +300,9 @@ pub fn window_event(window: &tauri::Window, event: &WindowEvent) {
                     .is_some_and(|p| p.auto_hide && !p.always_on_top)
                     && state.recoverable()
                     && !state.protected.load(Ordering::SeqCst)
+                    && !app
+                        .get_webview_window("settings")
+                        .is_some_and(|w| w.is_visible().unwrap_or(true))
                     && state.geometry_epoch.load(Ordering::SeqCst) == epoch;
                 if hide {
                     if let Some(w) = app.get_webview_window("main") {

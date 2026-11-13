@@ -99,7 +99,7 @@ class ClipboardChecks:
     def run(self):
         assert self.query()['total'] == 0
         self.set('text', text='既有内容不补采')
-        self.click('.capture-toggle')
+        self.click('.capture-toggle, .titlebar-listening')
         wait(lambda: self.action('clipboard_status')['policy']['enabled'], 'capture enabled')
         time.sleep(0.2)
         assert self.query()['total'] == 0

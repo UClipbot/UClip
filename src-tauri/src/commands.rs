@@ -1,4 +1,4 @@
-use tauri::State;
+use tauri::{Emitter, State};
 use uclip_core::{
     AppError, BootstrapSnapshot, SettingsSnapshot, UpdateSettings, CONTRACT_VERSION, SCHEMA_VERSION,
 };
@@ -26,11 +26,14 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<SettingsSnapshot
 
 #[tauri::command]
 pub async fn update_settings(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     request: UpdateSettings,
 ) -> Result<SettingsSnapshot, AppError> {
     let core = state.core.as_ref().map_err(Clone::clone)?;
-    core.update_settings(request).await
+    let saved = core.update_settings(request).await?;
+    let _ = app.emit("settings-changed", ());
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -299,6 +302,7 @@ pub async fn update_desktop_preferences(
                     eprintln!("desktop_shortcut_cleanup_failed");
                 }
             }
+            let _ = app.emit("settings-changed", ());
             Ok(saved)
         }
         Err(error) => {
@@ -387,6 +391,40 @@ pub async fn close_main_window(window: tauri::WebviewWindow) -> Result<(), AppEr
         .close()
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
 }
+
+#[tauri::command]
+pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), AppError> {
+    use tauri::Manager;
+    // Serialize this window's construction, including simultaneous menu/shortcut requests.
+    static OPENING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _opening = OPENING.lock().await;
+    if let Some(window) = app.get_webview_window("settings") {
+        crate::desktop::ensure_visible(&window)?;
+        window
+            .show()
+            .and_then(|_| window.unminimize())
+            .and_then(|_| window.set_focus())
+            .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
+        return Ok(());
+    }
+    let parent = app
+        .get_webview_window("main")
+        .ok_or_else(|| AppError::new(uclip_core::ErrorCode::Unavailable))?;
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "settings",
+        tauri::WebviewUrl::App("index.html?window=settings".into()),
+    )
+    .title("UClip · 设置")
+    .inner_size(720.0, 640.0)
+    .min_inner_size(560.0, 460.0)
+    .parent(&parent)
+    .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+    .on_navigation(crate::local_navigation)
+    .build()
+    .map(|_| ())
+    .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
+}
 #[tauri::command]
 pub async fn quit_app(app: tauri::AppHandle) {
     crate::shutdown(app);
@@ -460,13 +498,16 @@ pub async fn transfer_clip(
 
 #[tauri::command]
 pub async fn update_key_bindings(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     request: uclip_core::UpdateKeyBindings,
 ) -> Result<uclip_core::KeyboardSnapshot, AppError> {
-    state
+    let saved = state
         .core
         .as_ref()
         .map_err(Clone::clone)?
         .update_key_bindings(request)
-        .await
+        .await?;
+    let _ = app.emit("settings-changed", ());
+    Ok(saved)
 }

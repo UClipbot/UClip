@@ -44,6 +44,7 @@ def main():
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
     parser.add_argument('--manual-only',action='store_true',help='Isolated real manual text creation.')
     parser.add_argument('--titlebar-only',action='store_true',help='Isolated native/custom titlebar and window controls.')
+    parser.add_argument('--settings-only',action='store_true',help='Independent settings window, IPC grants and integrated main chrome.')
     parser.add_argument('--desktop-defaults-only',action='store_true',help='Fresh desktop defaults and one-time OS autostart, with optional failure fixture.')
     parser.add_argument('--pinned-only',action='store_true',help='Isolated pin, pinned page and explicit deduplication checks.')
     parser.add_argument('--collections-only',action='store_true',help='Isolated real collection forms, transfers, query scopes and persistence.')
@@ -113,20 +114,64 @@ def main():
                 def execute(script, arguments=None):
                     return request('POST', f'/session/{session}/execute/sync', {'script': script, 'args': arguments or []})
 
-                def invoke(command, arguments=None):
+                def switch_window(label):
+                    for handle in request('GET', f'/session/{session}/window/handles'):
+                        request('POST', f'/session/{session}/window', {'handle': handle})
+                        if execute('return window.__TAURI_INTERNALS__.metadata.currentWindow.label') == label:
+                            return handle
+                    raise RuntimeError('Missing native window: ' + label)
+
+                def on_main(action, *arguments):
+                    previous = request('GET', f'/session/{session}/window')
+                    if execute('return window.__TAURI_INTERNALS__.metadata.currentWindow.label') == 'main':
+                        return action(*arguments)
+                    switch_window('main')
+                    try:
+                        return action(*arguments)
+                    finally:
+                        if previous in request('GET', f'/session/{session}/window/handles'):
+                            request('POST', f'/session/{session}/window', {'handle': previous})
+
+                def invoke_current(command, arguments=None):
                     return request('POST', f'/session/{session}/execute/async', {
                         'script': 'const done=arguments[arguments.length-1]; window.__TAURI_INTERNALS__.invoke(arguments[0], arguments[1]).then(value=>done({ok:true,value}),error=>done({ok:false,error}));',
                         'args': [command, arguments or {}],
                     })
+
+                def invoke(command, arguments=None):
+                    # Existing business fixtures run against the main window's ACL.
+                    return on_main(invoke_current, command, arguments)
+
+                def execute_main(script, arguments=None):
+                    return on_main(execute, script, arguments)
 
                 def element(selector):
                     value = request('POST', f'/session/{session}/element', {'using': 'css selector', 'value': selector})
                     return value['element-6066-11e4-a52e-4f735466cecf']
 
                 def click(selector):
+                    if execute('return document.body.classList.contains("settings-window")'):
+                        page = None
+                        if selector.startswith('#theme') or '使用系统原生标题栏' in selector:
+                            page = 'appearance'
+                        elif '修改' in selector or 'save-window-keys' in selector or '.about-section:has(' in selector:
+                            page = 'keyboard'
+                        if page:
+                            request('POST', f'/session/{session}/element/{element("[data-settings-page=" + page + "]")}/click', {})
+                        if selector.startswith('#theme'):
+                            wait_for(lambda: execute('return !document.querySelector("#theme").disabled'), 'theme form ready')
                     if selector == '[data-testid="open-settings"]':
+                        switch_window('main')
                         click('[aria-label="更多选项"]')
+                    closing = request('GET', f'/session/{session}/window') if selector == '[aria-label="关闭面板"]' and execute('return document.body.classList.contains("settings-window")') else None
                     request('POST', f'/session/{session}/element/{element(selector)}/click', {})
+                    if selector == '[data-testid="open-settings"]':
+                        wait_for(lambda: len(request('GET', f'/session/{session}/window/handles')) == 2, 'settings window created')
+                        switch_window('settings')
+                        wait_for(lambda: execute('return !!document.querySelector("#theme") && !document.querySelector("#theme").disabled'), 'settings form ready')
+                    if closing:
+                        wait_for(lambda: closing not in request('GET', f'/session/{session}/window/handles'), 'settings window closed')
+                        switch_window('main')
 
                 def enter(selector, text):
                     key = element(selector)
@@ -143,6 +188,10 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.settings_only:
+                    from settings_native_check import run
+                    run(invoke, invoke_current, execute, execute_main, click, switch_window, wait_for, capture)
+                    return
                 if args.desktop_defaults_only:
                     desktop = invoke('desktop_status')['value']
                     preferences = desktop['preferences']
@@ -154,6 +203,7 @@ def main():
                         assert directory_path.read_text() == 'blocked fixture'
                         directory_path.unlink()
                         click('[data-testid="open-settings"]')
+                        click('[data-settings-page="desktop"]')
                         wait_for(lambda: execute('return document.querySelector(".settings-feedback[role=status]")?.textContent.includes("当前平台或权限不支持此操作")'), 'default OS registration failure visible')
                         click('[aria-label="关闭面板"]')
                         assert invoke('set_autostart', {'enabled': False}) == {'ok': True, 'value': False}
@@ -179,7 +229,7 @@ def main():
                     return
                 if args.titlebar_only:
                     from titlebar_native_check import run, verify_restart
-                    run(invoke,execute,click,env,directory,capture)
+                    run(invoke,execute,click,env,directory,capture,execute_main,lambda name:on_main(capture,name))
                     for abrupt in [False,True]:
                         if abrupt:os.kill(owned_processes()[0][0],signal.SIGKILL)
                         else:click('[aria-label="关闭窗口"]')
@@ -264,7 +314,7 @@ def main():
                 if args.startup_performance:
                     times=[]
                     for iteration in range(10):
-                        wait_for(lambda:execute('return document.hasFocus() && !!document.querySelector(".capture-toggle:not(:disabled)") && document.querySelector(".history-scroll")?.getAttribute("aria-busy")==="false"'),'interactive native startup')
+                        wait_for(lambda:execute('return document.hasFocus() && !!document.querySelector(".capture-toggle:not(:disabled), .titlebar-listening:not(:disabled)") && document.querySelector(".history-scroll")?.getAttribute("aria-busy")==="false"'),'interactive native startup')
                         times.append((time.monotonic()-launch_started)*1000)
                         invoke('quit_app')
                         wait_for(lambda:not owned_processes(),'benchmark process exit')
@@ -292,9 +342,7 @@ def main():
                 print('PASS: native WebKit startup, bootstrap ACL, fresh isolated settings', flush=True)
 
                 # Real form interaction, not a mocked invoke or a direct database write.
-                option = request('POST', f'/session/{session}/element', {'using': 'css selector', 'value': '#theme option[value="dark"]'})
-                element_id = option['element-6066-11e4-a52e-4f735466cecf']
-                request('POST', f'/session/{session}/element/{element_id}/click', {})
+                click('#theme option[value="dark"]')
                 wait_for(lambda: invoke('get_settings').get('value', {}).get('theme') == 'dark', 'theme commit from UI')
                 wait_for(lambda: execute('return document.documentElement.dataset.theme === "dark"'), 'saved theme applied')
                 saved = invoke('get_settings')['value']
@@ -403,7 +451,7 @@ def main():
                 assert invoke('get_settings')['value'] == saved
                 assert invoke('desktop_status')['value']['keyboard']==saved_keyboard
                 if clipboard_checks:
-                    assert execute('return innerWidth===700 && innerHeight===600'), execute('return {width:innerWidth,height:innerHeight}')
+                    assert execute_main('return innerWidth===700 && innerHeight===600'), execute_main('return {width:innerWidth,height:innerHeight}')
                     print('PASS P2: restored native window size after process restart',flush=True)
                 assert execute('return document.documentElement.dataset.theme') == 'dark'
                 click('[aria-label="关闭面板"]')

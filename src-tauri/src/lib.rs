@@ -79,6 +79,7 @@ pub fn run() {
             commands::toggle_main_window_maximized,
             commands::start_main_window_drag,
             commands::close_main_window,
+            commands::open_settings_window,
             commands::quit_app,
         ])
         .setup(|app| {

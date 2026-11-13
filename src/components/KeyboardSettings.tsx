@@ -8,7 +8,9 @@ export function KeyboardSettings({
   busy,
   primary,
   save,
+  expanded = false,
 }: {
+  expanded?: boolean;
   snapshot?: KeyboardSnapshot;
   busy: boolean;
   primary: string;
@@ -22,7 +24,7 @@ export function KeyboardSettings({
   }, [snapshot?.revision]);
   const error = bindingError(draft);
   return (
-    <details className="about-section">
+    <details className="about-section" open={expanded || undefined}>
       <summary>窗口内快捷键</summary>
       <p className="settings-feedback">
         点击组合后按下新按键。输入法、菜单与输入框的编辑行为优先；Esc 始终保留退出路径。
