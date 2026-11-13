@@ -25,6 +25,9 @@
   },
   "bundle": {
     "active": false,
+    "category": "Utility",
+    "shortDescription": "Local-first clipboard manager",
+    "longDescription": "A local-first clipboard manager for text, images and file references. History is stored locally in SQLite.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -55,3 +55,11 @@ npm run tauri:dev
 ```
 
 Use `npm run dev` to try the in-memory sample interface in a browser.
+
+## Build installers
+
+```bash
+npm run package
+```
+
+Build on the target operating system: Linux produces deb and AppImage packages, Windows produces an NSIS installer, and macOS produces app and dmg bundles.
