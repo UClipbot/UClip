@@ -4,6 +4,9 @@ use uclip_core::*;
 fn main() {
     let config = ts_rs::Config::default();
     let declarations = [
+        DesktopPreferences::decl(&config),
+        UpdateDesktopPreferences::decl(&config),
+        DesktopStatus::decl(&config),
         ChangeClipDeletion::decl(&config),
         ClipDeletionSnapshot::decl(&config),
         ClipKind::decl(&config),

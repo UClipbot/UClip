@@ -36,7 +36,7 @@ fn migrates_settings_v1_atomically_and_rejects_partial_v2() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
             .unwrap(),
-        2
+        uclip_core::SCHEMA_VERSION
     );
     drop(conn);
     let bad = dir.path().join("bad.sqlite3");
@@ -457,4 +457,146 @@ fn recapture_does_not_resurrect_deleted_identity_and_full_undo_does_not_evict() 
     assert_eq!(s.history_revision().unwrap(), revision);
     assert!(s.read_clip(&b).is_ok());
     assert_eq!(s.read_clip(&a).unwrap_err().code, ErrorCode::NotFound);
+}
+
+#[test]
+fn changes_include_capture_usage_delete_restore_and_capacity_purge_atomically() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("changes.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    enabled(&mut storage, 1);
+    let conn = Connection::open(&path).unwrap();
+    let change = |id: &str| -> (i64, String, i64) {
+        conn.query_row(
+            "SELECT revision,operation,ordinal FROM clip_changes WHERE id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    };
+    let a = storage
+        .capture(ClipPayload::Text("A".into()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        change(&a),
+        (
+            0,
+            "upsert".into(),
+            storage.history_revision().unwrap().parse().unwrap()
+        )
+    );
+    storage.mark_used(&a).unwrap();
+    assert_eq!(change(&a).0, 1);
+    let removed = deletion(&mut storage, &a, "1", true).unwrap();
+    assert_eq!(change(&a).1, "delete");
+    deletion(&mut storage, &a, &removed.revision, false).unwrap();
+    assert_eq!(change(&a).1, "upsert");
+    let b = storage
+        .capture(ClipPayload::Text("B".into()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(change(&a).1, "purge");
+    assert_eq!(change(&a).2, change(&b).2);
+    assert_eq!(
+        change(&a).2,
+        storage.history_revision().unwrap().parse::<i64>().unwrap()
+    );
+    assert_eq!(storage.read_clip(&a).unwrap_err().code, ErrorCode::NotFound);
+    let before = storage.history_revision().unwrap();
+    conn.execute_batch("CREATE TRIGGER outbox_failure BEFORE UPDATE ON clip_changes BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+    assert!(storage.mark_used(&b).is_err());
+    assert_eq!(storage.history_revision().unwrap(), before);
+    assert_eq!(change(&b).0, 0);
+    assert_eq!(
+        storage.history(query("")).unwrap().items[0].last_used_at,
+        None
+    );
+}
+
+#[test]
+fn v2_migration_seeds_current_identities_and_rolls_back_on_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v2.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    enabled(&mut storage, 500);
+    let id = storage
+        .capture(ClipPayload::Text("迁移保留".into()))
+        .unwrap()
+        .unwrap();
+    drop(storage);
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TRIGGER clips_change_insert; DROP TRIGGER clips_change_update; DROP TRIGGER clips_change_delete; DROP TABLE clip_changes; DROP TABLE desktop_preferences; DROP TABLE window_placement; PRAGMA user_version=2; CREATE TABLE desktop_preferences(fixture TEXT);").unwrap();
+    drop(conn);
+    assert!(Storage::open(&path).is_err());
+    let conn = Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name='clip_changes'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    conn.execute_batch("DROP TABLE desktop_preferences;")
+        .unwrap();
+    drop(conn);
+    let storage = Storage::open(&path).unwrap();
+    assert_eq!(
+        storage.read_clip(&id).unwrap(),
+        ClipPayload::Text("迁移保留".into())
+    );
+    let conn = Connection::open(&path).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT operation FROM clip_changes WHERE id=?1",
+            [id],
+            |r| r.get::<_, String>(0)
+        )
+        .unwrap(),
+        "upsert"
+    );
+}
+
+#[test]
+fn highlight_ranges_use_utf16_and_regex_matches_beyond_the_preview_still_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Storage::open(&dir.path().join("highlight.sqlite3")).unwrap();
+    enabled(&mut s, 500);
+    s.capture(ClipPayload::Text("🦀 中文\nSECOND line".into()))
+        .unwrap();
+    let page = s.history(query("中文")).unwrap();
+    assert_eq!(page.items[0].match_ranges, vec![(3, 5)]);
+    s.capture(ClipPayload::Text(format!("{}tail", "x".repeat(400))))
+        .unwrap();
+    let page = s.history(query("tail")).unwrap();
+    assert_eq!(page.total, 1);
+    assert!(page.items[0].match_ranges.is_empty());
+}
+
+#[test]
+fn missing_change_tracking_fails_startup_instead_of_silently_accepting_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing-trigger.sqlite3");
+    drop(Storage::open(&path).unwrap());
+    let c = Connection::open(&path).unwrap();
+    c.execute_batch("DROP TRIGGER clips_change_delete").unwrap();
+    assert!(matches!(
+        Storage::open(&path),
+        Err(AppError {
+            code: ErrorCode::Storage,
+            ..
+        })
+    ));
+    assert_eq!(
+        c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        uclip_core::SCHEMA_VERSION
+    );
 }

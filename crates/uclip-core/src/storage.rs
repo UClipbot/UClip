@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 const APPLICATION_ID: i64 = 0x434c4e58; // CLNX: never open the previous application's database.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -60,6 +60,28 @@ impl Storage {
             CREATE INDEX clips_fingerprint ON clips(fingerprint);")?;
             tx.pragma_update(None, "user_version", 2)?;
         }
+        if version < 3 {
+            // Coalesced outbox: bounded by current identities plus unacknowledged tombstones.
+            // It has no clipboard body and is not a synchronization protocol.
+            tx.execute_batch("CREATE TABLE clip_changes(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,operation TEXT NOT NULL CHECK(operation IN ('upsert','delete','purge')),ordinal INTEGER NOT NULL) STRICT;
+            INSERT INTO clip_changes SELECT id,revision,CASE WHEN deleted=0 THEN 'upsert' ELSE 'delete' END,sequence FROM clips;
+            CREATE TRIGGER clips_change_insert AFTER INSERT ON clips BEGIN
+                INSERT INTO clip_changes VALUES(NEW.id,NEW.revision,CASE WHEN NEW.deleted=0 THEN 'upsert' ELSE 'delete' END,(SELECT revision+1 FROM history_meta WHERE singleton=1))
+                ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,operation=excluded.operation,ordinal=excluded.ordinal;
+            END;
+            CREATE TRIGGER clips_change_update AFTER UPDATE ON clips BEGIN
+                INSERT INTO clip_changes VALUES(NEW.id,NEW.revision,CASE WHEN NEW.deleted=0 THEN 'upsert' ELSE 'delete' END,(SELECT revision+1 FROM history_meta WHERE singleton=1))
+                ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,operation=excluded.operation,ordinal=excluded.ordinal;
+            END;
+            CREATE TRIGGER clips_change_delete AFTER DELETE ON clips BEGIN
+                INSERT INTO clip_changes VALUES(OLD.id,OLD.revision+1,'purge',(SELECT revision+1 FROM history_meta WHERE singleton=1))
+                ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,operation=excluded.operation,ordinal=excluded.ordinal;
+            END;
+            CREATE TABLE desktop_preferences(singleton INTEGER PRIMARY KEY CHECK(singleton=1),close_to_tray INTEGER NOT NULL CHECK(close_to_tray IN (0,1)),always_on_top INTEGER NOT NULL CHECK(always_on_top IN (0,1)),auto_hide INTEGER NOT NULL CHECK(auto_hide IN (0,1)),shortcut TEXT NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;
+            INSERT INTO desktop_preferences VALUES(1,0,0,0,'CommandOrControl+Shift+V',0);
+            CREATE TABLE window_placement(singleton INTEGER PRIMARY KEY CHECK(singleton=1),x INTEGER NOT NULL,y INTEGER NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,maximized INTEGER NOT NULL CHECK(maximized IN (0,1))) STRICT;")?;
+            tx.pragma_update(None, "user_version", 3)?;
+        }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -67,6 +89,14 @@ impl Storage {
         let storage = Self { connection };
         storage.capture_policy()?;
         storage.history_revision()?;
+        storage.desktop_preferences()?;
+        storage
+            .connection
+            .prepare("SELECT id,revision,operation,ordinal FROM clip_changes LIMIT 0")?;
+        let triggers: u32 = storage.connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN ('clips_change_insert','clips_change_update','clips_change_delete')", [], |r|r.get(0))?;
+        if triggers != 3 {
+            return Err(AppError::new(ErrorCode::Storage));
+        }
         storage.settings()?; // Fail startup on an invalid persisted setting.
         Ok(storage)
     }

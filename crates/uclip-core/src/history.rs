@@ -210,18 +210,22 @@ impl Storage {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Fingerprints are not identities. Only the unclassified, unpinned capture scope deduplicates.
         let existing: Option<String> = tx.query_row("SELECT id FROM clips WHERE fingerprint=?1 AND origin='capture' AND pinned=0 AND deleted=0 AND collection IS NULL LIMIT 1", [&fingerprint], |r| r.get(0)).optional()?;
-        tx.execute(
-            "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
-            [],
-        )?;
         let sequence: i64 = tx.query_row(
-            "SELECT revision FROM history_meta WHERE singleton=1",
+            "SELECT revision+1 FROM history_meta WHERE singleton=1",
             [],
             |r| r.get(0),
         )?;
         let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,captured_at,sequence,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,sequence=excluded.sequence,revision=clips.revision+1", params![id,kind_name(kind),text,data,width,height,count,fingerprint,now(),sequence])?;
         prune(&tx, policy.max_items, Some(&id))?;
+        let pending: u32 = tx.query_row("SELECT count(*) FROM clip_changes", [], |r| r.get(0))?;
+        if pending > 100_000 {
+            return Err(AppError::new(ErrorCode::LimitExceeded));
+        }
+        tx.execute(
+            "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+            [],
+        )?;
         tx.commit()?;
         Ok(Some(id))
     }
@@ -263,7 +267,7 @@ impl Storage {
                 continue;
             }
             if total >= query.offset && items.len() < PAGE_SIZE {
-                let preview = if kind == ClipKind::Files {
+                let preview: String = if kind == ClipKind::Files {
                     serde_json::from_str::<Vec<String>>(&text)
                         .map_err(|_| AppError::new(ErrorCode::Storage))?
                         .iter()
@@ -284,6 +288,21 @@ impl Storage {
                 items.push(HistoryItem {
                     id: row.get(0)?,
                     kind,
+                    match_ranges: if query.query.is_empty() {
+                        vec![]
+                    } else {
+                        matcher
+                            .find_iter(&preview)
+                            .filter(|m| !m.is_empty())
+                            .take(30)
+                            .map(|m| {
+                                (
+                                    preview[..m.start()].encode_utf16().count() as u32,
+                                    preview[..m.end()].encode_utf16().count() as u32,
+                                )
+                            })
+                            .collect()
+                    },
                     preview,
                     captured_at: row.get::<_, i64>(3)?.to_string(),
                     last_used_at: row.get::<_, Option<i64>>(4)?.map(|v| v.to_string()),
@@ -439,5 +458,64 @@ fn prune(tx: &rusqlite::Transaction<'_>, max: u32, keep: Option<&str>) -> Result
         if changed == 0 {
             return Err(AppError::new(ErrorCode::LimitExceeded));
         }
+    }
+}
+
+#[cfg(test)]
+mod disk_tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_full_rolls_back_content_revision_and_change_record_then_recovers() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut storage = Storage::open(&directory.path().join("full.sqlite3")).unwrap();
+        storage
+            .update_capture_policy(UpdateCapturePolicy {
+                enabled: true,
+                exclude_pattern: String::new(),
+                max_items: 500,
+                expected_revision: "0".into(),
+            })
+            .unwrap();
+        let before = storage.history_revision().unwrap();
+        let pages: i64 = storage
+            .connection
+            .pragma_query_value(None, "page_count", |r| r.get(0))
+            .unwrap();
+        storage
+            .connection
+            .query_row(&format!("PRAGMA max_page_count={pages}"), [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap();
+        let payload = ClipPayload::Text("x".repeat(1024 * 1024));
+        assert_eq!(
+            storage.capture(payload.clone()).unwrap_err().code,
+            ErrorCode::Storage
+        );
+        assert_eq!(storage.history_revision().unwrap(), before);
+        assert_eq!(
+            storage
+                .connection
+                .query_row("SELECT count(*) FROM clips", [], |r| r.get::<_, u32>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            storage
+                .connection
+                .query_row("SELECT count(*) FROM clip_changes", [], |r| r
+                    .get::<_, u32>(0))
+                .unwrap(),
+            0
+        );
+        storage
+            .connection
+            .query_row("PRAGMA max_page_count=1073741823", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap();
+        let id = storage.capture(payload.clone()).unwrap().unwrap();
+        assert_eq!(storage.read_clip(&id).unwrap(), payload);
     }
 }

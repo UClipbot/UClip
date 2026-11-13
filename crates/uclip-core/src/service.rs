@@ -154,6 +154,26 @@ impl CoreService {
     pub async fn mark_used(&self, id: String) -> Result<(), AppError> {
         self.operation(move |s| s.mark_used(&id)).await
     }
+    pub async fn desktop_preferences(&self) -> Result<crate::DesktopPreferences, AppError> {
+        self.operation(|s| s.desktop_preferences()).await
+    }
+    pub async fn update_desktop_preferences(
+        &self,
+        request: crate::UpdateDesktopPreferences,
+    ) -> Result<crate::DesktopPreferences, AppError> {
+        self.operation(move |s| s.update_desktop_preferences(request))
+            .await
+    }
+    pub async fn window_placement(&self) -> Result<Option<crate::WindowPlacement>, AppError> {
+        self.operation(|s| s.window_placement()).await
+    }
+    pub async fn save_window_placement(
+        &self,
+        placement: crate::WindowPlacement,
+    ) -> Result<(), AppError> {
+        self.operation(move |s| s.save_window_placement(placement))
+            .await
+    }
 
     pub async fn shutdown(&self) -> Result<(), AppError> {
         let (reply, response) = oneshot::channel();

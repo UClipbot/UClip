@@ -6,6 +6,7 @@ export type View = 'all' | 'pinned' | 'trash' | Collection;
 export interface Clip {
   native?: boolean;
   revision?: string;
+  matchRanges?: [number, number][];
   id: string;
   type: ClipType;
   title: string;

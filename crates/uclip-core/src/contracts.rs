@@ -43,6 +43,7 @@ pub enum ErrorCode {
     MissingFile,
     Restricted,
     TargetLost,
+    ShortcutConflict,
 }
 
 /// Safe across IPC. Never expose SQLite errors, paths, or user content.
@@ -70,6 +71,7 @@ impl AppError {
             ErrorCode::MissingFile => "部分文件或文件夹已失效，未写入剪贴板。",
             ErrorCode::Restricted => "当前平台或权限不支持此操作。",
             ErrorCode::TargetLost => "原应用目标已变化，未自动粘贴。",
+            ErrorCode::ShortcutConflict => "快捷键不可用或已被占用，原快捷键保持不变。",
             ErrorCode::Unavailable => "本地服务不可用，请重启应用。",
         };
         Self {
@@ -181,6 +183,8 @@ pub struct HistoryItem {
     pub height: Option<u32>,
     pub file_count: u32,
     pub revision: String,
+    /// UTF-16 offsets into preview. Matching stays in the bounded Rust regex engine.
+    pub match_ranges: Vec<(u32, u32)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -234,4 +238,34 @@ pub struct ClipDeletionSnapshot {
     pub id: String,
     pub revision: String,
     pub deleted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopPreferences {
+    pub close_to_tray: bool,
+    pub always_on_top: bool,
+    pub auto_hide: bool,
+    pub shortcut: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateDesktopPreferences {
+    pub close_to_tray: bool,
+    pub always_on_top: bool,
+    pub auto_hide: bool,
+    pub shortcut: String,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopStatus {
+    pub preferences: DesktopPreferences,
+    pub tray_available: bool,
+    pub shortcut_available: bool,
+    pub autostart_enabled: Option<bool>,
+    pub error: Option<AppError>,
 }

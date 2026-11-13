@@ -22,6 +22,7 @@ const codes: ReadonlySet<ErrorCode> = new Set([
   'missing_file',
   'restricted',
   'target_lost',
+  'shortcut_conflict',
 ]);
 
 export function safeError(error: unknown): AppError {
@@ -46,6 +47,7 @@ export function safeError(error: unknown): AppError {
       missing_file: '部分文件或文件夹已失效，未写入剪贴板。',
       restricted: '当前平台或权限不支持此操作。',
       target_lost: '原应用目标已变化，未自动粘贴。',
+      shortcut_conflict: '快捷键不可用或已被占用，原快捷键保持不变。',
       unavailable: '本地服务不可用，请重启桌面应用。',
     };
     const code = error.code as ErrorCode;

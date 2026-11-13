@@ -200,6 +200,7 @@ export function useHistory(
   const items: Clip[] = (page?.items ?? []).map((item) => ({
     id: item.id,
     revision: item.revision,
+    matchRanges: item.matchRanges,
     native: true,
     type: item.kind === 'files' ? 'file' : item.kind,
     title: item.kind === 'files' ? item.preview : '',
