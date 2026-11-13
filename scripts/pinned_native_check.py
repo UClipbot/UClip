@@ -43,6 +43,7 @@ def pin_ui(c, clip_id):
 def dedup_ui(c, removed):
     settled(c)
     c.execute('document.querySelector(".toast .icon-button")?.click();return true')
+    c.click('[aria-label="更多选项"]')
     c.click('[aria-label="置顶页去重"]')
     c.click('.form-actions .primary-button')
     wait(lambda: not c.execute('return !!document.querySelector("[role=dialog]")'), 'dedup confirmation closes after commit')
@@ -65,12 +66,14 @@ def run(c, capture):
     settled(c, 2)
     c.enter('#history-search', '置顶合成样本')
     settled(c, 2)
+    c.click('[aria-label="更多选项"]')
     c.click('[aria-label="置顶页去重"]')
     assert c.execute('return document.querySelector("[role=dialog]").textContent.includes("当前搜索、类型筛选和页码不限制去重范围")')
     c.key('key', '--clearmodifiers', 'Escape')
     wait(lambda: not c.execute('return !!document.querySelector("[role=dialog]")'), 'cancel dedup with Escape')
     assert history(c)['total'] == 4
 
+    c.click('[aria-label="更多选项"]')
     c.click('[aria-label="置顶页去重"]')
     c.action('create_text', text='concurrent history change')
     c.click('.form-actions .primary-button')

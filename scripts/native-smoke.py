@@ -165,7 +165,7 @@ def main():
                         click('[aria-label="更多选项"]')
                     closing = request('GET', f'/session/{session}/window') if selector == '[aria-label="关闭面板"]' and execute('return document.body.classList.contains("settings-window")') else None
                     request('POST', f'/session/{session}/element/{element(selector)}/click', {})
-                    if selector == '[data-testid="open-settings"]':
+                    if selector in ['[data-testid="open-settings"]', '[data-testid="footer-settings"]']:
                         wait_for(lambda: len(request('GET', f'/session/{session}/window/handles')) == 2, 'settings window created')
                         switch_window('settings')
                         wait_for(lambda: execute('return !!document.querySelector("#theme") && !document.querySelector("#theme").disabled'), 'settings form ready')
@@ -314,7 +314,7 @@ def main():
                 if args.startup_performance:
                     times=[]
                     for iteration in range(10):
-                        wait_for(lambda:execute('return document.hasFocus() && !!document.querySelector(".capture-toggle:not(:disabled), .titlebar-listening:not(:disabled)") && document.querySelector(".history-scroll")?.getAttribute("aria-busy")==="false"'),'interactive native startup')
+                        wait_for(lambda:execute('return document.hasFocus() && !!document.querySelector(".capture-toggle:not(:disabled)") && document.querySelector(".history-scroll")?.getAttribute("aria-busy")==="false"'),'interactive native startup')
                         times.append((time.monotonic()-launch_started)*1000)
                         invoke('quit_app')
                         wait_for(lambda:not owned_processes(),'benchmark process exit')

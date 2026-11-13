@@ -3,6 +3,7 @@
   --background: #151817;
   --sidebar: #111413;
   --panel: #1a1e1b;
+  --list-stripe: color-mix(in srgb, var(--text) 3%, var(--panel));
   --list-background: #171b18;
   --text: #edf0e9;
   --muted: #a8b1a4;

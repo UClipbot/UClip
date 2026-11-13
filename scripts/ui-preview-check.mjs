@@ -2,6 +2,8 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 const moduleIndex = process.argv.indexOf('--playwright-module');
+const urlIndex = process.argv.indexOf('--url');
+const appUrl = urlIndex < 0 ? 'http://localhost:1420' : process.argv[urlIndex + 1];
 const { chromium } = await import(moduleIndex < 0 ? 'playwright' : process.argv[moduleIndex + 1]);
 mkdirSync('docs/previews', { recursive: true });
 const browser = await chromium.launch({ headless: true });
@@ -32,8 +34,53 @@ const reports = [];
 const contrastSamples = [];
 const interactions = [];
 try {
-  await page.goto('http://localhost:1420');
+  let releaseImage;
+  const imageGate = new Promise((resolve) => {
+    releaseImage = resolve;
+  });
+  await page.setViewportSize({ width: 640, height: 440 });
+  await page.goto(appUrl, { waitUntil: 'domcontentloaded' });
   await rows.first().waitFor();
+  assert.equal(await rows.first().evaluate((e) => e.getBoundingClientRect().height), 56);
+  const imageRow = page.locator('[data-clip-id="image-1"]');
+  assert.equal(await imageRow.evaluate((e) => e.getBoundingClientRect().height), 96);
+  const originalImage = await imageRow.locator('img').getAttribute('src');
+  const imageBody = Buffer.from(originalImage.split(',')[1], 'base64').toString('utf8');
+  await page.route('**/__image_delay.svg', async (route) => {
+    await imageGate;
+    await route.fulfill({ contentType: 'image/svg+xml', body: imageBody });
+  });
+  const imageRequest = page.waitForRequest('**/__image_delay.svg');
+  await imageRow.locator('img').evaluate((e) => {
+    e.src = '/__image_delay.svg';
+  });
+  await imageRequest;
+  const beforeImage = await page.locator('.history-scroll').evaluate((e) => {
+    e.scrollTop = 300;
+    const row = [...e.querySelectorAll('[data-clip-id]')].find(
+      (r) => r.getBoundingClientRect().bottom > e.getBoundingClientRect().top,
+    );
+    return {
+      id: row.dataset.clipId,
+      offset: row.getBoundingClientRect().top - e.getBoundingClientRect().top,
+    };
+  });
+  releaseImage();
+  await imageRow.locator('img').evaluate((e) => e.decode());
+  assert.equal(await imageRow.evaluate((e) => e.getBoundingClientRect().height), 96);
+  await page.waitForFunction(({ id, offset }) => {
+    const e = document.querySelector('.history-scroll'),
+      r = [...e.querySelectorAll('[data-clip-id]')].find((r) => r.dataset.clipId === id);
+    return Math.abs(r.getBoundingClientRect().top - e.getBoundingClientRect().top - offset) <= 1;
+  }, beforeImage);
+  await page.locator('.history-scroll').evaluate((e) => {
+    e.scrollTop = 0;
+  });
+  await page.setViewportSize({ width: 640, height: 650 });
+  await search.focus();
+  interactions.push(
+    'Mixed 56px/96px rows; delayed image decode preserves reserved height and viewport',
+  );
   assert.equal(await search.evaluate((e) => e === document.activeElement), true);
   assert.equal(await page.locator('.sidebar, .detail-panel').count(), 0);
   // No detail navigation is needed for either keyboard or row copy; actions bind to their own ID.
@@ -259,7 +306,7 @@ try {
             '.clip-row.selected .clip-excerpt',
             '.clip-row.selected .clip-row-meta',
             '.statusbar',
-            '.result-count',
+            '.capture-toggle span',
             '.scope-control select',
             '.type-control select',
             '.row-copy',

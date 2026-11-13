@@ -137,7 +137,7 @@ def run(checks):
     # WAL readers alone do not block; this tests real IPC delay without modifying Tauri internals.
     previous_policy=c.action('clipboard_status')['policy']
     c.policy(enabled=False)
-    wait(lambda:c.execute('return (document.querySelector(".titlebar-listening")?.getAttribute("aria-pressed")==="false" || document.querySelector(".capture-toggle")?.textContent.includes("开始采集")) && document.querySelector(".history-scroll")?.getAttribute("aria-busy")==="false"'),'pause revision reaches the live UI before delay injection')
+    wait(lambda:c.execute('return document.querySelector(".capture-toggle")?.getAttribute("aria-pressed")==="false" && document.querySelector(".history-scroll")?.getAttribute("aria-busy")==="false"'),'pause revision reaches the live UI before delay injection')
     connection=sqlite3.connect(database)
     connection.execute('BEGIN IMMEDIATE')
     try:
@@ -165,7 +165,7 @@ def run_manual(c):
     original=c.action('clipboard_status')['policy']
     c.activate(c.window('^UClip$'))
     c.policy(enabled=False)
-    wait(lambda:c.execute('return (document.querySelector(".titlebar-listening")?.getAttribute("aria-pressed")==="false" || document.querySelector(".capture-toggle")?.textContent.includes("开始采集"))'),'paused manual create UI')
+    wait(lambda:c.execute('return document.querySelector(".capture-toggle")?.getAttribute("aria-pressed")==="false"'),'paused manual create UI')
     text='  手工保存合成文本 🦀\n第二行\n\n末尾空白  '
     c.click('[aria-label="更多选项"]')
     c.click('[data-testid="new-text"]')

@@ -16,6 +16,7 @@ import { useClipQuery } from './demo/useClipQuery';
 import { useHistory } from './platform/useHistory';
 import { KeyboardSettings } from './components/KeyboardSettings';
 import { WindowTitlebar } from './components/WindowTitlebar';
+import { HistoryViewport } from './components/HistoryViewport';
 import { DEFAULT_KEYS, matchesKey, formatKey } from './platform/keyboard';
 import { useDesktop } from './platform/useDesktop';
 import { safeError } from './platform/client';
@@ -123,6 +124,17 @@ export function App() {
     }
   }, [live.status?.policy.revision]);
   const selected = result.items.find((clip) => clip.id === selectedId) ?? result.items[0];
+  useEffect(() => {
+    if (
+      !result.pending &&
+      !result.error &&
+      result.items.length &&
+      !result.items.some((item) => item.id === selectedId)
+    ) {
+      const first = result.items[0];
+      if (first) setSelectedId(first.id);
+    }
+  }, [result.items, result.pending, result.error, selectedId]);
   const previewBase = preview && result.items.find((clip) => clip.id === preview.id);
   const previewClip =
     previewBase && appearance.native
@@ -592,6 +604,20 @@ export function App() {
     }
   }
 
+  const captureLabel = !appearance.native
+    ? '浏览器示例 · 监听仅在桌面可用'
+    : !live.status
+      ? '正在连接监听服务'
+      : live.mutating
+        ? '正在保存…'
+        : !live.status.available
+          ? live.status.policy.enabled
+            ? '监听不可用 · 点击暂停'
+            : '监听服务不可用'
+          : live.status.policy.enabled
+            ? '监听中 · 点击暂停记录新复制'
+            : '已暂停 · 点击开始记录新复制';
+
   const searchBox = (
     <div className={`search-box ${result.error ? 'has-error' : ''}`}>
       <Icon name="search" size={18} />
@@ -642,24 +668,6 @@ export function App() {
           onToggleMaximized={() => void windowAction(desktop.toggleMaximized)}
           onClose={() => void windowAction(desktop.close)}
           search={searchBox}
-          listening={!!live.status?.policy.enabled}
-          listeningDisabled={
-            !live.status || live.mutating || (!live.status.available && !live.status.policy.enabled)
-          }
-          listeningLabel={
-            !live.status
-              ? '正在连接监听服务'
-              : !live.status.available
-                ? live.status.policy.enabled
-                  ? '监听不可用 · 点击暂停'
-                  : '监听服务不可用'
-                : live.mutating
-                  ? '正在保存…'
-                  : live.status.policy.enabled
-                    ? '监听中 · 点击暂停记录新复制'
-                    : '已暂停 · 点击开始记录新复制'
-          }
-          onToggleListening={() => void saveCapture(!live.status?.policy.enabled)}
         />
       )}
       <div
@@ -723,34 +731,6 @@ export function App() {
                 重置
               </button>
             )}
-            <span className="result-count" aria-live="polite">
-              {result.pending
-                ? '搜索中'
-                : `${appearance.native ? live.total : result.items.length} 条`}
-            </span>
-            {appearance.native && view === 'pinned' && (
-              <button
-                className="text-button"
-                disabled={!ready || live.mutating || !live.revision}
-                onClick={() => {
-                  setDedupRevision(live.revision!);
-                  setDedupError('');
-                  openModal('deduplicate');
-                }}
-                aria-label="置顶页去重"
-              >
-                去重
-              </button>
-            )}
-            <button
-              className="icon-button app-more"
-              aria-label="更多选项"
-              aria-haspopup="menu"
-              aria-expanded={!!menu && !menu.clipId}
-              onClick={(event) => openMenu(event.currentTarget)}
-            >
-              <Icon name="more" size={20} />
-            </button>
           </div>
         </header>
         {(appearance.error || live.statusError || live.status?.error) && (
@@ -775,12 +755,11 @@ export function App() {
         )}
         <main className="content-workspace">
           <section className="history-panel" hidden={!!previewClip} aria-label="剪贴板历史">
-            <div
-              ref={list}
+            <HistoryViewport
+              listRef={list}
+              resetKey={JSON.stringify([query, regex, type, view, live.offset, oldest, grid])}
               className={`history-scroll ${grid ? 'clip-grid' : ''}`}
-              tabIndex={0}
-              aria-label="历史列表，方向键选择，空格预览"
-              aria-busy={result.pending}
+              pending={result.pending}
             >
               {result.pending && !result.items.length ? (
                 <div className="empty-state" role="status">
@@ -824,6 +803,7 @@ export function App() {
                   <article
                     key={clip.id}
                     data-clip-id={clip.id}
+                    data-clip-type={clip.type}
                     data-clip-revision={clip.revision}
                     className={`clip-row ${selected?.id === clip.id ? 'selected' : ''} ${clip.type === 'image' ? 'image-row' : ''}`}
                     onContextMenu={(event) => {
@@ -843,8 +823,25 @@ export function App() {
                           void copyClip(clip, live.status?.pasteAvailable ?? false);
                       }}
                     >
-                      {clip.image ? (
-                        <img className="row-thumbnail" src={clip.image} alt="" />
+                      {clip.type === 'image' ? (
+                        clip.image ? (
+                          <img
+                            className="row-thumbnail"
+                            src={clip.image}
+                            width={104}
+                            height={76}
+                            loading="lazy"
+                            decoding="async"
+                            alt=""
+                          />
+                        ) : (
+                          <span
+                            className="row-thumbnail row-thumbnail-placeholder"
+                            aria-hidden="true"
+                          >
+                            <Icon name="image" size={24} />
+                          </span>
+                        )
                       ) : (
                         <span className="row-icon">
                           <Icon name={clip.type} size={19} />
@@ -910,7 +907,7 @@ export function App() {
                   </article>
                 ))
               )}
-            </div>
+            </HistoryViewport>
           </section>
           {previewClip && (
             <ClipPreview
@@ -930,30 +927,25 @@ export function App() {
             />
           )}
         </main>
-        <footer className="statusbar">
-          {appearance.native && !customChrome ? (
-            <button
-              className="text-button capture-toggle"
-              disabled={
-                !live.status ||
-                live.mutating ||
-                (!live.status.available && !live.status.policy.enabled)
-              }
-              onClick={() => void saveCapture(!live.status?.policy.enabled)}
-            >
-              {!live.status
-                ? '正在连接…'
-                : !live.status.available
-                  ? live.status.policy.enabled
-                    ? '采集不可用 · 点击暂停'
-                    : '采集不可用'
-                  : live.status.policy.enabled
-                    ? '● 采集中 · 点击暂停'
-                    : '开始采集'}
-            </button>
-          ) : !appearance.native ? (
-            <span>示例数据 · 刷新后还原</span>
-          ) : null}
+        <footer className="statusbar" aria-label="底部工具栏">
+          <button
+            className={`capture-toggle ${live.status?.policy.enabled && live.status.available ? 'active' : ''} ${live.status && !live.status.available ? 'unavailable' : ''}`}
+            disabled={
+              !appearance.native ||
+              !live.status ||
+              live.mutating ||
+              (!live.status.available && !live.status.policy.enabled)
+            }
+            aria-pressed={appearance.native ? !!live.status?.policy.enabled : undefined}
+            aria-label={`${result.pending ? '搜索中' : `${appearance.native ? live.total : result.items.length} 条记录`} · ${captureLabel}`}
+            title={captureLabel}
+            onClick={() => void saveCapture(!live.status?.policy.enabled)}
+          >
+            <Icon name="copy" size={16} />
+            <span aria-live="polite">
+              {result.pending ? '…' : appearance.native ? live.total : result.items.length}
+            </span>
+          </button>
           {appearance.native && live.total > 25 && (
             <div className="pagination">
               <button
@@ -973,14 +965,57 @@ export function App() {
               </button>
             </div>
           )}
-          <button
-            className="text-button"
-            onClick={() => openModal('shortcuts')}
-            aria-label="快捷键帮助"
-          >
-            <span className="footer-hint">↵ {view === 'trash' ? '恢复' : '复制'}</span>
-            <Icon name="keyboard" size={16} />
-          </button>
+          <div className="footer-tools">
+            <button
+              className="icon-button"
+              aria-label="设置"
+              title={`设置 ${formatKey(activeKeys.settings, modifier)}`}
+              data-testid="footer-settings"
+              onClick={() => openModal('settings')}
+            >
+              <Icon name="settings" size={17} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label={appearance.dark ? '切换为浅色主题' : '切换为深色主题'}
+              title={appearance.dark ? '切换为浅色主题' : '切换为深色主题'}
+              disabled={
+                appearance.loading ||
+                appearance.saving ||
+                (appearance.native && !appearance.snapshot)
+              }
+              onClick={() => void chooseTheme(appearance.dark ? 'light' : 'dark')}
+            >
+              <Icon name={appearance.dark ? 'moon' : 'sun'} size={17} />
+            </button>
+            <button
+              className="icon-button"
+              aria-label="窗口置顶"
+              title={
+                appearance.native
+                  ? desktop.status?.preferences.alwaysOnTop
+                    ? '取消窗口置顶'
+                    : '窗口置顶'
+                  : '窗口置顶仅在桌面可用'
+              }
+              aria-pressed={!!desktop.status?.preferences.alwaysOnTop}
+              disabled={!appearance.native || !desktop.status || desktop.busy}
+              onClick={() =>
+                void saveDesktop({ alwaysOnTop: !desktop.status?.preferences.alwaysOnTop })
+              }
+            >
+              <Icon name="pin" size={17} />
+            </button>
+            <button
+              className="icon-button app-more"
+              aria-label="更多选项"
+              aria-haspopup="menu"
+              aria-expanded={!!menu && !menu.clipId}
+              onClick={(event) => openMenu(event.currentTarget)}
+            >
+              <Icon name="more" size={20} />
+            </button>
+          </div>
         </footer>
       </div>
       {menu && (
@@ -1098,6 +1133,21 @@ export function App() {
                     </button>
                   )}
                 </>
+              )}
+              {appearance.native && view === 'pinned' && (
+                <button
+                  role="menuitem"
+                  disabled={!ready || live.mutating || !live.revision}
+                  onClick={() => {
+                    setMenu(null);
+                    setDedupRevision(live.revision!);
+                    setDedupError('');
+                    openModal('deduplicate');
+                  }}
+                  aria-label="置顶页去重"
+                >
+                  置顶页去重
+                </button>
               )}
               <button role="menuitem" onClick={() => menuAction(() => setGrid(!grid))}>
                 <Icon name={grid ? 'list' : 'grid'} size={15} />

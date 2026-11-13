@@ -3,17 +3,18 @@
 
 def run(invoke, invoke_current, execute, execute_main, click, switch_window, wait, capture):
     wait(lambda: execute('return !!document.querySelector(".window-titlebar #history-search")'), 'integrated search')
-    assert execute('return !document.querySelector(".window-titlebar-brand").textContent.trim()')
+    assert execute('return !document.querySelector(".window-titlebar-brand").textContent.trim() && !document.querySelector(".window-titlebar .capture-toggle") && !!document.querySelector(".statusbar .capture-toggle")')
     assert execute('return document.querySelector(".filter-bar").getBoundingClientRect().height <= 36')
 
     # A main-window dialog must block the newly interactive titlebar controls.
     click('[aria-label="更多选项"]')
     click('[data-testid="new-text"]')
-    assert execute('return document.querySelector(".titlebar-search").inert && document.querySelector(".titlebar-listening").disabled')
+    assert execute('return document.querySelector(".titlebar-search").inert && document.querySelector(".app-shell").inert')
     click('[aria-label="关闭面板"]')
     assert execute('return !document.querySelector(".titlebar-search").inert')
 
-    click('[data-testid="open-settings"]')
+    assert execute('return !document.querySelector(".filter-bar .app-more") && !document.querySelector(".listening-dot")')
+    click('[data-testid="footer-settings"]')
     assert execute('return document.body.classList.contains("settings-window") && document.querySelector(".app-shell").hidden && !document.querySelector(".window-titlebar")')
     capture('settings-window')
     assert invoke_current('clipboard_status')['ok']
@@ -53,19 +54,32 @@ def run(invoke, invoke_current, execute, execute_main, click, switch_window, wai
     click('[aria-label="关闭面板"]')
     switch_window('main')
 
+    for theme in ['light', 'dark']:
+        selector = '[aria-label="切换为' + ('浅色' if theme == 'light' else '深色') + '主题"]'
+        wait(lambda: execute('return !document.querySelector(arguments[0]).disabled', [selector]), 'footer theme ready')
+        click(selector)
+        wait(lambda: execute('return document.documentElement.dataset.theme===arguments[0]', [theme]), 'footer theme applied')
+    pinned = invoke('desktop_status')['value']['preferences']['alwaysOnTop']
+    for desired in [not pinned, pinned]:
+        wait(lambda: execute('return !document.querySelector(".footer-tools [aria-label=窗口置顶]").disabled'), 'footer pin ready')
+        click('.footer-tools [aria-label="窗口置顶"]')
+        wait(lambda: invoke('desktop_status')['value']['preferences']['alwaysOnTop'] == desired, 'footer pin preference saved')
+
     status = invoke('clipboard_status')['value']
     if status['available']:
-        wait(lambda: execute('return !document.querySelector(".titlebar-listening").disabled'), 'listener ready')
+        wait(lambda: execute('return !document.querySelector(".capture-toggle").disabled'), 'listener ready')
         initially_enabled = status['policy']['enabled']
         for enabled in [not initially_enabled, initially_enabled]:
-            click('.titlebar-listening')
+            click('.capture-toggle')
             wait(lambda: invoke('clipboard_status')['value']['policy']['enabled'] == enabled, 'listener policy commit')
-            wait(lambda: execute('return !document.querySelector(".titlebar-listening").disabled'), 'listener mutation settled')
+            wait(lambda: execute('return !document.querySelector(".capture-toggle").disabled'), 'listener mutation settled')
     else:
-        assert execute('return document.querySelector(".titlebar-listening").disabled')
+        assert execute('return document.querySelector(".capture-toggle").disabled')
         print('LIMIT: capture unavailable in this display; listener disabled state verified', flush=True)
     for text in ['明天 10:00 确认窗口交互\n完成主窗搜索与独立设置窗的体验。', 'npm run tauri:dev', 'https://example.com/design-notes']:
         assert invoke('create_text', {'text': text, 'collectionId': None})['ok']
     wait(lambda: execute('return document.querySelectorAll(".clip-row").length === 3'), 'main history remains usable after settings close')
     capture('compact-main-window')
+    from history_viewport_native_check import run as check_scroll
+    check_scroll(invoke, execute, click, wait, capture)
     print('PASS settings window: main modal guard, separate settings UI, limited IPC, cross-window updates, concurrent open, close/reopen, compact filters and listener state', flush=True)

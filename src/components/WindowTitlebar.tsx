@@ -7,10 +7,6 @@ export function WindowTitlebar({
   onToggleMaximized,
   onClose,
   search,
-  listening,
-  listeningDisabled,
-  listeningLabel,
-  onToggleListening,
   blocked = false,
 }: {
   onDrag: () => void;
@@ -18,10 +14,6 @@ export function WindowTitlebar({
   onToggleMaximized: () => void;
   onClose: () => void;
   search: ReactNode;
-  listening: boolean;
-  listeningDisabled: boolean;
-  listeningLabel: string;
-  onToggleListening: () => void;
   blocked?: boolean;
 }) {
   return (
@@ -39,16 +31,6 @@ export function WindowTitlebar({
       <div className="window-titlebar-brand" title="拖动窗口">
         <Icon name="copy" size={16} />
       </div>
-      <button
-        className={`titlebar-listening ${listening ? 'active' : ''}`}
-        aria-label={listeningLabel}
-        title={listeningLabel}
-        aria-pressed={listening}
-        disabled={listeningDisabled || blocked}
-        onClick={onToggleListening}
-      >
-        <span className="listening-dot" />
-      </button>
       <div className="titlebar-search" inert={blocked ? true : undefined}>
         {search}
       </div>
