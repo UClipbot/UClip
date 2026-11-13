@@ -43,6 +43,7 @@ def main():
     parser.add_argument('--binary', default='target/debug/uclip-desktop')
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
     parser.add_argument('--manual-only',action='store_true',help='Isolated real manual text creation.')
+    parser.add_argument('--titlebar-only',action='store_true',help='Isolated native/custom titlebar and window controls.')
     parser.add_argument('--pinned-only',action='store_true',help='Isolated pin, pinned page and explicit deduplication checks.')
     parser.add_argument('--collections-only',action='store_true',help='Isolated real collection forms, transfers, query scopes and persistence.')
     parser.add_argument('--paste-performance',action='store_true',help='Twenty actual automatic paste receives per payload type.')
@@ -137,6 +138,20 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.titlebar_only:
+                    from titlebar_native_check import run, verify_restart
+                    run(invoke,execute,click,env,directory,capture)
+                    for abrupt in [False,True]:
+                        if abrupt:os.kill(owned_processes()[0][0],signal.SIGKILL)
+                        else:click('[aria-label="关闭窗口"]')
+                        wait_for(lambda:not owned_processes(),'custom close exits or crash terminates process')
+                        try:request('DELETE',f'/session/{session}')
+                        except (RuntimeError,OSError):pass
+                        session=start()
+                        wait_for(lambda:execute('return !!document.querySelector("#history-search")'),'titlebar restart')
+                        verify_restart(invoke,execute,env)
+                    print('PASS titlebar: custom close drains storage; preference and controls survive normal exit and SIGKILL',flush=True)
+                    return
                 if args.collections_only:
                     from clipboard_native_check import ClipboardChecks
                     from collections_native_check import run, verify_restart
@@ -283,7 +298,7 @@ def main():
                     desktop=invoke('desktop_status')['value']
                     assert not desktop['shortcutAvailable']
                     preferences=desktop['preferences']
-                    refused=invoke('update_desktop_preferences',{'request':{'closeToTray':True,'alwaysOnTop':False,'autoHide':False,'shortcut':preferences['shortcut'],'expectedRevision':preferences['revision']}})
+                    refused=invoke('update_desktop_preferences',{'request':{'closeToTray':True,'alwaysOnTop':False,'autoHide':False,'nativeTitlebar':preferences['nativeTitlebar'],'shortcut':preferences['shortcut'],'expectedRevision':preferences['revision']}})
                     assert not refused['ok'] and refused['error']['code']=='restricted',refused
                     assert invoke('desktop_status')['value']['preferences']==preferences
                     history=invoke('history_query',{'request':{'query':'中文','regex':False,'kind':None,'offset':0,'expectedRevision':None}})

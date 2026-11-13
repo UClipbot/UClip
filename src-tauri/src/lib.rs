@@ -75,6 +75,10 @@ pub fn run() {
             commands::set_autostart,
             commands::set_desktop_interaction,
             commands::hide_main_window,
+            commands::minimize_main_window,
+            commands::toggle_main_window_maximized,
+            commands::start_main_window_drag,
+            commands::close_main_window,
             commands::quit_app,
         ])
         .setup(|app| {
@@ -138,6 +142,12 @@ pub fn run() {
                     WebviewUrl::App("index.html".into()),
                 )
                 .title("UClip")
+                .decorations(
+                    handle
+                        .state::<desktop::DesktopState>()
+                        .preferences()
+                        .is_none_or(|p| p.native_titlebar),
+                )
                 .inner_size(640.0, 650.0)
                 .min_inner_size(480.0, 390.0)
                 .on_navigation(local_navigation)

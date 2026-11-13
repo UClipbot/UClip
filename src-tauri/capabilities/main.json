@@ -27,6 +27,10 @@
     "allow-set-autostart",
     "allow-set-desktop-interaction",
     "allow-hide-main-window",
+    "allow-minimize-main-window",
+    "allow-toggle-main-window-maximized",
+    "allow-start-main-window-drag",
+    "allow-close-main-window",
     "allow-quit-app",
     "allow-create-text",
     "allow-update-key-bindings"

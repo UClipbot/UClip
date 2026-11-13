@@ -13,7 +13,7 @@ UClip is a local-first clipboard manager for saving copied content, finding it q
 - **Collections:** create and rename collections, then move or copy entries between them.
 - **Custom shortcuts:** configure search, copy, preview, deletion, and navigation keys.
 - **Desktop integration:** use the tray or a shortcut to reopen the window, with pinning, hide-on-blur, and login startup options.
-- **Light and dark themes:** choose an appearance and keep your preference.
+- **Window appearance:** choose light or dark themes and native or custom title bars.
 
 ## Getting started
 

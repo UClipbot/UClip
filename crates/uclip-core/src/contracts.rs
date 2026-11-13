@@ -342,6 +342,7 @@ pub struct DesktopPreferences {
     pub close_to_tray: bool,
     pub always_on_top: bool,
     pub auto_hide: bool,
+    pub native_titlebar: bool,
     pub shortcut: String,
     pub revision: String,
 }
@@ -352,6 +353,7 @@ pub struct UpdateDesktopPreferences {
     pub close_to_tray: bool,
     pub always_on_top: bool,
     pub auto_hide: bool,
+    pub native_titlebar: bool,
     pub shortcut: String,
     pub expected_revision: String,
 }

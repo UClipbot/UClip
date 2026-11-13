@@ -269,6 +269,11 @@ pub async fn update_desktop_preferences(
         .get_webview_window("main")
         .ok_or_else(|| AppError::new(ErrorCode::Unavailable))?;
     let operation = async {
+        if request.native_titlebar != previous.native_titlebar {
+            window
+                .set_decorations(request.native_titlebar)
+                .map_err(|_| AppError::new(ErrorCode::Unavailable))?;
+        }
         window
             .set_always_on_top(request.always_on_top)
             .map_err(|_| AppError::new(ErrorCode::Unavailable))?;
@@ -295,6 +300,7 @@ pub async fn update_desktop_preferences(
             Ok(saved)
         }
         Err(error) => {
+            let _ = window.set_decorations(previous.native_titlebar);
             let _ = window.set_always_on_top(previous.always_on_top);
             if newly_registered {
                 let handle = app.clone();
@@ -331,6 +337,41 @@ pub async fn hide_main_window(app: tauri::AppHandle) -> Result<(), AppError> {
     app.get_webview_window("main")
         .ok_or_else(|| AppError::new(uclip_core::ErrorCode::Unavailable))?
         .hide()
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
+}
+
+#[tauri::command]
+pub async fn minimize_main_window(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    window
+        .minimize()
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
+}
+
+#[tauri::command]
+pub async fn toggle_main_window_maximized(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    if window
+        .is_maximized()
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+    {
+        window.unmaximize()
+    } else {
+        window.maximize()
+    }
+    .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
+}
+
+#[tauri::command]
+pub async fn start_main_window_drag(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    window
+        .start_dragging()
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
+}
+
+#[tauri::command]
+pub async fn close_main_window(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    // CloseRequested decides whether to hide or drain storage and exit.
+    window
+        .close()
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
 }
 #[tauri::command]

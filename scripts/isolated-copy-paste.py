@@ -16,7 +16,7 @@ def stop(process):
         except subprocess.TimeoutExpired: process.kill(); process.wait()
 
 def main():
-    mode = next((flag for flag in ['--collections-only','--pinned-only','--manual-only','--paste-performance','--wake-only','--startup-performance'] if flag in sys.argv), None)
+    mode = next((flag for flag in ['--titlebar-only','--collections-only','--pinned-only','--manual-only','--paste-performance','--wake-only','--startup-performance'] if flag in sys.argv), None)
     if '--inside' in sys.argv:
         wm = subprocess.Popen(['muffin', '--sm-disable'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
@@ -24,6 +24,8 @@ def main():
             test_args = [mode] if mode else ['--clipboard-fixtures','--screenshots','docs/previews/copy-paste']
             if mode in ['--collections-only','--pinned-only']:
                 test_args += ['--screenshots', 'docs/previews/collections' if mode=='--collections-only' else 'docs/previews/pinned']
+            if mode == '--titlebar-only':
+                test_args += ['--screenshots', 'docs/previews/titlebar']
             env = os.environ.copy()
             env['UCLIP_FIXTURE_WM_PID'] = str(wm.pid)
             return subprocess.call(['/usr/bin/python3', 'scripts/native-smoke.py',*test_args], env=env)

@@ -15,6 +15,7 @@ import {
 import { useClipQuery } from './demo/useClipQuery';
 import { useHistory } from './platform/useHistory';
 import { KeyboardSettings } from './components/KeyboardSettings';
+import { WindowTitlebar } from './components/WindowTitlebar';
 import { DEFAULT_KEYS, matchesKey, formatKey } from './platform/keyboard';
 import { useDesktop } from './platform/useDesktop';
 import { safeError } from './platform/client';
@@ -532,7 +533,7 @@ export function App() {
     update: Partial<
       Pick<
         import('./generated/contracts').UpdateDesktopPreferences,
-        'closeToTray' | 'alwaysOnTop' | 'autoHide' | 'shortcut'
+        'closeToTray' | 'alwaysOnTop' | 'autoHide' | 'shortcut' | 'nativeTitlebar'
       >
     >,
   ) {
@@ -543,6 +544,7 @@ export function App() {
         closeToTray: p.closeToTray,
         alwaysOnTop: p.alwaysOnTop,
         autoHide: p.autoHide,
+        nativeTitlebar: p.nativeTitlebar,
         shortcut: p.shortcut,
         expectedRevision: p.revision,
         ...update,
@@ -556,9 +558,24 @@ export function App() {
     if (await appearance.saveTheme(theme))
       setToast({ message: appearance.native ? '外观已保存' : '预览外观已更新' });
   }
+  async function windowAction(action: () => Promise<unknown>) {
+    try {
+      await action();
+    } catch (error) {
+      setToast({ message: safeError(error).message });
+    }
+  }
 
   return (
     <>
+      {appearance.native && desktop.status?.preferences.nativeTitlebar === false && (
+        <WindowTitlebar
+          onDrag={() => void windowAction(desktop.startDrag)}
+          onMinimize={() => void windowAction(desktop.minimize)}
+          onToggleMaximized={() => void windowAction(desktop.toggleMaximized)}
+          onClose={() => void windowAction(desktop.close)}
+        />
+      )}
       <div className="app-shell" inert={modal ? true : undefined} data-testid="app-ready">
         <header className="topbar">
           <div className={`search-box ${result.error ? 'has-error' : ''}`}>
@@ -1376,6 +1393,23 @@ export function App() {
           )}
           <section className="settings-section">
             <h3>外观</h3>
+            {appearance.native && (
+              <>
+                <label className="setting-row">
+                  使用系统原生标题栏
+                  <input
+                    type="checkbox"
+                    aria-label="使用系统原生标题栏"
+                    checked={desktop.status?.preferences.nativeTitlebar ?? true}
+                    disabled={!desktop.status || desktop.busy}
+                    onChange={(event) => void saveDesktop({ nativeTitlebar: event.target.checked })}
+                  />
+                </label>
+                <p className="settings-feedback">
+                  关闭后使用自定义标题栏，可拖动、最小化、最大化和关闭窗口。立即生效，重启后保留。
+                </p>
+              </>
+            )}
             <label className="setting-row" htmlFor="theme">
               主题
               <select

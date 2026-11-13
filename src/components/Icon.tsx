@@ -22,6 +22,8 @@ export type IconName =
   | 'copy'
   | 'more'
   | 'close'
+  | 'minimize'
+  | 'maximize'
   | 'check'
   | 'info'
   | 'keyboard'
@@ -32,6 +34,8 @@ export type IconName =
   | 'shield'
   | 'external';
 const paths: Record<IconName, React.ReactNode> = {
+  minimize: <path d="M5 12h14" />,
+  maximize: <rect x="5" y="5" width="14" height="14" rx="1" />,
   search: (
     <>
       <circle cx="10.7" cy="10.7" r="6.7" />

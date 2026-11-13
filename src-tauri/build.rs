@@ -23,6 +23,10 @@ fn main() {
             "set_autostart",
             "set_desktop_interaction",
             "hide_main_window",
+            "minimize_main_window",
+            "toggle_main_window_maximized",
+            "start_main_window_drag",
+            "close_main_window",
             "quit_app",
         ]),
     ))

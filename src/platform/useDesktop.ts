@@ -78,6 +78,14 @@ export function useDesktop(native: boolean, interaction: boolean) {
     saveKeys: (request: UpdateKeyBindings) => change('update_key_bindings', { request }),
     autostart: (enabled: boolean) => change('set_autostart', { enabled }),
     hide: () => invoke('hide_main_window'),
+    minimize: () => invoke('minimize_main_window'),
+    toggleMaximized: () => invoke('toggle_main_window_maximized'),
+    startDrag: () =>
+      invoke('start_main_window_drag').finally(() => {
+        // The OS can consume pointerup while dragging; do not leave the blur guard stuck.
+        void invoke('set_desktop_interaction', { active: interaction }).catch(() => {});
+      }),
+    close: () => invoke('close_main_window'),
     quit: () => invoke('quit_app'),
   };
 }

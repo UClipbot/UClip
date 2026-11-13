@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 const APPLICATION_ID: i64 = 0x434c4e58; // CLNX: never open the previous application's database.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -109,6 +109,10 @@ impl Storage {
             END;
             CREATE INDEX clips_collection_order ON clips(collection,deleted,pinned DESC,sequence DESC,id);")?;
             tx.pragma_update(None, "user_version", 5)?;
+        }
+        if version < 6 {
+            tx.execute_batch("ALTER TABLE desktop_preferences ADD COLUMN native_titlebar INTEGER NOT NULL DEFAULT 1 CHECK(native_titlebar IN (0,1));")?;
+            tx.pragma_update(None, "user_version", 6)?;
         }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;

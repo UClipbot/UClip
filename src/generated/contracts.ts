@@ -8,9 +8,9 @@ export type KeyboardSnapshot = { bindings: KeyBindings, revision: string, };
 
 export type UpdateKeyBindings = { bindings: KeyBindings, expectedRevision: string, };
 
-export type DesktopPreferences = { closeToTray: boolean, alwaysOnTop: boolean, autoHide: boolean, shortcut: string, revision: string, };
+export type DesktopPreferences = { closeToTray: boolean, alwaysOnTop: boolean, autoHide: boolean, nativeTitlebar: boolean, shortcut: string, revision: string, };
 
-export type UpdateDesktopPreferences = { closeToTray: boolean, alwaysOnTop: boolean, autoHide: boolean, shortcut: string, expectedRevision: string, };
+export type UpdateDesktopPreferences = { closeToTray: boolean, alwaysOnTop: boolean, autoHide: boolean, nativeTitlebar: boolean, shortcut: string, expectedRevision: string, };
 
 export type DesktopStatus = { keyboard: KeyboardSnapshot, preferences: DesktopPreferences, trayAvailable: boolean, shortcutAvailable: boolean, autostartEnabled: boolean | null, error: AppError | null, };
 

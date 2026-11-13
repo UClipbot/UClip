@@ -26,7 +26,7 @@ def run(checks):
 
     def save(**changes):
         p = c.action('desktop_status')['preferences']
-        request = {key: p[key] for key in ['closeToTray', 'alwaysOnTop', 'autoHide', 'shortcut']}
+        request = {key: p[key] for key in ['closeToTray', 'alwaysOnTop', 'autoHide', 'shortcut', 'nativeTitlebar']}
         request['expectedRevision'] = p['revision']
         request.update(changes)
         return c.action('update_desktop_preferences', request=request)
@@ -52,7 +52,7 @@ def run(checks):
     try:
         assert grabber.read()['grabbed']
         before=c.action('desktop_status')['preferences']
-        request={key:before[key] for key in ['closeToTray','alwaysOnTop','autoHide','shortcut']}
+        request={key:before[key] for key in ['closeToTray','alwaysOnTop','autoHide','shortcut','nativeTitlebar']}
         request.update(shortcut='Control+Alt+J',expectedRevision=before['revision'])
         conflict=c.invoke('update_desktop_preferences',{'request':request})
         assert not conflict['ok'] and conflict['error']['code']=='shortcut_conflict',conflict
@@ -68,7 +68,7 @@ def run(checks):
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TRIGGER fixture_desktop_failure BEFORE UPDATE ON desktop_preferences BEGIN SELECT RAISE(ABORT,'fixture'); END")
     try:
-        request={key:before[key] for key in ['closeToTray','alwaysOnTop','autoHide','shortcut']}
+        request={key:before[key] for key in ['closeToTray','alwaysOnTop','autoHide','shortcut','nativeTitlebar']}
         request.update(alwaysOnTop=True,shortcut='Control+Alt+L',expectedRevision=before['revision'])
         failed=c.invoke('update_desktop_preferences',{'request':request})
         assert not failed['ok'] and failed['error']['code']=='storage',failed
