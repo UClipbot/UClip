@@ -14,6 +14,7 @@ import {
 } from './demo/clips';
 import { useClipQuery } from './demo/useClipQuery';
 import { useHistory } from './platform/useHistory';
+import { useDesktop } from './platform/useDesktop';
 import { safeError } from './platform/client';
 import { useAppearance } from './platform/useAppearance';
 import type { Theme } from './generated/contracts';
@@ -56,6 +57,12 @@ export function App() {
   const [menu, setMenu] = useState<Menu | null>(null);
   const [modal, setModal] = useState<'settings' | 'new' | 'shortcuts' | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
+  const desktop = useDesktop(appearance.native, !!(modal || menu || preview));
+  const [shortcut, setShortcut] = useState('CommandOrControl+Shift+V');
+  const copying = useRef(false);
+  useEffect(() => {
+    if (desktop.status) setShortcut(desktop.status.preferences.shortcut);
+  }, [desktop.status?.preferences.revision]);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
   const modalFocus = useRef<HTMLElement | null>(null);
@@ -166,6 +173,8 @@ export function App() {
       return;
     }
     if (appearance.native) {
+      if (copying.current) return;
+      copying.current = true;
       try {
         const outcome = await live.copy(clip.id, paste);
         setToast({
@@ -177,6 +186,8 @@ export function App() {
         });
       } catch (error) {
         setToast({ message: safeError(error).message });
+      } finally {
+        copying.current = false;
       }
       return;
     }
@@ -278,6 +289,9 @@ export function App() {
         } else if (query) {
           event.preventDefault();
           setQuery('');
+        } else if (appearance.native) {
+          event.preventDefault();
+          void desktop.hide().catch((error) => setToast({ message: safeError(error).message }));
         }
         return;
       }
@@ -366,6 +380,30 @@ export function App() {
         list.current.focus();
       }
     });
+  }
+  async function saveDesktop(
+    update: Partial<
+      Pick<
+        import('./generated/contracts').UpdateDesktopPreferences,
+        'closeToTray' | 'alwaysOnTop' | 'autoHide' | 'shortcut'
+      >
+    >,
+  ) {
+    if (!desktop.status) return;
+    const p = desktop.status.preferences;
+    try {
+      await desktop.save({
+        closeToTray: p.closeToTray,
+        alwaysOnTop: p.alwaysOnTop,
+        autoHide: p.autoHide,
+        shortcut: p.shortcut,
+        expectedRevision: p.revision,
+        ...update,
+      });
+      setToast({ message: '桌面设置已保存' });
+    } catch (error) {
+      setToast({ message: safeError(error).message });
+    }
   }
   async function chooseTheme(theme: Theme) {
     if (await appearance.saveTheme(theme))
@@ -510,9 +548,16 @@ export function App() {
                   <Icon name="info" size={24} />
                   <strong>搜索未完成</strong>
                   <p>{result.error}</p>
-                  <button className="secondary-button" onClick={() => setRegex(false)}>
-                    使用普通搜索
-                  </button>
+                  {regex && (
+                    <button className="secondary-button" onClick={() => setRegex(false)}>
+                      使用普通搜索
+                    </button>
+                  )}
+                  {appearance.native && (
+                    <button className="secondary-button" onClick={live.retryQuery}>
+                      重试搜索
+                    </button>
+                  )}
                 </div>
               ) : !result.items.length ? (
                 <div className="empty-state">
@@ -548,6 +593,9 @@ export function App() {
                       aria-label={`${typeNames[clip.type]}：${clip.type === 'text' ? clip.content.slice(0, 60) : clip.title}`}
                       onFocus={() => setSelectedId(clip.id)}
                       onClick={() => setSelectedId(clip.id)}
+                      onDoubleClick={() => {
+                        if (appearance.native) void copyClip(clip, true);
+                      }}
                     >
                       {clip.image ? (
                         <img className="row-thumbnail" src={clip.image} alt="" />
@@ -560,11 +608,18 @@ export function App() {
                         <span
                           className={`clip-excerpt ${clip.type === 'image' || clip.type === 'file' ? 'file-title' : ''}`}
                         >
-                          {clip.type === 'image'
-                            ? clip.size
-                            : clip.type === 'file'
-                              ? clip.title
-                              : clip.content.replace(/\n\s*\n/g, '\n')}
+                          {clip.type === 'image' ? (
+                            clip.size
+                          ) : appearance.native ? (
+                            <Highlighted
+                              text={clip.type === 'file' ? clip.title : clip.content}
+                              ranges={clip.matchRanges}
+                            />
+                          ) : clip.type === 'file' ? (
+                            clip.title
+                          ) : (
+                            clip.content.replace(/\n\s*\n/g, '\n')
+                          )}
                         </span>
                         <span className="clip-row-meta">
                           {clip.source}
@@ -762,6 +817,19 @@ export function App() {
                 <Icon name="keyboard" size={15} />
                 快捷键帮助
               </button>
+              {appearance.native && (
+                <button
+                  role="menuitem"
+                  onClick={() =>
+                    menuAction(() => {
+                      void desktop.quit();
+                    })
+                  }
+                >
+                  <Icon name="close" size={15} />
+                  退出应用
+                </button>
+              )}
             </>
           )}
         </ActionMenu>
@@ -842,7 +910,80 @@ export function App() {
               <p className="settings-feedback">
                 文本上限 4MiB；图片上限 8M 像素；文件引用最多 256 项。总历史载荷最多
                 128MiB，超限不截断。
-                {live.status?.shortcutAvailable ? ' Ctrl+Shift+V 唤起窗口。' : ''}
+                {desktop.status?.shortcutAvailable
+                  ? ` ${desktop.status.preferences.shortcut} 唤起窗口。`
+                  : ''}
+              </p>
+            </section>
+          )}
+          {appearance.native && (
+            <section className="settings-section">
+              <h3>桌面</h3>
+              <label className="setting-row">
+                关闭窗口后常驻
+                <input
+                  type="checkbox"
+                  checked={!!desktop.status?.preferences.closeToTray}
+                  disabled={!desktop.status || desktop.busy}
+                  onChange={(event) => void saveDesktop({ closeToTray: event.target.checked })}
+                />
+              </label>
+              <label className="setting-row">
+                窗口置顶
+                <input
+                  type="checkbox"
+                  checked={!!desktop.status?.preferences.alwaysOnTop}
+                  disabled={!desktop.status || desktop.busy}
+                  onChange={(event) => void saveDesktop({ alwaysOnTop: event.target.checked })}
+                />
+              </label>
+              <label className="setting-row">
+                失焦自动隐藏
+                <input
+                  type="checkbox"
+                  checked={!!desktop.status?.preferences.autoHide}
+                  disabled={!desktop.status || desktop.busy}
+                  onChange={(event) => void saveDesktop({ autoHide: event.target.checked })}
+                />
+              </label>
+              <label className="setting-row">
+                登录时启动
+                <input
+                  type="checkbox"
+                  checked={!!desktop.status?.autostartEnabled}
+                  disabled={
+                    !desktop.status || desktop.status.autostartEnabled === null || desktop.busy
+                  }
+                  onChange={(event) => {
+                    void desktop
+                      .autostart(event.target.checked)
+                      .then(() => setToast({ message: '自启动设置已生效' }))
+                      .catch((error) => setToast({ message: safeError(error).message }));
+                  }}
+                />
+              </label>
+              <label className="policy-field">
+                唤起快捷键
+                <input
+                  aria-label="唤起快捷键"
+                  value={shortcut}
+                  maxLength={100}
+                  onChange={(event) => setShortcut(event.target.value)}
+                />
+              </label>
+              <button
+                className="secondary-button"
+                disabled={!desktop.status || desktop.busy}
+                onClick={() => void saveDesktop({ shortcut })}
+              >
+                保存快捷键
+              </button>
+              <p className="settings-feedback" role="status">
+                {desktop.error ||
+                  (desktop.status?.shortcutAvailable
+                    ? '唤起快捷键可用；Esc 可隐藏窗口。'
+                    : '唤起快捷键不可用。')}{' '}
+                置顶时不自动隐藏；菜单、设置和预览打开时保留窗口。Linux 无可靠恢复入口时关闭会退出。
               </p>
             </section>
           )}
@@ -975,4 +1116,16 @@ export function App() {
       )}
     </>
   );
+}
+
+function Highlighted({ text, ranges = [] }: { text: string; ranges?: [number, number][] }) {
+  const parts: import('react').ReactNode[] = [];
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    if (start < cursor || end <= start || end > text.length) continue;
+    parts.push(text.slice(cursor, start), <mark key={start}>{text.slice(start, end)}</mark>);
+    cursor = end;
+  }
+  parts.push(text.slice(cursor));
+  return <>{parts}</>;
 }

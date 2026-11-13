@@ -42,6 +42,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='target/debug/uclip-desktop')
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
+    parser.add_argument('--paste-performance',action='store_true',help='Twenty actual automatic paste receives per payload type.')
+    parser.add_argument('--wake-only',action='store_true',help='Twenty isolated shortcut hide/wake cycles.')
+    parser.add_argument('--startup-performance',action='store_true',help='Ten disposable process launches, no clipboard fixtures.')
+    parser.add_argument('--wayland-restrictions', action='store_true', help='Read-only/restricted capability checks in isolated native Wayland.')
     parser.add_argument('--clipboard-fixtures', action='store_true', help='Synthetic three-type and automatic paste checks; requires isolated-copy-paste.py.')
     args = parser.parse_args()
     binary = str(Path(args.binary).resolve())
@@ -74,7 +78,25 @@ def main():
             try:
                 wait_for(lambda: request('GET', '/status'), 'WebDriver startup')
 
+                def owned_processes():
+                    result = []
+                    for entry in Path('/proc').iterdir():
+                        if not entry.name.isdigit():
+                            continue
+                        try:
+                            if str((entry / 'exe').resolve()) == binary:
+                                values = dict(item.split('=', 1) for item in (entry / 'environ').read_bytes().decode().split('\0') if '=' in item)
+                                if values.get('XDG_DATA_HOME') == env['XDG_DATA_HOME']:
+                                    result.append((int(entry.name), values))
+                        except (OSError, ValueError):
+                            pass
+                    return result
+
+
+                launch_started=0.0
                 def start():
+                    nonlocal launch_started
+                    launch_started=time.monotonic()
                     return request('POST', '/session', {'capabilities': {'alwaysMatch': {'tauri:options': {'application': binary}}}})['sessionId']
 
                 session = start()
@@ -112,6 +134,45 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.paste_performance:
+                    from clipboard_native_check import ClipboardChecks,wait
+                    from experience_native_check import measure_continuous_paste
+                    clipboard_checks=ClipboardChecks(invoke,execute,click,enter,env,directory,log)
+                    clipboard_checks.policy(enabled=True)
+                    for kind,fields in [('text',{'text':clipboard_checks.text}),('image',clipboard_checks.image),('files',{'files':clipboard_checks.files})]:
+                        clipboard_checks.set(kind,**fields)
+                        page=wait(lambda:clipboard_checks.query(kind=kind)['items'],'performance fixture capture')
+                        clipboard_checks.ids[kind]=page[0]['id']
+                    measure_continuous_paste(clipboard_checks)
+                    return
+                if args.wake_only:
+                    from clipboard_native_check import ClipboardChecks
+                    from experience_native_check import measure_wake,distribution
+                    clipboard_checks=ClipboardChecks(invoke,execute,click,enter,env,directory,log)
+                    receiver=subprocess.Popen(['/usr/bin/python3','scripts/paste-receiver.py',str(Path(directory)/'wake-receiver.json')],env=env,stdout=log,stderr=log)
+                    clipboard_checks.processes.append(receiver)
+                    clipboard_checks.activate(clipboard_checks.window('UClip native fixture receiver'))
+                    print('WAKE PROBE '+json.dumps(distribution(measure_wake(clipboard_checks))),flush=True)
+                    return
+                if args.startup_performance:
+                    times=[]
+                    for iteration in range(10):
+                        wait_for(lambda:execute('return document.hasFocus() && !!document.querySelector(".capture-toggle:not(:disabled)") && document.querySelector(".history-scroll")?.getAttribute("aria-busy")==="false"'),'interactive native startup')
+                        times.append((time.monotonic()-launch_started)*1000)
+                        invoke('quit_app')
+                        wait_for(lambda:not owned_processes(),'benchmark process exit')
+                        try:request('DELETE',f'/session/{session}')
+                        except (RuntimeError,OSError):pass
+                        session=None
+                        if iteration<9:
+                            session=start()
+                            wait_for(lambda:execute('return !!document.querySelector("#history-search")'),'benchmark restart')
+                    from experience_native_check import distribution
+                    report={'processStartup':distribution(times),'firstMs':times[0],'notes':['new native process and WebView every sample','includes WebDriver session and 100ms observation overhead','OS page cache is not flushed; debug binary; empty isolated database']}
+                    output=Path('docs/previews/copy-paste/performance-startup.json');output.parent.mkdir(parents=True,exist_ok=True);output.write_text(json.dumps(report,indent=2)+'\n')
+                    print('PASS P2 process startup observations: '+json.dumps(report),flush=True)
+                    assert report['processStartup']['p95Ms']<=2000,report
+                    return
                 capture('startup')
                 print('Initial UI:', execute('return {width:innerWidth,height:innerHeight,rect:document.querySelector(".app-more").getBoundingClientRect().toJSON(),inert:document.querySelector(".app-shell").inert}'), flush=True)
                 click('[data-testid="open-settings"]')
@@ -158,11 +219,35 @@ def main():
                 click('[aria-label="正则表达式搜索"]')
                 click('[aria-label="清空搜索"]')
                 print('PASS: real empty history never shows examples; native regex validation works', flush=True)
+                if args.wayland_restrictions:
+                    assert env.get('GDK_BACKEND')=='wayland' and not env.get('DISPLAY')
+                    assert snapshot['value']['platform']['sessionHint']=='wayland'
+                    status=invoke('clipboard_status')
+                    assert status['ok'] and not status['value']['available'] and status['value']['error']['code']=='restricted',status
+                    policy=status['value']['policy']
+                    refused=invoke('update_capture_policy',{'request':{'enabled':True,'excludePattern':'','maxItems':500,'expectedRevision':policy['revision']}})
+                    assert not refused['ok'] and refused['error']['code']=='restricted',refused
+                    desktop=invoke('desktop_status')['value']
+                    assert not desktop['shortcutAvailable']
+                    preferences=desktop['preferences']
+                    refused=invoke('update_desktop_preferences',{'request':{'closeToTray':True,'alwaysOnTop':False,'autoHide':False,'shortcut':preferences['shortcut'],'expectedRevision':preferences['revision']}})
+                    assert not refused['ok'] and refused['error']['code']=='restricted',refused
+                    assert invoke('desktop_status')['value']['preferences']==preferences
+                    history=invoke('history_query',{'request':{'query':'中文','regex':False,'kind':None,'offset':0,'expectedRevision':None}})
+                    assert history['ok'] and history['value']['total']==0,history
+                    print('PASS Wayland: native GDK Wayland WebKit, no DISPLAY/XWayland; local history/theme work; capture/global shortcut/hide-without-recovery explicitly restricted',flush=True)
+                    request('DELETE', f'/session/{session}')
+                    session=None
+                    return
                 if args.clipboard_fixtures:
                     from clipboard_native_check import ClipboardChecks
                     clipboard_checks = ClipboardChecks(invoke, execute, click, enter, env, directory, log)
                     clipboard_checks.run()
                     capture('local-history')
+                    from desktop_native_check import run as desktop_checks
+                    desktop_checks(clipboard_checks)
+                    from experience_native_check import run as experience_checks
+                    experience_checks(clipboard_checks)
 
                 stale = invoke('update_settings', {'request': {'theme': 'light', 'expectedRevision': '0'}})
                 assert not stale['ok'] and stale['error']['code'] == 'conflict', stale
@@ -176,19 +261,6 @@ def main():
                 assert execute('return location.href') == before
                 print('PASS: remote navigation blocked by native policy', flush=True)
 
-                def owned_processes():
-                    result = []
-                    for entry in Path('/proc').iterdir():
-                        if not entry.name.isdigit():
-                            continue
-                        try:
-                            if str((entry / 'exe').resolve()) == binary:
-                                values = dict(item.split('=', 1) for item in (entry / 'environ').read_bytes().decode().split('\0') if '=' in item)
-                                if values.get('XDG_DATA_HOME') == env['XDG_DATA_HOME']:
-                                    result.append((int(entry.name), values))
-                        except (OSError, ValueError):
-                            pass
-                    return result
 
                 owned = owned_processes()
                 assert len(owned) == 1, [value[0] for value in owned]
@@ -215,6 +287,9 @@ def main():
                 click('[data-testid="open-settings"]')
                 wait_for(lambda: execute('return !!document.querySelector("#theme") && !document.querySelector("#theme").disabled'), 'restarted UI ready')
                 assert invoke('get_settings')['value'] == saved
+                if clipboard_checks:
+                    assert execute('return innerWidth===700 && innerHeight===600'), execute('return {width:innerWidth,height:innerHeight}')
+                    print('PASS P2: restored native window size after process restart',flush=True)
                 assert execute('return document.documentElement.dataset.theme') == 'dark'
                 click('[aria-label="关闭面板"]')
                 if clipboard_checks:
@@ -248,7 +323,7 @@ def main():
                     assert database.execute('PRAGMA user_version').fetchone()[0] == 999
                     assert database.execute('SELECT theme, revision FROM settings').fetchone() == ('dark', int(saved['revision']))
                 print('PASS: newer schema shows a safe startup error without resetting saved data', flush=True)
-                print('Native smoke completed; Windows/macOS/Wayland remain untested. Clipboard paths run only with --clipboard-fixtures.', flush=True)
+                print('Native smoke completed; Windows/macOS remain untested. Native Wayland restrictions have a separate isolated check. Clipboard paths run only with --clipboard-fixtures.', flush=True)
             except Exception:
                 if session:
                     try: capture('failure')

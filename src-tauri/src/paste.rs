@@ -98,6 +98,14 @@ impl PasteService {
             false
         }
     }
+    pub fn capture_target(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(inner) = &self.inner {
+            if let Ok(mut desktop) = inner.lock() {
+                let _ = desktop.capture_target();
+            }
+        }
+    }
     pub fn shortcut_available(&self) -> bool {
         #[cfg(target_os = "linux")]
         {
@@ -233,39 +241,6 @@ mod x11 {
             };
             let v_key = find(u32::from(b'v'))?;
             let ctrl_key = find(0xffe3)?;
-            let mut shortcut = true;
-            for extra in [
-                ModMask::default(),
-                ModMask::LOCK,
-                ModMask::M2,
-                ModMask::LOCK | ModMask::M2,
-            ] {
-                if conn
-                    .grab_key(
-                        false,
-                        root,
-                        ModMask::CONTROL | ModMask::SHIFT | extra,
-                        v_key,
-                        GrabMode::ASYNC,
-                        GrabMode::ASYNC,
-                    )
-                    .map_err(|_| fail())?
-                    .check()
-                    .is_err()
-                {
-                    shortcut = false;
-                }
-            }
-            if !shortcut {
-                for extra in [
-                    ModMask::default(),
-                    ModMask::LOCK,
-                    ModMask::M2,
-                    ModMask::LOCK | ModMask::M2,
-                ] {
-                    let _ = conn.ungrab_key(v_key, root, ModMask::CONTROL | ModMask::SHIFT | extra);
-                }
-            }
             conn.flush().map_err(|_| fail())?;
             Ok(Self {
                 conn,
@@ -273,7 +248,7 @@ mod x11 {
                 active_atom,
                 pid_atom,
                 healthy: true,
-                shortcut,
+                shortcut: false,
                 target: None,
                 previous: NONE,
                 last_external: None,
@@ -304,11 +279,12 @@ mod x11 {
             };
             if active != self.previous {
                 if pid == std::process::id() {
-                    if let Some((window, pid)) = self.last_external {
-                        self.target = Some((window, pid, Instant::now()));
-                    }
-                } else if pid != 0 {
-                    self.last_external = Some((active, pid));
+                    self.target = self
+                        .last_external
+                        .map(|(window, pid)| (window, pid, Instant::now()));
+                } else {
+                    self.target = None;
+                    self.last_external = if pid != 0 { Some((active, pid)) } else { None };
                 }
                 self.previous = active;
             }
@@ -322,6 +298,17 @@ mod x11 {
                 }
             }
             Ok(show)
+        }
+        pub fn capture_target(&mut self) -> Result<(), AppError> {
+            self.target = None;
+            self.last_external = None;
+            let active = self.active()?;
+            let pid = self.property(active, self.pid_atom)?;
+            if pid != 0 && pid != std::process::id() {
+                self.target = Some((active, pid, Instant::now()));
+                self.last_external = Some((active, pid));
+            }
+            Ok(())
         }
         pub fn validate(&self) -> Result<(), AppError> {
             if !self.healthy {

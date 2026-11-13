@@ -102,6 +102,11 @@ fn run(
     Ok(json!({"set":true}))
 }
 fn main() {
+    #[cfg(target_os = "linux")]
+    if std::env::args().any(|a| a == "--shortcut-fixture") {
+        shortcut_fixture().expect("isolated shortcut fixture");
+        return;
+    }
     let context = ClipboardContext::new().expect("isolated clipboard fixture");
     for line in io::stdin().lock().lines() {
         let result = line
@@ -117,4 +122,37 @@ fn main() {
         );
         let _ = io::stdout().flush();
     }
+}
+
+#[cfg(target_os = "linux")]
+fn shortcut_fixture() -> Result<(), Box<dyn std::error::Error>> {
+    use x11rb::{connection::Connection, protocol::xproto::*, rust_connection::RustConnection};
+    let (conn, screen) = RustConnection::connect(None)?;
+    let root = conn.setup().roots[screen].root;
+    let first = conn.setup().min_keycode;
+    let map = conn
+        .get_keyboard_mapping(first, conn.setup().max_keycode - first + 1)?
+        .reply()?;
+    let key = first
+        + map
+            .keysyms
+            .chunks(usize::from(map.keysyms_per_keycode))
+            .position(|c| c.contains(&u32::from(b'j')))
+            .ok_or("key")? as u8;
+    conn.grab_key(
+        false,
+        root,
+        ModMask::CONTROL | ModMask::M1,
+        key,
+        GrabMode::ASYNC,
+        GrabMode::ASYNC,
+    )?
+    .check()?;
+    conn.flush()?;
+    println!("FIXTURE:{}", json!({"ok":true,"value":{"grabbed":true}}));
+    io::stdout().flush()?;
+    for line in io::stdin().lock().lines() {
+        let _ = line?;
+    }
+    Ok(())
 }

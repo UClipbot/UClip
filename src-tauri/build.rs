@@ -10,6 +10,12 @@ fn main() {
             "update_capture_policy",
             "copy_clip",
             "change_clip_deletion",
+            "desktop_status",
+            "update_desktop_preferences",
+            "set_autostart",
+            "set_desktop_interaction",
+            "hide_main_window",
+            "quit_app",
         ]),
     ))
     .expect("failed to build desktop configuration");

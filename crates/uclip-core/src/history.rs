@@ -230,6 +230,7 @@ impl Storage {
         Ok(Some(id))
     }
     pub fn history(&self, query: HistoryQuery) -> Result<HistoryPage, AppError> {
+        let started = std::time::Instant::now();
         let revision = self.history_revision()?;
         if query
             .expected_revision
@@ -247,6 +248,9 @@ impl Storage {
         let mut total = 0;
         let mut items = vec![];
         while let Some(row) = rows.next()? {
+            if started.elapsed() > std::time::Duration::from_secs(2) {
+                return Err(AppError::new(ErrorCode::QueryTimeout));
+            }
             let kind = parse_kind(&row.get::<_, String>(1)?)?;
             if query.kind.is_some_and(|k| k != kind) {
                 continue;

@@ -77,7 +77,15 @@ export function useHistory(
     let active = true;
     setPending(true);
     setError('');
+    let deadline: ReturnType<typeof setTimeout>;
     const timer = setTimeout(() => {
+      deadline = setTimeout(() => {
+        if (!active) return;
+        active = false;
+        setSettledKey(requestKey);
+        setError(safeError({ code: 'query_timeout' }).message);
+        setPending(false);
+      }, 5000);
       invoke<HistoryPage>('history_query', {
         request: {
           query,
@@ -89,6 +97,7 @@ export function useHistory(
         },
       }).then(
         (value) => {
+          clearTimeout(deadline);
           if (active) {
             setSettledKey(requestKey);
             if (!value.items.length && offset > 0) {
@@ -100,6 +109,7 @@ export function useHistory(
           }
         },
         (failure) => {
+          clearTimeout(deadline);
           if (!active) return;
           if (safeError(failure).code === 'conflict' && offset) {
             setOffset(0);
@@ -115,6 +125,7 @@ export function useHistory(
     return () => {
       active = false;
       clearTimeout(timer);
+      clearTimeout(deadline);
     };
   }, [native, query, regex, type, offset, historyRevision, refresh, requestKey]);
   useEffect(() => {
@@ -240,5 +251,6 @@ export function useHistory(
     mutating,
     copy,
     refresh,
+    retryQuery: () => setQueryEpoch((epoch) => epoch + 1),
   };
 }

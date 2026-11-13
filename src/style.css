@@ -836,3 +836,10 @@ kbd {
 .history-scroll[aria-busy='true'] .clip-row {
   opacity: 0.55;
 }
+
+.clip-excerpt mark {
+  color: inherit;
+  background: var(--hover);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

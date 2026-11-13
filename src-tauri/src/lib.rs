@@ -1,11 +1,15 @@
+mod autostart;
 pub mod clipboard;
 mod clipboard_watch;
 #[cfg(target_os = "linux")]
 mod clipboard_x11;
 mod commands;
+mod desktop;
 mod paste;
 mod paths;
 mod platform;
+#[cfg(target_os = "linux")]
+mod window_activation;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -34,20 +38,18 @@ fn local_navigation(url: &url::Url) -> bool {
 }
 
 pub fn run() {
-    let app = tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         // Upstream requires single-instance to be registered before every other plugin.
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(window) = app.get_webview_window("main") {
-                if window
-                    .show()
-                    .and_then(|_| window.unminimize())
-                    .and_then(|_| window.set_focus())
-                    .is_err()
-                {
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if desktop::show(&app, false).is_err() {
                     eprintln!("desktop_focus_failed");
                 }
-            }
+            });
         }))
+        .manage(desktop::DesktopState::default())
+        .on_window_event(desktop::window_event)
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::get_settings,
@@ -58,6 +60,12 @@ pub fn run() {
             commands::update_capture_policy,
             commands::copy_clip,
             commands::change_clip_deletion,
+            commands::desktop_status,
+            commands::update_desktop_preferences,
+            commands::set_autostart,
+            commands::set_desktop_interaction,
+            commands::hide_main_window,
+            commands::quit_app,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -92,6 +100,23 @@ pub fn run() {
                     }
                     Err(error) => Err(error.clone()),
                 };
+                if let Ok(core) = &startup {
+                    if let Ok(preferences) = core.desktop_preferences().await {
+                        handle
+                            .state::<desktop::DesktopState>()
+                            .cache(preferences.clone());
+                        let app = handle.clone();
+                        let registered = tauri::async_runtime::spawn_blocking(move || {
+                            desktop::register_shortcut(&app, &preferences.shortcut)
+                        })
+                        .await
+                        .is_ok_and(|r| r.is_ok());
+                        handle
+                            .state::<desktop::DesktopState>()
+                            .shortcut_available
+                            .store(registered, Ordering::SeqCst);
+                    }
+                }
                 handle.manage(AppState {
                     core: startup,
                     clipboard,
@@ -107,13 +132,33 @@ pub fn run() {
                 .min_inner_size(480.0, 390.0)
                 .on_navigation(local_navigation)
                 .build();
+                if result.is_ok() {
+                    let _ = desktop::restore(&handle).await;
+                    let _ = desktop::install_tray(&handle);
+                }
                 if result.is_err() {
                     eprintln!("desktop_window_creation_failed");
                     handle.exit(1);
                 }
             });
             Ok(())
-        })
+        });
+    #[cfg(not(target_os = "linux"))]
+    {
+        builder = builder.plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name(if cfg!(debug_assertions) {
+                    "UClip Development"
+                } else {
+                    "UClip"
+                })
+                .build(),
+        );
+    }
+    if !desktop::wayland() {
+        builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+    }
+    let app = builder
         .build(tauri::generate_context!())
         .expect("failed to initialize desktop runtime");
 
@@ -122,34 +167,39 @@ pub fn run() {
             // app.exit() is the explicit final exit; ordinary window closure drains storage first.
             if code.is_none() {
                 api.prevent_exit();
-                if !EXIT_STARTED.swap(true, Ordering::SeqCst) {
-                    let app = handle.clone();
-                    let core = handle
-                        .try_state::<AppState>()
-                        .and_then(|state| state.core.as_ref().ok().cloned());
-                    tauri::async_runtime::spawn(async move {
-                        let clipboard = app
-                            .try_state::<AppState>()
-                            .and_then(|state| state.clipboard.as_ref().ok().cloned());
-                        let clip_failed = if let Some(clipboard) = clipboard {
-                            clipboard.stop().await.is_err()
-                        } else {
-                            false
-                        };
-                        let core_failed = if let Some(core) = core {
-                            core.shutdown().await.is_err()
-                        } else {
-                            false
-                        };
-                        let failed = clip_failed || core_failed;
-                        if failed {
-                            eprintln!("storage_shutdown_failed");
-                        }
-                        app.exit(if failed { 1 } else { 0 });
-                    });
-                }
+                shutdown(handle.clone());
             }
         }
+    });
+}
+
+/// All exit paths drain the native actor before closing the storage worker.
+pub(crate) fn shutdown(app: tauri::AppHandle) {
+    if EXIT_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let _ = desktop::save_placement(&app).await;
+        let clipboard = app
+            .try_state::<AppState>()
+            .and_then(|s| s.clipboard.as_ref().ok().cloned());
+        let core = app
+            .try_state::<AppState>()
+            .and_then(|s| s.core.as_ref().ok().cloned());
+        let clip_failed = if let Some(c) = clipboard {
+            c.stop().await.is_err()
+        } else {
+            false
+        };
+        let core_failed = if let Some(c) = core {
+            c.shutdown().await.is_err()
+        } else {
+            false
+        };
+        if clip_failed || core_failed {
+            eprintln!("storage_shutdown_failed");
+        }
+        app.exit(if clip_failed || core_failed { 1 } else { 0 });
     });
 }
 

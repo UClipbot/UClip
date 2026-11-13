@@ -15,6 +15,12 @@
     "allow-clipboard-status",
     "allow-update-capture-policy",
     "allow-copy-clip",
-    "allow-change-clip-deletion"
+    "allow-change-clip-deletion",
+    "allow-desktop-status",
+    "allow-update-desktop-preferences",
+    "allow-set-autostart",
+    "allow-set-desktop-interaction",
+    "allow-hide-main-window",
+    "allow-quit-app"
   ]
 }

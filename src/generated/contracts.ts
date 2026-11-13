@@ -42,7 +42,7 @@ revision: string, };
 
 export type UpdateSettings = { theme: Theme, expectedRevision: string, };
 
-export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict";
+export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout";
 
 export type AppError = { code: ErrorCode, message: string, };
 

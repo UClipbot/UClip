@@ -26,10 +26,8 @@ pub fn report() -> PlatformReport {
                 "clipboard_capture",
                 if wayland_hint {
                     State::Restricted
-                } else if cfg!(target_os = "linux") {
-                    State::Unverified
                 } else {
-                    State::NotImplemented
+                    State::Unverified
                 },
                 "已实现文本、图片、文件引用适配；运行状态见采集设置，目标平台需原生验收。",
             ),
@@ -37,10 +35,8 @@ pub fn report() -> PlatformReport {
                 "clipboard_write",
                 if wayland_hint {
                     State::Restricted
-                } else if cfg!(target_os = "linux") {
-                    State::Unverified
                 } else {
-                    State::NotImplemented
+                    State::Unverified
                 },
                 "已实现系统写回；完成 OS 写入才报告成功，文件失效整批拒绝。",
             ),
@@ -48,15 +44,13 @@ pub fn report() -> PlatformReport {
                 "global_shortcut",
                 if wayland_hint {
                     State::Restricted
-                } else if cfg!(target_os = "linux") {
-                    State::Unverified
                 } else {
-                    State::NotImplemented
+                    State::Unverified
                 },
                 if wayland_hint {
                     "检测到 Wayland 会话线索；上游全局快捷键支持受限，尚未接入 portal。"
                 } else {
-                    "Linux X11 提供 Ctrl+Shift+V；冲突会禁用，其他平台尚未接入。"
+                    "默认 Ctrl/Cmd+Shift+V，可在桌面设置修改；冲突保持原设置，实际注册状态见桌面设置。"
                 },
             ),
             capability(
@@ -76,8 +70,8 @@ pub fn report() -> PlatformReport {
             ),
             capability(
                 "tray",
-                State::NotImplemented,
-                "尚未接入托盘；当前关闭窗口会退出应用。",
+                State::Unverified,
+                "已接入托盘显示/退出菜单；Linux 托盘宿主是否可见需单独验证。无可靠恢复入口时关闭仍退出。",
             ),
             capability(
                 "sync",

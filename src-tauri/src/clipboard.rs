@@ -273,6 +273,9 @@ impl ClipboardService {
         self.submit(Request::Policy(request, tx))?;
         rx.await.map_err(|_| error())?
     }
+    pub fn capture_target(&self) {
+        self.paste.capture_target();
+    }
     pub async fn copy(&self, id: String, paste: bool) -> Result<CopyResult, AppError> {
         let (tx, rx) = oneshot::channel();
         self.submit(Request::Copy(id, paste, tx))?;
