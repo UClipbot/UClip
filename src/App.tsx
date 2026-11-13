@@ -19,10 +19,12 @@ import { DEFAULT_KEYS, matchesKey, formatKey } from './platform/keyboard';
 import { useDesktop } from './platform/useDesktop';
 import { safeError } from './platform/client';
 import { useAppearance } from './platform/useAppearance';
-import type { Theme } from './generated/contracts';
+import type { Theme, CollectionItem, TransferMode } from './generated/contracts';
 
 type Toast = { message: string; undo?: () => void };
 type Menu = { anchor: HTMLElement; clipId?: string };
+type AppView = View | `collection:${string}`;
+type AppModal = 'settings' | 'new' | 'shortcuts' | 'deduplicate' | 'collection' | 'transfer';
 const viewTitles: Record<View, string> = {
   all: '全部记录',
   pinned: '已置顶',
@@ -48,7 +50,7 @@ const capabilityNames: Record<string, string> = {
 export function App() {
   const appearance = useAppearance();
   const [clips, setClips] = useState<Clip[]>(() => initialClips.map((clip) => ({ ...clip })));
-  const [view, setView] = useState<View>('all');
+  const [view, setView] = useState<AppView>('all');
   const [type, setType] = useState<ClipType | 'all'>('all');
   const [query, setQuery] = useState('');
   const [regex, setRegex] = useState(false);
@@ -57,7 +59,13 @@ export function App() {
   const [selectedId, setSelectedId] = useState('note-1');
   const [preview, setPreview] = useState<{ id: string; focus: HTMLElement | null } | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
-  const [modal, setModal] = useState<'settings' | 'new' | 'shortcuts' | 'deduplicate' | null>(null);
+  const [modal, setModal] = useState<AppModal | null>(null);
+  const [collectionName, setCollectionName] = useState('');
+  const [editingCollection, setEditingCollection] = useState<CollectionItem | null>(null);
+  const [collectionError, setCollectionError] = useState('');
+  const [transfer, setTransfer] = useState<{ clip: Clip; mode: TransferMode } | null>(null);
+  const [transferTarget, setTransferTarget] = useState('');
+  const [transferError, setTransferError] = useState('');
   const [dedupRevision, setDedupRevision] = useState('');
   const [dedupError, setDedupError] = useState('');
   const [toast, setToast] = useState<Toast | null>(null);
@@ -72,10 +80,21 @@ export function App() {
   const modalFocus = useRef<HTMLElement | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const live = useHistory(appearance.native, query, regex, type, view === 'pinned', preview?.id);
+  const nativeCollectionId =
+    appearance.native && view.startsWith('collection:') ? view.slice(11) : null;
+  const live = useHistory(
+    appearance.native,
+    query,
+    regex,
+    type,
+    view === 'pinned',
+    nativeCollectionId,
+    preview?.id,
+  );
+  const currentCollection = live.collections.find((item) => item.id === nativeCollectionId);
   const demoResult = useClipQuery(
     clips,
-    view,
+    appearance.native ? 'all' : (view as View),
     type,
     appearance.native ? '' : query,
     !appearance.native && regex,
@@ -284,10 +303,76 @@ export function App() {
       (previous?.isConnected ? previous : search.current)?.focus({ preventScroll: true });
     });
   }
-  function openModal(next: 'settings' | 'new' | 'shortcuts' | 'deduplicate') {
+  function openModal(next: AppModal) {
     modalFocus.current = menu?.anchor ?? (document.activeElement as HTMLElement);
     setMenu(null);
     setModal(next);
+  }
+  function openCollectionEditor(collection: CollectionItem | null) {
+    setEditingCollection(collection);
+    setCollectionName(collection?.name ?? '');
+    setCollectionError('');
+    openModal('collection');
+  }
+  async function saveCollection(event: FormEvent) {
+    event.preventDefault();
+    if (live.mutating) return;
+    setCollectionError('');
+    try {
+      const saved = editingCollection
+        ? await live.renameCollection({
+            id: editingCollection.id,
+            expectedRevision: editingCollection.revision,
+            name: collectionName,
+          })
+        : await live.createCollection(collectionName);
+      if (!editingCollection) {
+        setView(`collection:${saved.id}`);
+        setQuery('');
+        setType('all');
+        setRegex(false);
+      }
+      closeModal();
+      setToast({ message: editingCollection ? '分类已重命名' : '分类已创建' });
+    } catch (error) {
+      setCollectionError(safeError(error).message);
+    }
+  }
+  function openTransfer(clip: Clip, mode: TransferMode) {
+    setTransfer({ clip, mode });
+    setTransferTarget(live.collections.find((item) => item.id !== clip.collectionId)?.id ?? '');
+    setTransferError('');
+    openModal('transfer');
+  }
+  async function saveTransfer(event: FormEvent) {
+    event.preventDefault();
+    if (!transfer?.clip.revision || live.mutating) return;
+    setTransferError('');
+    try {
+      const result = await live.transferClip({
+        id: transfer.clip.id,
+        expectedRevision: transfer.clip.revision,
+        collectionId: transferTarget || null,
+        mode: transfer.mode,
+      });
+      setSelectedId(result.id);
+      setView(transferTarget ? `collection:${transferTarget}` : 'all');
+      setQuery('');
+      setType('all');
+      setRegex(false);
+      setPreview(null);
+      closeModal();
+      setToast({
+        message:
+          transfer.mode === 'copy'
+            ? '已复制到分类'
+            : transferTarget
+              ? '已移动到分类'
+              : '已移出分类',
+      });
+    } catch (error) {
+      setTransferError(safeError(error).message);
+    }
   }
   function clearFilters() {
     setView('all');
@@ -396,9 +481,12 @@ export function App() {
     if (appearance.native) {
       void (async () => {
         try {
-          const id = await live.createText(newContent);
+          const id = await live.createText(newContent, nativeCollectionId);
           setSelectedId(id);
-          clearFilters();
+          if (!nativeCollectionId) setView('all');
+          setQuery('');
+          setType('all');
+          setRegex(false);
           setNewContent('');
           closeModal();
           setToast({ message: '文本已保存' });
@@ -520,16 +608,23 @@ export function App() {
               <select
                 aria-label="历史范围"
                 value={view}
-                onChange={(event) => setView(event.target.value as View)}
+                onChange={(event) => setView(event.target.value as AppView)}
               >
-                {Object.entries(viewTitles).map(([key, label]) => (
-                  <option
-                    key={key}
-                    value={key}
-                    disabled={appearance.native && key !== 'all' && key !== 'pinned'}
-                  >
+                {Object.entries(
+                  appearance.native
+                    ? {
+                        all: '全部记录',
+                        pinned: '已置顶',
+                        ...Object.fromEntries(
+                          live.collections.map((item) => [`collection:${item.id}`, item.name]),
+                        ),
+                        trash: '回收站',
+                      }
+                    : viewTitles,
+                ).map(([key, label]) => (
+                  <option key={key} value={key} disabled={appearance.native && key === 'trash'}>
                     {label}
-                    {appearance.native && key !== 'all' && key !== 'pinned' ? '（待接入）' : ''}
+                    {appearance.native && key === 'trash' ? '（待接入）' : ''}
                   </option>
                 ))}
               </select>
@@ -657,6 +752,7 @@ export function App() {
                   <article
                     key={clip.id}
                     data-clip-id={clip.id}
+                    data-clip-revision={clip.revision}
                     className={`clip-row ${selected?.id === clip.id ? 'selected' : ''} ${clip.type === 'image' ? 'image-row' : ''}`}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -702,6 +798,15 @@ export function App() {
                           {clip.source}
                           <span>·</span>
                           {clip.time}
+                          {clip.collectionId && (
+                            <>
+                              <span>·</span>
+                              <span className="clip-collection">
+                                {live.collections.find((item) => item.id === clip.collectionId)
+                                  ?.name ?? '分类不可用'}
+                              </span>
+                            </>
+                          )}
                           {clip.pinned && (
                             <>
                               <Icon name="pin" size={12} />
@@ -741,6 +846,12 @@ export function App() {
               onCopy={() => void copyClip(previewClip)}
               onPin={() => void togglePin(previewClip)}
               pinDisabled={!ready || live.mutating}
+              collectionName={
+                previewClip.collectionId
+                  ? (live.collections.find((item) => item.id === previewClip.collectionId)?.name ??
+                    '分类不可用')
+                  : undefined
+              }
               error={appearance.native ? live.detailError : undefined}
               onMore={(anchor) => openMenu(anchor, previewClip)}
             />
@@ -813,7 +924,6 @@ export function App() {
                   粘贴到原应用
                 </button>
               )}
-              {appearance.native && <p className="menu-label">分类待接入</p>}
               <button role="menuitem" onClick={() => menuAction(() => openPreview(menuClip))}>
                 <Icon name="text" size={15} />
                 查看完整内容
@@ -827,6 +937,28 @@ export function App() {
                 <Icon name="pin" size={15} />
                 {menuClip.pinned ? '取消置顶' : '置顶'}
               </button>
+              {appearance.native && (
+                <>
+                  <button
+                    role="menuitem"
+                    disabled={!ready || live.mutating}
+                    data-testid="move-to-collection"
+                    onClick={() => menuAction(() => openTransfer(menuClip, 'move'))}
+                  >
+                    <Icon name="folder" size={15} />
+                    移动到分类…
+                  </button>
+                  <button
+                    role="menuitem"
+                    disabled={!ready || live.mutating || !live.collections.length}
+                    data-testid="copy-to-collection"
+                    onClick={() => menuAction(() => openTransfer(menuClip, 'copy'))}
+                  >
+                    <Icon name="copy" size={15} />
+                    复制到分类…
+                  </button>
+                </>
+              )}
               {!appearance.native && !menuClip.deleted && (
                 <>
                   <div className="menu-separator" />
@@ -870,6 +1002,30 @@ export function App() {
                 <Icon name="plus" size={15} />
                 {appearance.native ? '新建文本' : '新建示例'}
               </button>
+              {appearance.native && (
+                <>
+                  <button
+                    role="menuitem"
+                    data-testid="new-collection"
+                    disabled={live.mutating}
+                    onClick={() => menuAction(() => openCollectionEditor(null))}
+                  >
+                    <Icon name="folder" size={15} />
+                    新建分类
+                  </button>
+                  {currentCollection && (
+                    <button
+                      role="menuitem"
+                      data-testid="rename-collection"
+                      disabled={live.mutating}
+                      onClick={() => menuAction(() => openCollectionEditor(currentCollection))}
+                    >
+                      <Icon name="folder" size={15} />
+                      重命名当前分类
+                    </button>
+                  )}
+                </>
+              )}
               <button role="menuitem" onClick={() => menuAction(() => setGrid(!grid))}>
                 <Icon name={grid ? 'list' : 'grid'} size={15} />
                 {grid ? '切换列表视图' : '切换网格视图'}
@@ -932,6 +1088,116 @@ export function App() {
             <Icon name="close" size={14} />
           </button>
         </div>
+      )}
+      {modal === 'collection' && (
+        <Modal
+          title={editingCollection ? '重命名分类' : '新建分类'}
+          onClose={() => {
+            if (!live.mutating) closeModal();
+          }}
+          description="名称最多 64 个字符，同名分类不可重复创建。"
+        >
+          <form className="new-form" onSubmit={saveCollection}>
+            <label htmlFor="collection-name">分类名称</label>
+            <input
+              id="collection-name"
+              data-autofocus
+              value={collectionName}
+              onChange={(event) => setCollectionName(event.target.value)}
+              maxLength={128}
+              required
+            />
+            {collectionError && (
+              <p role="alert" className="settings-feedback">
+                {collectionError}
+              </p>
+            )}
+            <div className="form-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={live.mutating}
+                onClick={closeModal}
+              >
+                取消
+              </button>
+              <button
+                className="primary-button"
+                disabled={
+                  live.mutating ||
+                  !collectionName.trim() ||
+                  collectionName.trim() === editingCollection?.name
+                }
+              >
+                保存分类
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {modal === 'transfer' && transfer && (
+        <Modal
+          title={transfer.mode === 'copy' ? '复制到分类' : '移动到分类'}
+          onClose={() => {
+            if (!live.mutating) closeModal();
+          }}
+          description={
+            transfer.mode === 'copy'
+              ? '保留原记录，在目标分类创建独立副本，副本默认不置顶。'
+              : '保留记录身份和置顶状态，更改所属分类。'
+          }
+        >
+          <form className="new-form" onSubmit={saveTransfer}>
+            <label htmlFor="transfer-collection">目标分类</label>
+            <select
+              id="transfer-collection"
+              data-autofocus
+              value={transferTarget}
+              onChange={(event) => setTransferTarget(event.target.value)}
+            >
+              {transfer.mode === 'move' && <option value="">未分类</option>}
+              {transfer.mode === 'copy' && !transferTarget && (
+                <option value="" disabled>
+                  选择分类
+                </option>
+              )}
+              {live.collections.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            {!live.collections.length && (
+              <p className="settings-feedback">可在更多选项中先新建分类。</p>
+            )}
+            {transferError && (
+              <p role="alert" className="settings-feedback">
+                {transferError}
+              </p>
+            )}
+            <div className="form-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={live.mutating}
+                onClick={closeModal}
+              >
+                取消
+              </button>
+              <button
+                className="primary-button"
+                disabled={
+                  live.mutating ||
+                  (transfer.mode === 'copy'
+                    ? !transferTarget
+                    : (transfer.clip.collectionId ?? '') === transferTarget)
+                }
+              >
+                {transfer.mode === 'copy' ? '复制记录' : '移动记录'}
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
       {modal === 'deduplicate' && (
         <Modal

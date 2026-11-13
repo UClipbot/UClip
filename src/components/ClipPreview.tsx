@@ -10,10 +10,12 @@ export function ClipPreview({
   onMore,
   error,
   pinDisabled = false,
+  collectionName,
 }: {
   clip: Clip;
   error?: string;
   pinDisabled?: boolean;
+  collectionName?: string;
   onBack: () => void;
   onCopy: () => void;
   onPin: () => void;
@@ -56,7 +58,11 @@ export function ClipPreview({
         )}
         <p className="record-context">
           {clip.source} · {clip.day} {clip.time}
-          {clip.collection ? ` · ${collectionNames[clip.collection]}` : ''}
+          {collectionName
+            ? ` · ${collectionName}`
+            : clip.collection
+              ? ` · ${collectionNames[clip.collection]}`
+              : ''}
         </p>
         {clip.type === 'file' && <h2 className="record-title">{clip.title}</h2>}
         {clip.type === 'image' ? (

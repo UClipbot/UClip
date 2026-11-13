@@ -339,13 +339,68 @@ pub async fn quit_app(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-pub async fn create_text(state: State<'_, AppState>, text: String) -> Result<String, AppError> {
+pub async fn create_text(
+    state: State<'_, AppState>,
+    text: String,
+    collection_id: Option<String>,
+) -> Result<String, AppError> {
     uclip_core::ClipPayload::Text(text.clone()).validate()?;
     state
         .core
         .as_ref()
         .map_err(Clone::clone)?
-        .create_text(text)
+        .create_text_in_collection(text, collection_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn collections_list(
+    state: State<'_, AppState>,
+) -> Result<uclip_core::CollectionsSnapshot, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .collections()
+        .await
+}
+
+#[tauri::command]
+pub async fn create_collection(
+    state: State<'_, AppState>,
+    request: uclip_core::CreateCollection,
+) -> Result<uclip_core::CollectionItem, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .create_collection(request)
+        .await
+}
+
+#[tauri::command]
+pub async fn rename_collection(
+    state: State<'_, AppState>,
+    request: uclip_core::RenameCollection,
+) -> Result<uclip_core::CollectionItem, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .rename_collection(request)
+        .await
+}
+
+#[tauri::command]
+pub async fn transfer_clip(
+    state: State<'_, AppState>,
+    request: uclip_core::TransferClip,
+) -> Result<uclip_core::ClipTransferSnapshot, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .transfer_clip(request)
         .await
 }
 

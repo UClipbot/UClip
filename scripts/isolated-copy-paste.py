@@ -16,11 +16,14 @@ def stop(process):
         except subprocess.TimeoutExpired: process.kill(); process.wait()
 
 def main():
+    mode = next((flag for flag in ['--collections-only','--pinned-only','--manual-only','--paste-performance','--wake-only','--startup-performance'] if flag in sys.argv), None)
     if '--inside' in sys.argv:
         wm = subprocess.Popen(['muffin', '--sm-disable'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             time.sleep(0.8)
-            test_args=['--pinned-only','--screenshots','docs/previews/pinned'] if '--pinned-only' in sys.argv else ['--manual-only'] if '--manual-only' in sys.argv else ['--paste-performance'] if '--paste-performance' in sys.argv else ['--wake-only'] if '--wake-only' in sys.argv else ['--startup-performance'] if '--startup-performance' in sys.argv else ['--clipboard-fixtures','--screenshots','docs/previews/copy-paste']
+            test_args = [mode] if mode else ['--clipboard-fixtures','--screenshots','docs/previews/copy-paste']
+            if mode in ['--collections-only','--pinned-only']:
+                test_args += ['--screenshots', 'docs/previews/collections' if mode=='--collections-only' else 'docs/previews/pinned']
             env = os.environ.copy()
             env['UCLIP_FIXTURE_WM_PID'] = str(wm.pid)
             return subprocess.call(['/usr/bin/python3', 'scripts/native-smoke.py',*test_args], env=env)
@@ -48,6 +51,6 @@ def main():
                     time.sleep(0.1)
                 else: raise RuntimeError('nested display timeout')
                 print('Isolated native display ready; only synthetic clipboard contents are used.', flush=True)
-                return subprocess.call(['dbus-run-session', '--', '/usr/bin/python3', __file__, '--inside',*(['--pinned-only'] if '--pinned-only' in sys.argv else ['--manual-only'] if '--manual-only' in sys.argv else ['--paste-performance'] if '--paste-performance' in sys.argv else ['--wake-only'] if '--wake-only' in sys.argv else ['--startup-performance'] if '--startup-performance' in sys.argv else [])], env=env)
+                return subprocess.call(['dbus-run-session', '--', '/usr/bin/python3', __file__, '--inside',*([mode] if mode else [])], env=env)
             finally: stop(server)
 if __name__ == '__main__': sys.exit(main())

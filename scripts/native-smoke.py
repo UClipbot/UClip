@@ -44,6 +44,7 @@ def main():
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
     parser.add_argument('--manual-only',action='store_true',help='Isolated real manual text creation.')
     parser.add_argument('--pinned-only',action='store_true',help='Isolated pin, pinned page and explicit deduplication checks.')
+    parser.add_argument('--collections-only',action='store_true',help='Isolated real collection forms, transfers, query scopes and persistence.')
     parser.add_argument('--paste-performance',action='store_true',help='Twenty actual automatic paste receives per payload type.')
     parser.add_argument('--wake-only',action='store_true',help='Twenty isolated shortcut hide/wake cycles.')
     parser.add_argument('--startup-performance',action='store_true',help='Ten disposable process launches, no clipboard fixtures.')
@@ -136,6 +137,22 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.collections_only:
+                    from clipboard_native_check import ClipboardChecks
+                    from collections_native_check import run, verify_restart
+                    clipboard_checks=ClipboardChecks(invoke,execute,click,enter,env,directory,log)
+                    run(clipboard_checks,capture)
+                    for abrupt in [False,True]:
+                        if abrupt:os.kill(owned_processes()[0][0],signal.SIGKILL)
+                        else:invoke('quit_app')
+                        wait_for(lambda:not owned_processes(),'collection process termination')
+                        try:request('DELETE',f'/session/{session}')
+                        except (RuntimeError,OSError):pass
+                        session=start()
+                        wait_for(lambda:execute('return !!document.querySelector("#history-search")'),'collections restart')
+                        verify_restart(clipboard_checks)
+                    print('PASS: collections, membership and independent copies survive normal exit and SIGKILL/WAL recovery',flush=True)
+                    return
                 if args.pinned_only:
                     from clipboard_native_check import ClipboardChecks
                     from pinned_native_check import run, verify_restart

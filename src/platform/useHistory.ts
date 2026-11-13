@@ -11,6 +11,11 @@ import type {
   ClipDetail,
   CopyResult,
   HistoryPage,
+  CollectionItem,
+  CollectionsSnapshot,
+  RenameCollection,
+  TransferClip,
+  ClipTransferSnapshot,
   UpdateCapturePolicy,
 } from '../generated/contracts';
 import type { Clip, ClipType } from '../demo/clips';
@@ -21,10 +26,12 @@ export function useHistory(
   regex: boolean,
   type: ClipType | 'all',
   pinnedOnly: boolean,
+  collectionId: string | null,
   previewId?: string,
 ) {
   const [status, setStatus] = useState<ClipboardStatus | null>(null);
   const [page, setPage] = useState<HistoryPage | null>(null);
+  const [collections, setCollections] = useState<CollectionsSnapshot | null>(null);
   const [offset, setOffset] = useState(0);
   const [queryEpoch, setQueryEpoch] = useState(0);
   const [loading, setPending] = useState(native);
@@ -38,12 +45,14 @@ export function useHistory(
   const mutation = useRef(false);
   const mounted = useRef(true);
   const cache = useRef(new Map<string, string>());
+  const pageRevision = useRef<string | null>(null);
   const historyRevision = status?.historyRevision;
   const requestKey = JSON.stringify([
     query,
     regex,
     type,
     pinnedOnly,
+    collectionId,
     offset,
     historyRevision,
     queryEpoch,
@@ -54,9 +63,13 @@ export function useHistory(
     if (!native || mutation.current) return;
     const generation = ++statusGeneration.current;
     try {
-      const next = await invoke<ClipboardStatus>('clipboard_status');
+      const [next, categories] = await Promise.all([
+        invoke<ClipboardStatus>('clipboard_status'),
+        invoke<CollectionsSnapshot>('collections_list'),
+      ]);
       if (mounted.current && generation === statusGeneration.current) {
         setStatus(next);
+        setCollections(categories);
         setStatusError('');
       }
     } catch (error) {
@@ -83,7 +96,7 @@ export function useHistory(
   }, [native, refresh]);
   useEffect(() => {
     setOffset(0);
-  }, [query, regex, type, pinnedOnly]);
+  }, [query, regex, type, pinnedOnly, collectionId]);
   useEffect(() => {
     if (!native) return;
     let active = true;
@@ -103,10 +116,11 @@ export function useHistory(
           query,
           regex,
           pinnedOnly,
+          collectionId,
           kind:
             type === 'all' ? null : type === 'image' ? 'image' : type === 'file' ? 'files' : 'text',
           offset,
-          expectedRevision: offset ? (historyRevision ?? null) : null,
+          expectedRevision: offset ? pageRevision.current : null,
         },
       }).then(
         (value) => {
@@ -117,6 +131,7 @@ export function useHistory(
               setOffset(Math.max(0, offset - 25));
               return;
             }
+            pageRevision.current = value.revision;
             setPage(value);
             setPending(false);
           }
@@ -140,7 +155,18 @@ export function useHistory(
       clearTimeout(timer);
       clearTimeout(deadline);
     };
-  }, [native, query, regex, type, pinnedOnly, offset, historyRevision, refresh, requestKey]);
+  }, [
+    native,
+    query,
+    regex,
+    type,
+    pinnedOnly,
+    collectionId,
+    offset,
+    historyRevision,
+    refresh,
+    requestKey,
+  ]);
   useEffect(() => {
     if (!native || !previewId) {
       setDetail(null);
@@ -199,13 +225,13 @@ export function useHistory(
       await refresh();
     }
   }
-  async function createText(text: string) {
+  async function createText(text: string, collectionId: string | null = null) {
     if (mutation.current) throw safeError({ code: 'busy' });
     mutation.current = true;
     setMutating(true);
     statusGeneration.current++;
     try {
-      return await invoke<string>('create_text', { text });
+      return await invoke<string>('create_text', { text, collectionId });
     } finally {
       mutation.current = false;
       if (mounted.current) {
@@ -273,6 +299,7 @@ export function useHistory(
         : '昨天',
     pinned: item.pinned,
     collection: null,
+    collectionId: item.collectionId ?? undefined,
     size:
       item.kind === 'image'
         ? `${item.width} × ${item.height}`
@@ -283,6 +310,7 @@ export function useHistory(
   }));
   return {
     status,
+    collections: collections?.items ?? [],
     items,
     pending,
     error,
@@ -295,6 +323,12 @@ export function useHistory(
     setOffset,
     updatePolicy,
     changeDeletion,
+    createCollection: (name: string) =>
+      mutateHistory<CollectionItem>('create_collection', { name }),
+    renameCollection: (request: RenameCollection) =>
+      mutateHistory<CollectionItem>('rename_collection', request),
+    transferClip: (request: TransferClip) =>
+      mutateHistory<ClipTransferSnapshot>('transfer_clip', request),
     changePin: (request: ChangeClipPin) =>
       mutateHistory<ClipPinSnapshot>('change_clip_pin', request),
     deduplicatePinned: (expectedRevision: string) =>

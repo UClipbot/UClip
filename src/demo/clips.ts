@@ -16,6 +16,7 @@ export interface Clip {
   day: string;
   pinned: boolean;
   collection: Collection | null;
+  collectionId?: string;
   deleted?: boolean;
   image?: string;
   language?: string;

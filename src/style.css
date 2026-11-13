@@ -297,6 +297,12 @@ option {
   margin-left: 2px;
   color: var(--accent);
 }
+.clip-collection {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .row-thumbnail {
   width: 64px;
   height: 64px;

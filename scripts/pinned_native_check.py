@@ -12,10 +12,20 @@ def settled(c, count=None):
     return wait(lambda: c.execute('return document.querySelector(".history-scroll")?.getAttribute("aria-busy")==="false" && (!arguments[0] || document.querySelectorAll(".clip-row").length===arguments[1])', [count is not None, count]), 'effective native history page')
 
 
+def select_value(c, selector, value):
+    index=c.execute('return Array.from(document.querySelector(arguments[0]).options).findIndex(option=>option.value===arguments[1])',[selector,value])
+    assert index >= 0, (selector,value)
+    c.click(selector)
+    c.key('key','--clearmodifiers','Home')
+    for _ in range(index):c.key('key','--clearmodifiers','Down')
+    c.key('key','--clearmodifiers','Return')
+    wait(lambda:c.execute('return document.querySelector(arguments[0]).value===arguments[1]',[selector,value]),'native select value')
+
+
 def scope(c, value):
-    c.click(f'[aria-label="历史范围"] option[value="{value}"]')
-    wait(lambda: c.execute('return document.querySelector("[aria-label=历史范围]").value===arguments[0]', [value]), 'history scope')
+    select_value(c,'[aria-label="历史范围"]',value)
     settled(c)
+    assert c.execute('return document.querySelector("[aria-label=历史范围]").value===arguments[0]', [value])
 
 
 def pin_ui(c, clip_id):

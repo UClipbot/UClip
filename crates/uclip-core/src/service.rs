@@ -135,6 +135,35 @@ impl CoreService {
     pub async fn create_text(&self, text: String) -> Result<String, AppError> {
         self.operation(move |s| s.create_text(text)).await
     }
+    pub async fn create_text_in_collection(
+        &self,
+        text: String,
+        collection_id: Option<String>,
+    ) -> Result<String, AppError> {
+        self.operation(move |s| s.create_text_in_collection(text, collection_id))
+            .await
+    }
+    pub async fn collections(&self) -> Result<crate::CollectionsSnapshot, AppError> {
+        self.operation(|s| s.collections()).await
+    }
+    pub async fn create_collection(
+        &self,
+        request: crate::CreateCollection,
+    ) -> Result<crate::CollectionItem, AppError> {
+        self.operation(move |s| s.create_collection(request)).await
+    }
+    pub async fn rename_collection(
+        &self,
+        request: crate::RenameCollection,
+    ) -> Result<crate::CollectionItem, AppError> {
+        self.operation(move |s| s.rename_collection(request)).await
+    }
+    pub async fn transfer_clip(
+        &self,
+        request: crate::TransferClip,
+    ) -> Result<crate::ClipTransferSnapshot, AppError> {
+        self.operation(move |s| s.transfer_clip(request)).await
+    }
     pub async fn capture(&self, payload: crate::ClipPayload) -> Result<Option<String>, AppError> {
         self.operation(move |s| s.capture(payload)).await
     }

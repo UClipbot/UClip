@@ -7,6 +7,7 @@ fn query(pinned_only: bool) -> HistoryQuery {
         regex: false,
         kind: None,
         pinned_only,
+        collection_id: None,
         offset: 0,
         expected_revision: None,
     }

@@ -46,6 +46,7 @@ pub enum ErrorCode {
     ShortcutConflict,
     QueryTimeout,
     Excluded,
+    DuplicateName,
 }
 
 /// Safe across IPC. Never expose SQLite errors, paths, or user content.
@@ -75,6 +76,7 @@ impl AppError {
             ErrorCode::TargetLost => "原应用目标已变化，未自动粘贴。",
             ErrorCode::ShortcutConflict => "快捷键重复、被占用或属于系统保留组合，原设置保持不变。",
             ErrorCode::Excluded => "内容命中排除规则，未保存。",
+            ErrorCode::DuplicateName => "分类名称已存在，请使用其他名称。",
             ErrorCode::QueryTimeout => "搜索超时，请缩小范围或简化表达式。",
             ErrorCode::Unavailable => "本地服务不可用，请重启应用。",
         };
@@ -173,6 +175,7 @@ pub struct HistoryQuery {
     pub kind: Option<ClipKind>,
     #[serde(default)]
     pub pinned_only: bool,
+    pub collection_id: Option<String>,
     pub offset: u32,
     pub expected_revision: Option<String>,
 }
@@ -182,6 +185,7 @@ pub struct HistoryQuery {
 pub struct HistoryItem {
     pub manual: bool,
     pub pinned: bool,
+    pub collection_id: Option<String>,
     pub id: String,
     pub kind: ClipKind,
     pub preview: String,
@@ -276,6 +280,60 @@ pub struct DeduplicatePinned {
 pub struct DeduplicationSnapshot {
     pub removed: u32,
     pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionItem {
+    pub id: String,
+    pub name: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionsSnapshot {
+    pub items: Vec<CollectionItem>,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateCollection {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RenameCollection {
+    pub id: String,
+    pub name: String,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferMode {
+    Move,
+    Copy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransferClip {
+    pub id: String,
+    pub expected_revision: String,
+    pub collection_id: Option<String>,
+    pub mode: TransferMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipTransferSnapshot {
+    pub id: String,
+    pub revision: String,
+    pub collection_id: Option<String>,
+    pub mode: TransferMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

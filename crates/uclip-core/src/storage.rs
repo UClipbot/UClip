@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 const APPLICATION_ID: i64 = 0x434c4e58; // CLNX: never open the previous application's database.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -91,6 +91,25 @@ impl Storage {
             )?;
             tx.pragma_update(None, "user_version", 4)?;
         }
+        if version < 5 {
+            tx.execute_batch("CREATE TABLE collections(id TEXT PRIMARY KEY,name TEXT NOT NULL,name_key TEXT NOT NULL,deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),sequence INTEGER NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;
+            CREATE UNIQUE INDEX collection_names ON collections(name_key) WHERE deleted=0;
+            CREATE TABLE collection_changes(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,operation TEXT NOT NULL CHECK(operation IN ('upsert','delete','purge')),ordinal INTEGER NOT NULL) STRICT;
+            CREATE TRIGGER collections_change_insert AFTER INSERT ON collections BEGIN
+                INSERT INTO collection_changes VALUES(NEW.id,NEW.revision,CASE WHEN NEW.deleted=0 THEN 'upsert' ELSE 'delete' END,(SELECT revision+1 FROM history_meta WHERE singleton=1))
+                ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,operation=excluded.operation,ordinal=excluded.ordinal;
+            END;
+            CREATE TRIGGER collections_change_update AFTER UPDATE ON collections BEGIN
+                INSERT INTO collection_changes VALUES(NEW.id,NEW.revision,CASE WHEN NEW.deleted=0 THEN 'upsert' ELSE 'delete' END,(SELECT revision+1 FROM history_meta WHERE singleton=1))
+                ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,operation=excluded.operation,ordinal=excluded.ordinal;
+            END;
+            CREATE TRIGGER collections_change_delete AFTER DELETE ON collections BEGIN
+                INSERT INTO collection_changes VALUES(OLD.id,OLD.revision+1,'purge',(SELECT revision+1 FROM history_meta WHERE singleton=1))
+                ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,operation=excluded.operation,ordinal=excluded.ordinal;
+            END;
+            CREATE INDEX clips_collection_order ON clips(collection,deleted,pinned DESC,sequence DESC,id);")?;
+            tx.pragma_update(None, "user_version", 5)?;
+        }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -100,6 +119,14 @@ impl Storage {
         storage.history_revision()?;
         storage.desktop_preferences()?;
         storage.keyboard_bindings()?;
+        storage.collections()?;
+        storage
+            .connection
+            .prepare("SELECT id,revision,operation,ordinal FROM collection_changes LIMIT 0")?;
+        let collection_triggers: u32 = storage.connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN ('collections_change_insert','collections_change_update','collections_change_delete')", [], |r|r.get(0))?;
+        if collection_triggers != 3 {
+            return Err(AppError::new(ErrorCode::Storage));
+        }
         storage
             .connection
             .prepare("SELECT id,revision,operation,ordinal FROM clip_changes LIMIT 0")?;

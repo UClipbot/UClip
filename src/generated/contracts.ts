@@ -30,15 +30,29 @@ expectedRevision: string, };
 
 export type DeduplicationSnapshot = { removed: number, revision: string, };
 
+export type CollectionItem = { id: string, name: string, revision: string, };
+
+export type CollectionsSnapshot = { items: Array<CollectionItem>, revision: string, };
+
+export type CreateCollection = { name: string, };
+
+export type RenameCollection = { id: string, name: string, expectedRevision: string, };
+
+export type TransferMode = "move" | "copy";
+
+export type TransferClip = { id: string, expectedRevision: string, collectionId: string | null, mode: TransferMode, };
+
+export type ClipTransferSnapshot = { id: string, revision: string, collectionId: string | null, mode: TransferMode, };
+
 export type ClipKind = "text" | "image" | "files";
 
 export type CapturePolicy = { enabled: boolean, excludePattern: string, maxItems: number, revision: string, };
 
 export type UpdateCapturePolicy = { enabled: boolean, excludePattern: string, maxItems: number, expectedRevision: string, };
 
-export type HistoryQuery = { query: string, regex: boolean, kind: ClipKind | null, pinnedOnly: boolean, offset: number, expectedRevision: string | null, };
+export type HistoryQuery = { query: string, regex: boolean, kind: ClipKind | null, pinnedOnly: boolean, collectionId: string | null, offset: number, expectedRevision: string | null, };
 
-export type HistoryItem = { manual: boolean, pinned: boolean, id: string, kind: ClipKind, preview: string, capturedAt: string, lastUsedAt: string | null, width: number | null, height: number | null, fileCount: number, revision: string,
+export type HistoryItem = { manual: boolean, pinned: boolean, collectionId: string | null, id: string, kind: ClipKind, preview: string, capturedAt: string, lastUsedAt: string | null, width: number | null, height: number | null, fileCount: number, revision: string,
 /**
  * UTF-16 offsets into preview. Matching stays in the bounded Rust regex engine.
  */
@@ -62,7 +76,7 @@ revision: string, };
 
 export type UpdateSettings = { theme: Theme, expectedRevision: string, };
 
-export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout" | "excluded";
+export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout" | "excluded" | "duplicate_name";
 
 export type AppError = { code: ErrorCode, message: string, };
 

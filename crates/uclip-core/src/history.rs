@@ -96,7 +96,7 @@ pub fn pattern(value: &str, literal: bool) -> Result<Regex, AppError> {
     .build()
     .map_err(|_| AppError::new(ErrorCode::InvalidPattern))
 }
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -165,19 +165,29 @@ impl Storage {
         self.capture_policy()
     }
     pub fn capture(&mut self, payload: ClipPayload) -> Result<Option<String>, AppError> {
-        self.save_payload(payload, true)
+        self.save_payload(payload, true, None)
     }
     pub fn create_text(&mut self, text: String) -> Result<String, AppError> {
-        self.save_payload(ClipPayload::Text(text), false)?
+        self.create_text_in_collection(text, None)
+    }
+    pub fn create_text_in_collection(
+        &mut self,
+        text: String,
+        collection_id: Option<String>,
+    ) -> Result<String, AppError> {
+        self.save_payload(ClipPayload::Text(text), false, collection_id)?
             .ok_or_else(|| AppError::new(ErrorCode::Excluded))
     }
     fn save_payload(
         &mut self,
         payload: ClipPayload,
         captured: bool,
+        collection_id: Option<String>,
     ) -> Result<Option<String>, AppError> {
-        payload.validate()?;
         let policy = self.capture_policy()?;
+        if !validate_save_payload(&payload, &policy)? {
+            return Ok(None);
+        }
         if captured && !policy.enabled {
             return Ok(None);
         }
@@ -204,22 +214,14 @@ impl Storage {
                 files.len() as u32,
             ),
         };
-        if !policy.exclude_pattern.is_empty() {
-            let excluded = pattern(&policy.exclude_pattern, false)?;
-            let matches = match &payload {
-                ClipPayload::Text(value) => excluded.is_match(value),
-                ClipPayload::Files(paths) => paths.iter().any(|path| excluded.is_match(path)),
-                ClipPayload::Image { .. } => false,
-            };
-            if matches {
-                return Ok(None);
-            }
-        }
         let fingerprint = payload.fingerprint();
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         // Fingerprints are not identities. Only the unclassified, unpinned capture scope deduplicates.
+        if let Some(id) = &collection_id {
+            crate::collections::ensure_collection(&tx, id)?;
+        }
         let existing: Option<String> = if captured {
             tx.query_row("SELECT id FROM clips WHERE fingerprint=?1 AND origin='capture' AND pinned=0 AND deleted=0 AND collection IS NULL LIMIT 1", [&fingerprint], |r| r.get(0)).optional()?
         } else {
@@ -231,12 +233,9 @@ impl Storage {
             |r| r.get(0),
         )?;
         let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,captured_at,sequence,origin,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,0) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,sequence=excluded.sequence,revision=clips.revision+1", params![id,kind_name(kind),text,data,width,height,count,fingerprint,now(),sequence,if captured {"capture"} else {"manual"}])?;
+        tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,captured_at,sequence,origin,collection,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,sequence=excluded.sequence,revision=clips.revision+1", params![id,kind_name(kind),text,data,width,height,count,fingerprint,now(),sequence,if captured {"capture"} else {"manual"},collection_id])?;
         prune(&tx, policy.max_items, Some(&id))?;
-        let pending: u32 = tx.query_row("SELECT count(*) FROM clip_changes", [], |r| r.get(0))?;
-        if pending > 100_000 {
-            return Err(AppError::new(ErrorCode::LimitExceeded));
-        }
+        check_change_budget(&tx)?;
         tx.execute(
             "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
             [],
@@ -258,8 +257,11 @@ impl Storage {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
         let matcher = pattern(&query.query, !query.regex)?;
-        let mut statement = self.connection.prepare("SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision,origin,pinned FROM clips WHERE deleted=0 AND (?1=0 OR pinned=1) ORDER BY pinned DESC,sequence DESC,id")?;
-        let mut rows = statement.query([query.pinned_only])?;
+        if let Some(id) = &query.collection_id {
+            crate::collections::ensure_collection(&self.connection, id)?;
+        }
+        let mut statement = self.connection.prepare("SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision,origin,pinned,collection FROM clips WHERE deleted=0 AND (?1=0 OR pinned=1) AND (?2 IS NULL OR collection=?2) ORDER BY pinned DESC,sequence DESC,id")?;
+        let mut rows = statement.query(params![query.pinned_only, query.collection_id])?;
         let mut total = 0;
         let mut items = vec![];
         while let Some(row) = rows.next()? {
@@ -309,6 +311,7 @@ impl Storage {
                     kind,
                     manual: row.get::<_, String>(9)? == "manual",
                     pinned: row.get(10)?,
+                    collection_id: row.get(11)?,
                     match_ranges: if query.query.is_empty() {
                         vec![]
                     } else {
@@ -546,7 +549,7 @@ impl Storage {
         Ok(())
     }
 }
-fn mutation_revision(value: &str) -> Result<i64, AppError> {
+pub(crate) fn mutation_revision(value: &str) -> Result<i64, AppError> {
     let revision: i64 = value
         .parse()
         .map_err(|_| AppError::new(ErrorCode::InvalidInput))?;
@@ -556,6 +559,14 @@ fn mutation_revision(value: &str) -> Result<i64, AppError> {
     Ok(revision)
 }
 fn prune(tx: &rusqlite::Transaction<'_>, max: u32, keep: Option<&str>) -> Result<(), AppError> {
+    prune_protecting(tx, max, keep, None)
+}
+pub(crate) fn prune_protecting(
+    tx: &rusqlite::Transaction<'_>,
+    max: u32,
+    keep: Option<&str>,
+    source: Option<&str>,
+) -> Result<(), AppError> {
     loop {
         let (count, bytes, deleted): (i64,i64,i64) = tx.query_row("SELECT count(*) FILTER(WHERE deleted=0),coalesce(sum(length(CAST(text AS BLOB))+length(data)),0),count(*) FILTER(WHERE deleted<>0) FROM clips", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
         if count <= i64::from(max) && bytes <= MAX_HISTORY_BYTES && deleted <= 1000 {
@@ -569,11 +580,39 @@ fn prune(tx: &rusqlite::Transaction<'_>, max: u32, keep: Option<&str>) -> Result
         if removed_deleted > 0 {
             continue;
         }
-        let changed = tx.execute("DELETE FROM clips WHERE id=(SELECT id FROM clips WHERE origin='capture' AND deleted=0 AND pinned=0 AND collection IS NULL AND (?1 IS NULL OR id<>?1) ORDER BY sequence LIMIT 1)", [keep])?;
+        let changed = tx.execute("DELETE FROM clips WHERE id=(SELECT id FROM clips WHERE origin='capture' AND deleted=0 AND pinned=0 AND collection IS NULL AND (?1 IS NULL OR id<>?1) AND (?2 IS NULL OR id<>?2) ORDER BY sequence LIMIT 1)", params![keep,source])?;
         if changed == 0 {
             return Err(AppError::new(ErrorCode::LimitExceeded));
         }
     }
+}
+
+pub(crate) fn check_change_budget(tx: &rusqlite::Transaction<'_>) -> Result<(), AppError> {
+    let pending: u32 = tx.query_row(
+        "SELECT (SELECT count(*) FROM clip_changes)+(SELECT count(*) FROM collection_changes)",
+        [],
+        |r| r.get(0),
+    )?;
+    if pending > 100_000 {
+        return Err(AppError::new(ErrorCode::LimitExceeded));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_save_payload(
+    payload: &ClipPayload,
+    policy: &CapturePolicy,
+) -> Result<bool, AppError> {
+    payload.validate()?;
+    if policy.exclude_pattern.is_empty() {
+        return Ok(true);
+    }
+    let excluded = pattern(&policy.exclude_pattern, false)?;
+    Ok(!match payload {
+        ClipPayload::Text(text) => excluded.is_match(text),
+        ClipPayload::Files(paths) => paths.iter().any(|path| excluded.is_match(path)),
+        ClipPayload::Image { .. } => false,
+    })
 }
 
 #[cfg(test)]

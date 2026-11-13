@@ -1,4 +1,5 @@
 //! Application use cases without a WebView or operating-system integration.
+mod collections;
 mod contracts;
 mod desktop;
 mod history;

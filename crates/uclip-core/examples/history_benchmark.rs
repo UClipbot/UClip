@@ -70,6 +70,7 @@ fn main() {
                         regex,
                         kind: None,
                         pinned_only: false,
+                        collection_id: None,
                         offset: 0,
                         expected_revision: None,
                     })

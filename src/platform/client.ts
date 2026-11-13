@@ -25,6 +25,7 @@ const codes: ReadonlySet<ErrorCode> = new Set([
   'shortcut_conflict',
   'query_timeout',
   'excluded',
+  'duplicate_name',
 ]);
 
 export function safeError(error: unknown): AppError {
@@ -51,6 +52,7 @@ export function safeError(error: unknown): AppError {
       target_lost: '原应用目标已变化，未自动粘贴。',
       shortcut_conflict: '快捷键重复、被占用或属于系统保留组合，原设置保持不变。',
       excluded: '内容命中排除规则，未保存。',
+      duplicate_name: '分类名称已存在，请使用其他名称。',
       query_timeout: '搜索超时，请缩小范围或简化表达式。',
       unavailable: '本地服务不可用，请重启桌面应用。',
     };
