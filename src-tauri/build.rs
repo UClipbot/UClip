@@ -11,6 +11,8 @@ fn main() {
             "update_capture_policy",
             "copy_clip",
             "change_clip_deletion",
+            "change_clip_pin",
+            "deduplicate_pinned",
             "desktop_status",
             "update_desktop_preferences",
             "update_key_bindings",

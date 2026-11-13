@@ -258,8 +258,8 @@ impl Storage {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
         let matcher = pattern(&query.query, !query.regex)?;
-        let mut statement = self.connection.prepare("SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision,origin FROM clips WHERE deleted=0 ORDER BY sequence DESC,id")?;
-        let mut rows = statement.query([])?;
+        let mut statement = self.connection.prepare("SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision,origin,pinned FROM clips WHERE deleted=0 AND (?1=0 OR pinned=1) ORDER BY pinned DESC,sequence DESC,id")?;
+        let mut rows = statement.query([query.pinned_only])?;
         let mut total = 0;
         let mut items = vec![];
         while let Some(row) = rows.next()? {
@@ -308,6 +308,7 @@ impl Storage {
                     id: row.get(0)?,
                     kind,
                     manual: row.get::<_, String>(9)? == "manual",
+                    pinned: row.get(10)?,
                     match_ranges: if query.query.is_empty() {
                         vec![]
                     } else {
@@ -441,6 +442,91 @@ impl Storage {
         })
     }
 
+    pub fn change_clip_pin(
+        &mut self,
+        request: crate::ChangeClipPin,
+    ) -> Result<crate::ClipPinSnapshot, AppError> {
+        if uuid::Uuid::parse_str(&request.id).is_err() {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let revision = mutation_revision(&request.expected_revision)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: Option<(i64, bool)> = tx
+            .query_row(
+                "SELECT revision,pinned FROM clips WHERE id=?1 AND deleted=0",
+                [&request.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let (current_revision, pinned) =
+            current.ok_or_else(|| AppError::new(ErrorCode::NotFound))?;
+        if current_revision != revision || pinned == request.pinned {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        tx.execute(
+            "UPDATE clips SET pinned=?1,revision=revision+1 WHERE id=?2 AND revision=?3",
+            params![request.pinned, request.id, revision],
+        )?;
+        tx.execute(
+            "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(crate::ClipPinSnapshot {
+            id: request.id,
+            revision: (revision + 1).to_string(),
+            pinned: request.pinned,
+        })
+    }
+
+    pub fn deduplicate_pinned(
+        &mut self,
+        request: crate::DeduplicatePinned,
+    ) -> Result<crate::DeduplicationSnapshot, AppError> {
+        let revision = mutation_revision(&request.expected_revision)?;
+        let policy = self.capture_policy()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: i64 = tx.query_row(
+            "SELECT revision FROM history_meta WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )?;
+        if current != revision {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        // Fingerprints narrow the candidates; exact typed payload equality decides deletion.
+        // Keep every pinned identity, including multiple pinned copies of the same payload.
+        let removed = tx.execute(
+            "UPDATE clips AS candidate SET deleted=1,revision=revision+1
+            WHERE candidate.deleted=0 AND candidate.pinned=0 AND EXISTS (
+                SELECT 1 FROM clips AS keeper
+                WHERE keeper.deleted=0 AND keeper.pinned=1
+                  AND keeper.fingerprint=candidate.fingerprint
+                  AND keeper.kind=candidate.kind AND keeper.text=candidate.text
+                  AND keeper.data=candidate.data AND keeper.width IS candidate.width
+                  AND keeper.height IS candidate.height AND keeper.file_count=candidate.file_count
+            )",
+            [],
+        )? as u32;
+        if removed > 0 {
+            // Same bounded deletion-payload retention as ordinary deletion.
+            prune(&tx, policy.max_items, None)?;
+            tx.execute(
+                "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(crate::DeduplicationSnapshot {
+            removed,
+            revision: (revision + i64::from(removed > 0)).to_string(),
+        })
+    }
+
     pub fn mark_used(&mut self, id: &str) -> Result<(), AppError> {
         let tx = self
             .connection
@@ -459,6 +545,15 @@ impl Storage {
         tx.commit()?;
         Ok(())
     }
+}
+fn mutation_revision(value: &str) -> Result<i64, AppError> {
+    let revision: i64 = value
+        .parse()
+        .map_err(|_| AppError::new(ErrorCode::InvalidInput))?;
+    if revision < 0 || revision == i64::MAX || revision.to_string() != value {
+        return Err(AppError::new(ErrorCode::InvalidInput));
+    }
+    Ok(revision)
 }
 fn prune(tx: &rusqlite::Transaction<'_>, max: u32, keep: Option<&str>) -> Result<(), AppError> {
     loop {

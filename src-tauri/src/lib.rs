@@ -63,6 +63,8 @@ pub fn run() {
             commands::update_capture_policy,
             commands::copy_clip,
             commands::change_clip_deletion,
+            commands::change_clip_pin,
+            commands::deduplicate_pinned,
             commands::desktop_status,
             commands::update_desktop_preferences,
             commands::update_key_bindings,

@@ -69,6 +69,7 @@ fn main() {
                         query: query.into(),
                         regex,
                         kind: None,
+                        pinned_only: false,
                         offset: 0,
                         expected_revision: None,
                     })

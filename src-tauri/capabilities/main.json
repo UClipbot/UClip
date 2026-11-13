@@ -16,6 +16,8 @@
     "allow-update-capture-policy",
     "allow-copy-clip",
     "allow-change-clip-deletion",
+    "allow-change-clip-pin",
+    "allow-deduplicate-pinned",
     "allow-desktop-status",
     "allow-update-desktop-preferences",
     "allow-set-autostart",

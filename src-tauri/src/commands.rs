@@ -151,6 +151,32 @@ fn state_desktop_shortcut(app: &tauri::AppHandle) -> bool {
 }
 
 #[tauri::command]
+pub async fn change_clip_pin(
+    state: State<'_, AppState>,
+    request: uclip_core::ChangeClipPin,
+) -> Result<uclip_core::ClipPinSnapshot, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .change_clip_pin(request)
+        .await
+}
+
+#[tauri::command]
+pub async fn deduplicate_pinned(
+    state: State<'_, AppState>,
+    request: uclip_core::DeduplicatePinned,
+) -> Result<uclip_core::DeduplicationSnapshot, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .deduplicate_pinned(request)
+        .await
+}
+
+#[tauri::command]
 pub async fn desktop_status(
     app: tauri::AppHandle,
     state: State<'_, AppState>,

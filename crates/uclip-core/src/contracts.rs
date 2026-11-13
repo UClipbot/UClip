@@ -171,6 +171,8 @@ pub struct HistoryQuery {
     pub query: String,
     pub regex: bool,
     pub kind: Option<ClipKind>,
+    #[serde(default)]
+    pub pinned_only: bool,
     pub offset: u32,
     pub expected_revision: Option<String>,
 }
@@ -179,6 +181,7 @@ pub struct HistoryQuery {
 #[serde(rename_all = "camelCase")]
 pub struct HistoryItem {
     pub manual: bool,
+    pub pinned: bool,
     pub id: String,
     pub kind: ClipKind,
     pub preview: String,
@@ -243,6 +246,36 @@ pub struct ClipDeletionSnapshot {
     pub id: String,
     pub revision: String,
     pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChangeClipPin {
+    pub id: String,
+    pub expected_revision: String,
+    pub pinned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipPinSnapshot {
+    pub id: String,
+    pub revision: String,
+    pub pinned: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeduplicatePinned {
+    /// Revision of the whole history, including pinned items outside the visible page.
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DeduplicationSnapshot {
+    pub removed: u32,
+    pub revision: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

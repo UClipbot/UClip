@@ -3,6 +3,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { safeError } from './client';
 import type {
   ChangeClipDeletion,
+  ChangeClipPin,
+  ClipPinSnapshot,
+  DeduplicationSnapshot,
   ClipDeletionSnapshot,
   ClipboardStatus,
   ClipDetail,
@@ -17,6 +20,7 @@ export function useHistory(
   query: string,
   regex: boolean,
   type: ClipType | 'all',
+  pinnedOnly: boolean,
   previewId?: string,
 ) {
   const [status, setStatus] = useState<ClipboardStatus | null>(null);
@@ -35,7 +39,15 @@ export function useHistory(
   const mounted = useRef(true);
   const cache = useRef(new Map<string, string>());
   const historyRevision = status?.historyRevision;
-  const requestKey = JSON.stringify([query, regex, type, offset, historyRevision, queryEpoch]);
+  const requestKey = JSON.stringify([
+    query,
+    regex,
+    type,
+    pinnedOnly,
+    offset,
+    historyRevision,
+    queryEpoch,
+  ]);
   const [settledKey, setSettledKey] = useState('');
   const pending = native && (loading || settledKey !== requestKey);
   const refresh = useCallback(async () => {
@@ -71,7 +83,7 @@ export function useHistory(
   }, [native, refresh]);
   useEffect(() => {
     setOffset(0);
-  }, [query, regex, type]);
+  }, [query, regex, type, pinnedOnly]);
   useEffect(() => {
     if (!native) return;
     let active = true;
@@ -90,6 +102,7 @@ export function useHistory(
         request: {
           query,
           regex,
+          pinnedOnly,
           kind:
             type === 'all' ? null : type === 'image' ? 'image' : type === 'file' ? 'files' : 'text',
           offset,
@@ -127,7 +140,7 @@ export function useHistory(
       clearTimeout(timer);
       clearTimeout(deadline);
     };
-  }, [native, query, regex, type, offset, historyRevision, refresh, requestKey]);
+  }, [native, query, regex, type, pinnedOnly, offset, historyRevision, refresh, requestKey]);
   useEffect(() => {
     if (!native || !previewId) {
       setDetail(null);
@@ -224,6 +237,23 @@ export function useHistory(
     await refresh();
     return result;
   }
+  async function mutateHistory<T>(command: string, request: unknown) {
+    if (mutation.current) throw safeError({ code: 'busy' });
+    mutation.current = true;
+    statusGeneration.current++;
+    setMutating(true);
+    setPending(true);
+    try {
+      return await invoke<T>(command, { request });
+    } finally {
+      mutation.current = false;
+      if (mounted.current) {
+        setMutating(false);
+        setQueryEpoch((epoch) => epoch + 1);
+      }
+      await refresh();
+    }
+  }
   const items: Clip[] = (page?.items ?? []).map((item) => ({
     id: item.id,
     revision: item.revision,
@@ -241,7 +271,7 @@ export function useHistory(
       new Date(Number(item.capturedAt)).toDateString() === new Date().toDateString()
         ? '今天'
         : '昨天',
-    pinned: false,
+    pinned: item.pinned,
     collection: null,
     size:
       item.kind === 'image'
@@ -260,10 +290,15 @@ export function useHistory(
     detail,
     detailError,
     total: page?.total ?? 0,
+    revision: page?.revision,
     offset,
     setOffset,
     updatePolicy,
     changeDeletion,
+    changePin: (request: ChangeClipPin) =>
+      mutateHistory<ClipPinSnapshot>('change_clip_pin', request),
+    deduplicatePinned: (expectedRevision: string) =>
+      mutateHistory<DeduplicationSnapshot>('deduplicate_pinned', { expectedRevision }),
     createText,
     mutating,
     copy,

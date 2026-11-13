@@ -157,6 +157,18 @@ impl CoreService {
     pub async fn mark_used(&self, id: String) -> Result<(), AppError> {
         self.operation(move |s| s.mark_used(&id)).await
     }
+    pub async fn change_clip_pin(
+        &self,
+        request: crate::ChangeClipPin,
+    ) -> Result<crate::ClipPinSnapshot, AppError> {
+        self.operation(move |s| s.change_clip_pin(request)).await
+    }
+    pub async fn deduplicate_pinned(
+        &self,
+        request: crate::DeduplicatePinned,
+    ) -> Result<crate::DeduplicationSnapshot, AppError> {
+        self.operation(move |s| s.deduplicate_pinned(request)).await
+    }
     pub async fn keyboard_bindings(&self) -> Result<crate::KeyboardSnapshot, AppError> {
         self.operation(|s| s.keyboard_bindings()).await
     }

@@ -5,6 +5,7 @@ fn query(text: &str) -> HistoryQuery {
         query: text.into(),
         regex: false,
         kind: None,
+        pinned_only: false,
         offset: 0,
         expected_revision: None,
     }

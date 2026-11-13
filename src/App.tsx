@@ -57,7 +57,9 @@ export function App() {
   const [selectedId, setSelectedId] = useState('note-1');
   const [preview, setPreview] = useState<{ id: string; focus: HTMLElement | null } | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
-  const [modal, setModal] = useState<'settings' | 'new' | 'shortcuts' | null>(null);
+  const [modal, setModal] = useState<'settings' | 'new' | 'shortcuts' | 'deduplicate' | null>(null);
+  const [dedupRevision, setDedupRevision] = useState('');
+  const [dedupError, setDedupError] = useState('');
   const [toast, setToast] = useState<Toast | null>(null);
   const desktop = useDesktop(appearance.native, !!(modal || menu || preview));
   const [shortcut, setShortcut] = useState('CommandOrControl+Shift+V');
@@ -70,7 +72,7 @@ export function App() {
   const modalFocus = useRef<HTMLElement | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const live = useHistory(appearance.native, query, regex, type, preview?.id);
+  const live = useHistory(appearance.native, query, regex, type, view === 'pinned', preview?.id);
   const demoResult = useClipQuery(
     clips,
     view,
@@ -115,9 +117,39 @@ export function App() {
   function changeClip(id: string, update: Partial<Clip>) {
     setClips((current) => current.map((clip) => (clip.id === id ? { ...clip, ...update } : clip)));
   }
-  function togglePin(clip: Clip) {
+  async function togglePin(clip: Clip) {
+    if (!ready || live.mutating || clip.deleted) return;
+    if (appearance.native) {
+      if (!clip.revision) return;
+      try {
+        await live.changePin({
+          id: clip.id,
+          expectedRevision: clip.revision,
+          pinned: !clip.pinned,
+        });
+        setToast({ message: clip.pinned ? '已取消置顶' : '已置顶' });
+      } catch (error) {
+        setToast({ message: safeError(error).message });
+      }
+      return;
+    }
     changeClip(clip.id, { pinned: !clip.pinned });
     setToast({ message: clip.pinned ? '已取消示例置顶' : '已置顶示例' });
+  }
+  async function deduplicatePinned() {
+    if (live.mutating) return;
+    setDedupError('');
+    try {
+      const result = await live.deduplicatePinned(dedupRevision);
+      closeModal();
+      setToast({
+        message: result.removed
+          ? `去重完成，已删除 ${result.removed} 条非置顶重复记录`
+          : '没有需要删除的非置顶重复记录',
+      });
+    } catch (error) {
+      setDedupError(safeError(error).message);
+    }
   }
   function removeClip(clip: Clip) {
     if (appearance.native) {
@@ -252,7 +284,7 @@ export function App() {
       (previous?.isConnected ? previous : search.current)?.focus({ preventScroll: true });
     });
   }
-  function openModal(next: 'settings' | 'new' | 'shortcuts') {
+  function openModal(next: 'settings' | 'new' | 'shortcuts' | 'deduplicate') {
     modalFocus.current = menu?.anchor ?? (document.activeElement as HTMLElement);
     setMenu(null);
     setModal(next);
@@ -491,9 +523,13 @@ export function App() {
                 onChange={(event) => setView(event.target.value as View)}
               >
                 {Object.entries(viewTitles).map(([key, label]) => (
-                  <option key={key} value={key} disabled={appearance.native && key !== 'all'}>
+                  <option
+                    key={key}
+                    value={key}
+                    disabled={appearance.native && key !== 'all' && key !== 'pinned'}
+                  >
                     {label}
-                    {appearance.native && key !== 'all' ? '（待接入）' : ''}
+                    {appearance.native && key !== 'all' && key !== 'pinned' ? '（待接入）' : ''}
                   </option>
                 ))}
               </select>
@@ -525,6 +561,20 @@ export function App() {
                 ? '搜索中'
                 : `${appearance.native ? live.total : result.items.length} 条`}
             </span>
+            {appearance.native && view === 'pinned' && (
+              <button
+                className="text-button"
+                disabled={!ready || live.mutating || !live.revision}
+                onClick={() => {
+                  setDedupRevision(live.revision!);
+                  setDedupError('');
+                  openModal('deduplicate');
+                }}
+                aria-label="置顶页去重"
+              >
+                去重
+              </button>
+            )}
             <button
               className="icon-button app-more"
               aria-label="更多选项"
@@ -689,7 +739,8 @@ export function App() {
               clip={previewClip}
               onBack={closePreview}
               onCopy={() => void copyClip(previewClip)}
-              onPin={() => togglePin(previewClip)}
+              onPin={() => void togglePin(previewClip)}
+              pinDisabled={!ready || live.mutating}
               error={appearance.native ? live.detailError : undefined}
               onMore={(anchor) => openMenu(anchor, previewClip)}
             />
@@ -762,15 +813,16 @@ export function App() {
                   粘贴到原应用
                 </button>
               )}
-              {appearance.native && <p className="menu-label">分类、置顶待接入</p>}
+              {appearance.native && <p className="menu-label">分类待接入</p>}
               <button role="menuitem" onClick={() => menuAction(() => openPreview(menuClip))}>
                 <Icon name="text" size={15} />
                 查看完整内容
               </button>
               <button
                 role="menuitem"
-                disabled={appearance.native}
-                onClick={() => menuAction(() => togglePin(menuClip))}
+                data-testid="toggle-pin"
+                disabled={!ready || live.mutating || menuClip.deleted}
+                onClick={() => menuAction(() => void togglePin(menuClip))}
               >
                 <Icon name="pin" size={15} />
                 {menuClip.pinned ? '取消置顶' : '置顶'}
@@ -880,6 +932,38 @@ export function App() {
             <Icon name="close" size={14} />
           </button>
         </div>
+      )}
+      {modal === 'deduplicate' && (
+        <Modal
+          title="置顶页去重"
+          onClose={() => {
+            if (!live.mutating) closeModal();
+          }}
+          description="以全部置顶记录为依据，删除全部历史中内容完全相同的非置顶记录。所有置顶记录都会保留；当前搜索、类型筛选和页码不限制去重范围。"
+        >
+          {dedupError && (
+            <p role="alert" className="settings-feedback">
+              {dedupError} 请关闭此面板，刷新后重新检查范围。
+            </p>
+          )}
+          <div className="form-actions">
+            <button
+              className="secondary-button"
+              data-autofocus
+              disabled={live.mutating}
+              onClick={closeModal}
+            >
+              取消
+            </button>
+            <button
+              className="primary-button"
+              disabled={live.mutating || !!dedupError}
+              onClick={() => void deduplicatePinned()}
+            >
+              {live.mutating ? '正在去重…' : '删除非置顶重复项'}
+            </button>
+          </div>
+        </Modal>
       )}
       {modal === 'settings' && (
         <Modal title="设置" onClose={closeModal}>

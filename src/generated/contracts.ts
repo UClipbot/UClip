@@ -18,15 +18,27 @@ export type ChangeClipDeletion = { id: string, expectedRevision: string, deleted
 
 export type ClipDeletionSnapshot = { id: string, revision: string, deleted: boolean, };
 
+export type ChangeClipPin = { id: string, expectedRevision: string, pinned: boolean, };
+
+export type ClipPinSnapshot = { id: string, revision: string, pinned: boolean, };
+
+export type DeduplicatePinned = {
+/**
+ * Revision of the whole history, including pinned items outside the visible page.
+ */
+expectedRevision: string, };
+
+export type DeduplicationSnapshot = { removed: number, revision: string, };
+
 export type ClipKind = "text" | "image" | "files";
 
 export type CapturePolicy = { enabled: boolean, excludePattern: string, maxItems: number, revision: string, };
 
 export type UpdateCapturePolicy = { enabled: boolean, excludePattern: string, maxItems: number, expectedRevision: string, };
 
-export type HistoryQuery = { query: string, regex: boolean, kind: ClipKind | null, offset: number, expectedRevision: string | null, };
+export type HistoryQuery = { query: string, regex: boolean, kind: ClipKind | null, pinnedOnly: boolean, offset: number, expectedRevision: string | null, };
 
-export type HistoryItem = { manual: boolean, id: string, kind: ClipKind, preview: string, capturedAt: string, lastUsedAt: string | null, width: number | null, height: number | null, fileCount: number, revision: string,
+export type HistoryItem = { manual: boolean, pinned: boolean, id: string, kind: ClipKind, preview: string, capturedAt: string, lastUsedAt: string | null, width: number | null, height: number | null, fileCount: number, revision: string,
 /**
  * UTF-16 offsets into preview. Matching stays in the bounded Rust regex engine.
  */

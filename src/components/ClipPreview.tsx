@@ -9,9 +9,11 @@ export function ClipPreview({
   onPin,
   onMore,
   error,
+  pinDisabled = false,
 }: {
   clip: Clip;
   error?: string;
+  pinDisabled?: boolean;
   onBack: () => void;
   onCopy: () => void;
   onPin: () => void;
@@ -32,7 +34,7 @@ export function ClipPreview({
         <button
           className="icon-button"
           onClick={onPin}
-          disabled={clip.native}
+          disabled={pinDisabled || clip.deleted}
           aria-label={clip.pinned ? '取消置顶' : '置顶内容'}
           aria-pressed={clip.pinned}
         >
