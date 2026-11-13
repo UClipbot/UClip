@@ -1,4 +1,9 @@
+pub mod clipboard;
+mod clipboard_watch;
+#[cfg(target_os = "linux")]
+mod clipboard_x11;
 mod commands;
+mod paste;
 mod paths;
 mod platform;
 
@@ -11,6 +16,7 @@ static EXIT_STARTED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct AppState {
     core: Result<CoreService, AppError>,
+    clipboard: Result<clipboard::ClipboardService, AppError>,
 }
 
 /// Navigation is restricted independently from CSP/ACL. Never load clipboard HTML as a document.
@@ -45,7 +51,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::get_settings,
-            commands::update_settings
+            commands::update_settings,
+            commands::history_query,
+            commands::clip_detail,
+            commands::clipboard_status,
+            commands::update_capture_policy,
+            commands::copy_clip,
+            commands::change_clip_deletion,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -68,7 +80,22 @@ pub fn run() {
                     eprintln!("startup_failed: {:?}: {}", error.code, error.message);
                 }
                 // Even a failed database startup gets a visible, safe error in the local UI.
-                handle.manage(AppState { core: startup });
+                let clipboard = match &startup {
+                    Ok(core) => {
+                        let core = core.clone();
+                        let app = handle.clone();
+                        tauri::async_runtime::spawn_blocking(move || {
+                            clipboard::ClipboardService::start(core, Some(app))
+                        })
+                        .await
+                        .unwrap_or_else(|_| Err(AppError::new(uclip_core::ErrorCode::Unavailable)))
+                    }
+                    Err(error) => Err(error.clone()),
+                };
+                handle.manage(AppState {
+                    core: startup,
+                    clipboard,
+                });
                 // Creating a WebView in an async task avoids Windows synchronous-handler deadlocks.
                 let result = WebviewWindowBuilder::new(
                     &handle,
@@ -76,8 +103,8 @@ pub fn run() {
                     WebviewUrl::App("index.html".into()),
                 )
                 .title("UClip")
-                .inner_size(1180.0, 790.0)
-                .min_inner_size(680.0, 480.0)
+                .inner_size(640.0, 650.0)
+                .min_inner_size(480.0, 390.0)
                 .on_navigation(local_navigation)
                 .build();
                 if result.is_err() {
@@ -101,11 +128,20 @@ pub fn run() {
                         .try_state::<AppState>()
                         .and_then(|state| state.core.as_ref().ok().cloned());
                     tauri::async_runtime::spawn(async move {
-                        let failed = if let Some(core) = core {
+                        let clipboard = app
+                            .try_state::<AppState>()
+                            .and_then(|state| state.clipboard.as_ref().ok().cloned());
+                        let clip_failed = if let Some(clipboard) = clipboard {
+                            clipboard.stop().await.is_err()
+                        } else {
+                            false
+                        };
+                        let core_failed = if let Some(core) = core {
                             core.shutdown().await.is_err()
                         } else {
                             false
                         };
+                        let failed = clip_failed || core_failed;
                         if failed {
                             eprintln!("storage_shutdown_failed");
                         }

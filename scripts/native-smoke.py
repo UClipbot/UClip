@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Linux native WebKit smoke test. Uses only disposable data and a private session bus.
-Requires tauri-driver, WebKitWebDriver, and an X11 display; never reads the clipboard.
+Requires tauri-driver, WebKitWebDriver and X11. Clipboard fixtures are opt-in and isolated.
 Build first: npm run tauri:build -- --debug
 """
 import argparse
@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import signal
 import sqlite3
 import subprocess
 import tempfile
@@ -41,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='target/debug/uclip-desktop')
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
+    parser.add_argument('--clipboard-fixtures', action='store_true', help='Synthetic three-type and automatic paste checks; requires isolated-copy-paste.py.')
     args = parser.parse_args()
     binary = str(Path(args.binary).resolve())
     if not Path(binary).is_file():
@@ -68,6 +70,7 @@ def main():
         with open(Path(directory, 'driver.log'), 'w+') as log:
             driver = subprocess.Popen(['dbus-run-session', '--', 'tauri-driver', '--port', str(port), '--native-port', str(native_port)], env=env, stdout=log, stderr=log, start_new_session=True)
             session = None
+            clipboard_checks = None
             try:
                 wait_for(lambda: request('GET', '/status'), 'WebDriver startup')
 
@@ -90,6 +93,8 @@ def main():
                     return value['element-6066-11e4-a52e-4f735466cecf']
 
                 def click(selector):
+                    if selector == '[data-testid="open-settings"]':
+                        click('[aria-label="更多选项"]')
                     request('POST', f'/session/{session}/element/{element(selector)}/click', {})
 
                 def enter(selector, text):
@@ -106,6 +111,9 @@ def main():
                         (target / f'{name}.png').write_bytes(base64.b64decode(request('GET', f'/session/{session}/screenshot')))
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
+                wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                capture('startup')
+                print('Initial UI:', execute('return {width:innerWidth,height:innerHeight,rect:document.querySelector(".app-more").getBoundingClientRect().toJSON(),inert:document.querySelector(".app-shell").inert}'), flush=True)
                 click('[data-testid="open-settings"]')
                 print('Native viewport:', execute('return {width:innerWidth,height:innerHeight,pixelRatio:devicePixelRatio}'), flush=True)
                 wait_for(lambda: execute('return !!document.querySelector("#theme") && !document.querySelector("#theme").disabled'), 'native UI ready')
@@ -128,56 +136,33 @@ def main():
                 click('[aria-label="关闭面板"]')
                 if args.screenshots:
                     execute('document.querySelector(".toast .icon-button")?.click(); return true')
-                    capture('moss-dark')
+                    capture('simple-dark')
                     click('[data-testid="open-settings"]')
                     click('#theme option[value="light"]')
                     wait_for(lambda: execute('return document.documentElement.dataset.theme === "light"'), 'light theme render')
                     click('[aria-label="关闭面板"]')
                     execute('document.querySelector(".toast .icon-button")?.click(); return true')
-                    capture('moss-light')
+                    capture('simple-light')
                     click('[data-testid="open-settings"]')
                     click('#theme option[value="dark"]')
                     wait_for(lambda: execute('return document.documentElement.dataset.theme === "dark"'), 'dark theme restore')
-                    capture('moss-settings')
+                    capture('simple-settings')
                     click('[aria-label="关闭面板"]')
                     saved = invoke('get_settings')['value']
 
-                enter('#history-search', '防抖')
-                wait_for(lambda: execute('return document.querySelectorAll(".clip-row").length === 1 && document.querySelector(".record-title")?.textContent === "一个简单的防抖函数"'), 'live search and preview')
+                # Native mode never falls back to in-memory examples.
+                wait_for(lambda: execute('return document.querySelectorAll(".clip-row").length === 0 && !document.querySelector(".history-scroll").getAttribute("aria-busy").includes("true")'), 'empty real history')
                 click('[aria-label="正则表达式搜索"]')
                 enter('#history-search', '[')
-                wait_for(lambda: execute('return !!document.querySelector("#search-error")'), 'invalid regex feedback')
+                wait_for(lambda: execute('return !!document.querySelector("#search-error")'), 'native regex input validation')
                 click('[aria-label="正则表达式搜索"]')
                 click('[aria-label="清空搜索"]')
-                wait_for(lambda: execute('return document.querySelectorAll(".clip-row").length === 12'), 'search reset')
-                click('.collection-nav button:nth-child(2)')
-                wait_for(lambda: execute('return document.querySelectorAll(".clip-row").length === 4'), 'collection filter')
-                click('.type-filters button:nth-child(4)')
-                wait_for(lambda: execute('return document.querySelectorAll(".clip-row").length === 1 && document.querySelector(".record-title")?.textContent === "Somewhere, slower."'), 'type filter composition')
-                execute('document.querySelector(".toast .icon-button")?.click(); return true')
-                capture('moss-image')
-                click('.primary-nav button:first-child')
-                click('[data-clip-id="note-1"]')
-                click('[aria-label="取消置顶"]')
-                wait_for(lambda: execute('return document.querySelector(".primary-nav button:nth-child(2) .nav-count").textContent === "2"'), 'pin count update')
-                click('[aria-label="置顶内容"]')
-                click('[aria-label="网格视图"]')
-                assert execute('return document.querySelector(".content-workspace").classList.contains("grid-mode")')
-                click('[aria-label="列表视图"]')
-                click('.new-button')
-                assert execute('return document.activeElement.id') == 'clip-title'
-                enter('#clip-title', '原生交互测试片段')
-                enter('#clip-content', '只保存在此次内存预览，不写入业务数据库。')
-                click('.new-form .primary-button')
-                wait_for(lambda: execute('return document.querySelector(".record-title")?.textContent === "原生交互测试片段"'), 'create in-memory example')
-                click('[aria-label="更多内容操作"]')
-                click('.action-menu .destructive')
-                click('.sidebar > .nav-item')
-                wait_for(lambda: execute('return document.querySelectorAll(".clip-row").length === 1'), 'trash example')
-                click('[aria-label="更多内容操作"]')
-                click('.action-menu > button:last-child')
-                wait_for(lambda: execute('return document.querySelectorAll(".clip-row").length === 0'), 'restore example')
-                print('PASS: search/regex, collection/type filters, pinning, view modes, focus, create/delete/restore interactions', flush=True)
+                print('PASS: real empty history never shows examples; native regex validation works', flush=True)
+                if args.clipboard_fixtures:
+                    from clipboard_native_check import ClipboardChecks
+                    clipboard_checks = ClipboardChecks(invoke, execute, click, enter, env, directory, log)
+                    clipboard_checks.run()
+                    capture('local-history')
 
                 stale = invoke('update_settings', {'request': {'theme': 'light', 'expectedRevision': '0'}})
                 assert not stale['ok'] and stale['error']['code'] == 'conflict', stale
@@ -231,7 +216,22 @@ def main():
                 wait_for(lambda: execute('return !!document.querySelector("#theme") && !document.querySelector("#theme").disabled'), 'restarted UI ready')
                 assert invoke('get_settings')['value'] == saved
                 assert execute('return document.documentElement.dataset.theme') == 'dark'
+                click('[aria-label="关闭面板"]')
+                if clipboard_checks:
+                    clipboard_checks.replay()
                 print('PASS: normal window close drains storage; restart retains theme and revision', flush=True)
+                if clipboard_checks:
+                    main_pid = owned_processes()[0][0]
+                    os.kill(main_pid, signal.SIGKILL)
+                    wait_for(lambda: not owned_processes(), 'abrupt process termination')
+                    try: request('DELETE', f'/session/{session}')
+                    except RuntimeError: pass
+                    session = start()
+                    wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'crash recovery workspace')
+                    clipboard_checks.replay()
+                    assert invoke('get_settings')['value'] == saved
+                    print('PASS A: acknowledged text/image/files and settings survive SIGKILL/WAL recovery', flush=True)
+
 
                 request('DELETE', f'/session/{session}')
                 session = None
@@ -248,20 +248,24 @@ def main():
                     assert database.execute('PRAGMA user_version').fetchone()[0] == 999
                     assert database.execute('SELECT theme, revision FROM settings').fetchone() == ('dark', int(saved['revision']))
                 print('PASS: newer schema shows a safe startup error without resetting saved data', flush=True)
-                print('Native smoke completed; Windows/macOS/Wayland and clipboard behavior remain untested.', flush=True)
+                print('Native smoke completed; Windows/macOS/Wayland remain untested. Clipboard paths run only with --clipboard-fixtures.', flush=True)
             except Exception:
+                if session:
+                    try: capture('failure')
+                    except Exception: pass
                 log.flush()
                 log.seek(0)
                 print(log.read())
                 raise
             finally:
+                if clipboard_checks:
+                    clipboard_checks.close()
                 if session:
                     try:
                         request('DELETE', f'/session/{session}')
                     except (OSError, RuntimeError):
                         pass
                 # Terminate only this smoke test's process group.
-                import signal
                 try:
                     os.killpg(driver.pid, signal.SIGTERM)
                     driver.wait(timeout=5)

@@ -4,6 +4,17 @@ use uclip_core::*;
 fn main() {
     let config = ts_rs::Config::default();
     let declarations = [
+        ChangeClipDeletion::decl(&config),
+        ClipDeletionSnapshot::decl(&config),
+        ClipKind::decl(&config),
+        CapturePolicy::decl(&config),
+        UpdateCapturePolicy::decl(&config),
+        HistoryQuery::decl(&config),
+        HistoryItem::decl(&config),
+        HistoryPage::decl(&config),
+        ClipDetail::decl(&config),
+        ClipboardStatus::decl(&config),
+        CopyResult::decl(&config),
         Theme::decl(&config),
         SettingsSnapshot::decl(&config),
         UpdateSettings::decl(&config),

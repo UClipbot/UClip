@@ -24,38 +24,54 @@ pub fn report() -> PlatformReport {
         capabilities: vec![
             capability(
                 "clipboard_capture",
-                State::NotImplemented,
-                "尚未接入系统剪贴板采集。",
+                if wayland_hint {
+                    State::Restricted
+                } else if cfg!(target_os = "linux") {
+                    State::Unverified
+                } else {
+                    State::NotImplemented
+                },
+                "已实现文本、图片、文件引用适配；运行状态见采集设置，目标平台需原生验收。",
             ),
             capability(
                 "clipboard_write",
-                State::NotImplemented,
-                "尚未接入系统剪贴板写入。",
+                if wayland_hint {
+                    State::Restricted
+                } else if cfg!(target_os = "linux") {
+                    State::Unverified
+                } else {
+                    State::NotImplemented
+                },
+                "已实现系统写回；完成 OS 写入才报告成功，文件失效整批拒绝。",
             ),
             capability(
                 "global_shortcut",
                 if wayland_hint {
                     State::Restricted
+                } else if cfg!(target_os = "linux") {
+                    State::Unverified
                 } else {
                     State::NotImplemented
                 },
                 if wayland_hint {
                     "检测到 Wayland 会话线索；上游全局快捷键支持受限，尚未接入 portal。"
                 } else {
-                    "尚未注册全局快捷键；可用性需原生验证。"
+                    "Linux X11 提供 Ctrl+Shift+V；冲突会禁用，其他平台尚未接入。"
                 },
             ),
             capability(
                 "paste_to_app",
                 if wayland_hint {
                     State::Restricted
+                } else if cfg!(target_os = "linux") {
+                    State::Unverified
                 } else {
                     State::NotImplemented
                 },
                 if wayland_hint {
                     "恢复外部焦点与模拟按键受 compositor 限制，尚未实现。"
                 } else {
-                    "尚未实现原应用回粘；权限与焦点恢复需原生验证。"
+                    "Linux X11 提供独立目标校验与回粘请求，其他平台尚未接入。"
                 },
             ),
             capability(

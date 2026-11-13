@@ -15,6 +15,13 @@ const codes: ReadonlySet<ErrorCode> = new Set([
   'invalid_input',
   'busy',
   'unavailable',
+  'limit_exceeded',
+  'invalid_pattern',
+  'not_found',
+  'clipboard',
+  'missing_file',
+  'restricted',
+  'target_lost',
 ]);
 
 export function safeError(error: unknown): AppError {
@@ -29,9 +36,16 @@ export function safeError(error: unknown): AppError {
       storage: '本地保存失败，请检查磁盘空间和权限。',
       unsupported_schema: '请使用较新版本打开这些数据。',
       foreign_database: '目标文件不属于此应用。',
-      conflict: '设置已在其他位置变更，请刷新后重试。',
+      conflict: '数据已发生变化，请刷新后重试。',
       invalid_input: '请求参数无效。',
       busy: '本地服务繁忙，请稍后重试。',
+      limit_exceeded: '内容或历史容量超出限制，未截断保存。',
+      invalid_pattern: '表达式无效；不支持回溯引用和环视。',
+      not_found: '记录已不存在，请刷新。',
+      clipboard: '系统剪贴板暂不可用，请重试。',
+      missing_file: '部分文件或文件夹已失效，未写入剪贴板。',
+      restricted: '当前平台或权限不支持此操作。',
+      target_lost: '原应用目标已变化，未自动粘贴。',
       unavailable: '本地服务不可用，请重启桌面应用。',
     };
     const code = error.code as ErrorCode;

@@ -24,7 +24,7 @@ export function Modal({
     const targets = () =>
       Array.from(
         element?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]',
+          'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, a[href], [tabindex="0"]',
         ) ?? [],
       ).filter((target) => target.getClientRects().length);
     (element?.querySelector<HTMLElement>('[data-autofocus]') ?? targets()[0] ?? element)?.focus();
@@ -76,7 +76,6 @@ export function Modal({
       >
         <div className="modal-heading">
           <div>
-            <p className="eyebrow">UCLIP / PREFERENCES</p>
             <h2 id="modal-title">{title}</h2>
           </div>
           <button className="icon-button" aria-label="关闭面板" onClick={onClose}>

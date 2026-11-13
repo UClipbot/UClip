@@ -5,11 +5,13 @@ use tokio::sync::{mpsc, oneshot};
 use crate::{AppError, ErrorCode, SettingsSnapshot, Storage, UpdateSettings};
 
 const QUEUE_CAPACITY: usize = 64;
+type Operation = Box<dyn FnOnce(Result<&mut Storage, AppError>) + Send>;
 type Reply<T> = oneshot::Sender<Result<T, AppError>>;
 
 enum Request {
     Settings(Reply<SettingsSnapshot>),
     Update(UpdateSettings, Reply<SettingsSnapshot>),
+    Operation(Operation),
     Shutdown(Reply<()>),
 }
 
@@ -38,6 +40,7 @@ impl CoreService {
                 };
                 while let Some(request) = receiver.blocking_recv() {
                     match request {
+                        Request::Operation(run) => run(Ok(&mut storage)),
                         Request::Settings(reply) => {
                             let _ = reply.send(storage.settings());
                         }
@@ -49,6 +52,9 @@ impl CoreService {
                             // Requests admitted behind shutdown are rejected explicitly.
                             while let Some(pending) = receiver.blocking_recv() {
                                 match pending {
+                                    Request::Operation(run) => {
+                                        run(Err(AppError::new(ErrorCode::Unavailable)))
+                                    }
                                     Request::Settings(r) | Request::Update(_, r) => {
                                         let _ = r.send(Err(AppError::new(ErrorCode::Unavailable)));
                                     }
@@ -99,6 +105,54 @@ impl CoreService {
         response
             .await
             .map_err(|_| AppError::new(ErrorCode::Unavailable))?
+    }
+
+    async fn operation<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Storage) -> Result<T, AppError> + Send + 'static,
+    ) -> Result<T, AppError> {
+        let (reply, response) = oneshot::channel();
+        self.submit(Request::Operation(Box::new(move |storage| {
+            let _ = reply.send(storage.and_then(operation));
+        })))?;
+        response
+            .await
+            .map_err(|_| AppError::new(ErrorCode::Unavailable))?
+    }
+    pub async fn capture_policy(&self) -> Result<crate::CapturePolicy, AppError> {
+        self.operation(|s| s.capture_policy()).await
+    }
+    pub async fn history_revision(&self) -> Result<String, AppError> {
+        self.operation(|s| s.history_revision()).await
+    }
+    pub async fn update_capture_policy(
+        &self,
+        request: crate::UpdateCapturePolicy,
+    ) -> Result<crate::CapturePolicy, AppError> {
+        self.operation(move |s| s.update_capture_policy(request))
+            .await
+    }
+    pub async fn capture(&self, payload: crate::ClipPayload) -> Result<Option<String>, AppError> {
+        self.operation(move |s| s.capture(payload)).await
+    }
+    pub async fn history(
+        &self,
+        request: crate::HistoryQuery,
+    ) -> Result<crate::HistoryPage, AppError> {
+        self.operation(move |s| s.history(request)).await
+    }
+    pub async fn read_clip(&self, id: String) -> Result<crate::ClipPayload, AppError> {
+        self.operation(move |s| s.read_clip(&id)).await
+    }
+    pub async fn change_clip_deletion(
+        &self,
+        request: crate::ChangeClipDeletion,
+    ) -> Result<crate::ClipDeletionSnapshot, AppError> {
+        self.operation(move |s| s.change_clip_deletion(request))
+            .await
+    }
+    pub async fn mark_used(&self, id: String) -> Result<(), AppError> {
+        self.operation(move |s| s.mark_used(&id)).await
     }
 
     pub async fn shutdown(&self) -> Result<(), AppError> {

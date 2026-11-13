@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { BrandMark, Icon, type IconName } from './components/Icon';
+import { Icon } from './components/Icon';
 import { Modal } from './components/Modal';
+import { ActionMenu } from './components/ActionMenu';
 import { ClipPreview } from './components/ClipPreview';
 import {
   initialClips,
@@ -12,11 +13,13 @@ import {
   type View,
 } from './demo/clips';
 import { useClipQuery } from './demo/useClipQuery';
+import { useHistory } from './platform/useHistory';
+import { safeError } from './platform/client';
 import { useAppearance } from './platform/useAppearance';
 import type { Theme } from './generated/contracts';
 
-type Toast = { message: string; undo?: () => void; info?: boolean };
-const filters: (ClipType | 'all')[] = ['all', 'text', 'link', 'image', 'file'];
+type Toast = { message: string; undo?: () => void };
+type Menu = { anchor: HTMLElement; clipId?: string };
 const viewTitles: Record<View, string> = {
   all: '全部记录',
   pinned: '已置顶',
@@ -49,138 +52,294 @@ export function App() {
   const [oldest, setOldest] = useState(false);
   const [grid, setGrid] = useState(false);
   const [selectedId, setSelectedId] = useState('note-1');
-  const [mobileDetail, setMobileDetail] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [preview, setPreview] = useState<{ id: string; focus: HTMLElement | null } | null>(null);
+  const [menu, setMenu] = useState<Menu | null>(null);
   const [modal, setModal] = useState<'settings' | 'new' | 'shortcuts' | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'appearance' | 'about'>('appearance');
+  const modalFocus = useRef<HTMLElement | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
-  const result = useClipQuery(clips, view, type, query, regex, oldest);
+  const live = useHistory(appearance.native, query, regex, type, preview?.id);
+  const demoResult = useClipQuery(
+    clips,
+    view,
+    type,
+    appearance.native ? '' : query,
+    !appearance.native && regex,
+    oldest,
+  );
+  const result = appearance.native
+    ? { items: live.items, pending: live.pending, error: live.error }
+    : demoResult;
+  const [policyPattern, setPolicyPattern] = useState('');
+  const [policyMax, setPolicyMax] = useState(500);
+  useEffect(() => {
+    if (live.status) {
+      setPolicyPattern(live.status.policy.excludePattern);
+      setPolicyMax(live.status.policy.maxItems);
+    }
+  }, [live.status?.policy.revision]);
   const selected = result.items.find((clip) => clip.id === selectedId) ?? result.items[0];
-  const isMac =
+  const previewBase = preview && result.items.find((clip) => clip.id === preview.id);
+  const previewClip =
+    previewBase && appearance.native
+      ? {
+          ...previewBase,
+          content: live.detail?.id === previewBase.id ? live.detail.text : '正在读取完整内容…',
+          image:
+            live.detail?.id === previewBase.id
+              ? (live.detail.imageDataUrl ?? undefined)
+              : undefined,
+        }
+      : previewBase;
+  const menuClip = menu?.clipId ? result.items.find((clip) => clip.id === menu.clipId) : undefined;
+  const modifier =
     appearance.snapshot?.platform.os === 'macos' ||
-    (!appearance.native && /Mac|iPhone|iPad/.test(navigator.platform));
-  const modifier = isMac ? '⌘' : 'Ctrl';
-  const activeClips = clips.filter((clip) => !clip.deleted);
+    (!appearance.native && /Mac|iPhone|iPad/.test(navigator.platform))
+      ? '⌘'
+      : 'Ctrl';
+  const ready = !result.pending && !result.error;
 
-  function navigate(next: View) {
-    setView(next);
-    setType('all');
-    setQuery('');
-    setMobileDetail(false);
-    setMenuOpen(false);
-  }
   function changeClip(id: string, update: Partial<Clip>) {
     setClips((current) => current.map((clip) => (clip.id === id ? { ...clip, ...update } : clip)));
   }
   function togglePin(clip: Clip) {
     changeClip(clip.id, { pinned: !clip.pinned });
-    setToast({ message: clip.pinned ? '已取消示例置顶' : '已置顶，在侧栏中快速找到它' });
+    setToast({ message: clip.pinned ? '已取消示例置顶' : '已置顶示例' });
   }
   function removeClip(clip: Clip) {
+    if (appearance.native) {
+      void deleteNativeClip(clip);
+      return;
+    }
+    const index = result.items.findIndex((item) => item.id === clip.id);
+    setSelectedId((result.items[index + 1] ?? result.items[index - 1])?.id ?? '');
     changeClip(clip.id, { deleted: !clip.deleted });
-    setMobileDetail(false);
+    if (preview) closePreview();
+    else requestAnimationFrame(() => list.current?.focus({ preventScroll: true }));
     setToast({
-      message: clip.deleted ? '示例内容已恢复' : '示例内容已移入回收站',
+      message: clip.deleted ? '示例已恢复' : '示例已移入回收站',
       undo: () => changeClip(clip.id, { deleted: !!clip.deleted }),
     });
   }
-  async function copyClip() {
-    if (!selected) return;
+  async function deleteNativeClip(clip: Clip) {
+    if (!ready || live.mutating || !clip.revision) return;
+    const index = result.items.findIndex((item) => item.id === clip.id);
+    const nextId = (result.items[index + 1] ?? result.items[index - 1])?.id ?? '';
+    try {
+      const deleted = await live.changeDeletion({
+        id: clip.id,
+        expectedRevision: clip.revision,
+        deleted: true,
+      });
+      setSelectedId(nextId);
+      if (preview) closePreview();
+      else requestAnimationFrame(() => list.current?.focus({ preventScroll: true }));
+      setToast({
+        message: '已删除',
+        undo: () => {
+          void (async () => {
+            try {
+              await live.changeDeletion({
+                id: deleted.id,
+                expectedRevision: deleted.revision,
+                deleted: false,
+              });
+              setSelectedId(deleted.id);
+              setToast({ message: '已撤销删除' });
+            } catch (error) {
+              setToast({ message: safeError(error).message });
+            }
+          })();
+        },
+      });
+    } catch (error) {
+      setToast({ message: safeError(error).message });
+    }
+  }
+  async function copyClip(clip: Clip, paste = false) {
+    if (!ready || !result.items.some((item) => item.id === clip.id)) return;
+    if (clip.deleted) {
+      removeClip(clip);
+      return;
+    }
     if (appearance.native) {
-      setToast({ message: '系统复制尚未接入，当前为界面交互预览。', info: true });
+      try {
+        const outcome = await live.copy(clip.id, paste);
+        setToast({
+          message: outcome.warning
+            ? `${outcome.pasteRequested ? '已复制并请求原应用粘贴' : '已复制'}；${safeError(outcome.warning).message}`
+            : outcome.pasteRequested
+              ? '已复制并请求原应用粘贴'
+              : '已复制',
+        });
+      } catch (error) {
+        setToast({ message: safeError(error).message });
+      }
+      return;
+    }
+    if (clip.type === 'image' || clip.type === 'file') {
+      setToast({ message: `${typeNames[clip.type]}复制尚未接入。` });
       return;
     }
     try {
-      await navigator.clipboard.writeText(selected.content);
+      await navigator.clipboard.writeText(clip.content);
       setToast({ message: '示例文本已复制' });
     } catch {
-      setToast({ message: '浏览器未允许复制，请在内容中选择文本复制。', info: true });
+      setToast({ message: '浏览器未允许复制，可在完整内容中选择文本复制。' });
     }
   }
+  async function saveCapture(enabled: boolean, draft = false) {
+    if (!live.status) return;
+    const policy = live.status.policy;
+    try {
+      await live.updatePolicy({
+        enabled,
+        excludePattern: draft ? policyPattern : policy.excludePattern,
+        maxItems: draft ? policyMax : policy.maxItems,
+        expectedRevision: policy.revision,
+      });
+      setToast({ message: enabled ? '采集规则已生效；仅记录之后的新复制' : '采集已暂停' });
+    } catch (error) {
+      setToast({ message: safeError(error).message });
+    }
+  }
+  function openPreview(clip: Clip) {
+    if (!ready) return;
+    setSelectedId(clip.id);
+    setPreview({ id: clip.id, focus: menu?.anchor ?? (document.activeElement as HTMLElement) });
+  }
+  function closePreview() {
+    const previous = preview?.focus;
+    setPreview(null);
+    requestAnimationFrame(() => {
+      (previous?.isConnected ? previous : list.current)?.focus({ preventScroll: true });
+    });
+  }
+  function openMenu(anchor: HTMLElement, clip?: Clip) {
+    if (clip && !ready) return;
+    if (menu?.anchor === anchor) {
+      setMenu(null);
+      return;
+    }
+    if (clip) setSelectedId(clip.id);
+    setMenu({ anchor, clipId: clip?.id });
+  }
+  function menuAction(action: () => void) {
+    setMenu(null);
+    action();
+  }
+  function closeModal() {
+    setModal(null);
+    requestAnimationFrame(() => {
+      const previous = modalFocus.current;
+      (previous?.isConnected ? previous : search.current)?.focus({ preventScroll: true });
+    });
+  }
+  function openModal(next: 'settings' | 'new' | 'shortcuts') {
+    modalFocus.current = menu?.anchor ?? (document.activeElement as HTMLElement);
+    setMenu(null);
+    setModal(next);
+  }
+  function clearFilters() {
+    setView('all');
+    setType('all');
+    setQuery('');
+    setRegex(false);
+  }
+
+  useEffect(() => {
+    search.current?.focus();
+  }, []);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), toast.undo ? 6000 : 4000);
     return () => clearTimeout(timer);
   }, [toast]);
   useEffect(() => {
+    if (preview && !previewClip && !result.pending) closePreview();
+    if (menu?.clipId && !menuClip) setMenu(null);
+  });
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.isComposing) return;
-      if ((event.metaKey || event.ctrlKey) && event.key === ',') {
+      if (event.isComposing || event.keyCode === 229 || event.defaultPrevented || menu) return;
+      if ((event.metaKey || event.ctrlKey) && event.key === ',' && !modal) {
         event.preventDefault();
-        setSettingsTab('appearance');
-        setModal(modal === 'settings' ? null : 'settings');
+        openModal('settings');
         return;
       }
       if (modal) return;
-      const target = event.target as HTMLElement;
-      const editable = target.matches('input, textarea, select, [contenteditable="true"]');
+      if (event.key === 'Escape') {
+        if (preview) {
+          event.preventDefault();
+          closePreview();
+        } else if (query) {
+          event.preventDefault();
+          setQuery('');
+        }
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        search.current?.focus();
+        if (preview) closePreview();
+        requestAnimationFrame(() => search.current?.focus());
         return;
       }
-      if (event.key === 'Escape') {
-        if (menuOpen) setMenuOpen(false);
-        else if (query) setQuery('');
-        else if (mobileDetail) setMobileDetail(false);
-        return;
-      }
-      if (editable && target !== search.current) return;
-      if (
-        (event.key === 'ArrowDown' || event.key === 'ArrowUp') &&
-        !event.altKey &&
-        !event.ctrlKey &&
-        !event.metaKey
-      ) {
-        if (!result.items.length) return;
+      if (preview) return;
+      const target = event.target as HTMLElement;
+      const inList = target === list.current || target.matches('[data-row-main]');
+      if (target !== search.current && !inList) return;
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (!ready || !result.items.length) return;
         event.preventDefault();
         const index = result.items.findIndex((clip) => clip.id === selected?.id);
-        const next = Math.max(
-          0,
-          Math.min(result.items.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)),
-        );
-        const item = result.items[next];
-        if (item) {
-          setSelectedId(item.id);
-          setMenuOpen(false);
+        const next =
+          result.items[
+            Math.max(
+              0,
+              Math.min(result.items.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)),
+            )
+          ];
+        if (next) {
+          setSelectedId(next.id);
           list.current
-            ?.querySelector(`[data-clip-id="${item.id}"]`)
+            ?.querySelector(`[data-clip-id="${next.id}"]`)
             ?.scrollIntoView({ block: 'nearest' });
+          if (inList && target !== list.current)
+            list.current
+              ?.querySelector<HTMLElement>(`[data-clip-id="${next.id}"] [data-row-main]`)
+              ?.focus({ preventScroll: true });
         }
       }
-      if (event.key === 'Enter' && target === search.current) {
+      if (event.key === 'Delete' && inList) {
         event.preventDefault();
-        if (selected) setMobileDetail(true);
+        if (ready && selected) removeClip(selected);
+        return;
       }
-      if (event.key === 'Enter' && !editable && target === list.current) {
+      if (event.key === 'Enter') {
         event.preventDefault();
-        void copyClip();
+        if (ready && selected) void copyClip(selected);
+      }
+      if (event.key === ' ' && inList) {
+        event.preventDefault();
+        if (ready && selected) openPreview(selected);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
-  useEffect(() => {
-    if (!menuOpen) return;
-    const dismiss = (event: MouseEvent) => {
-      if (!(event.target as HTMLElement).closest('.menu-anchor')) setMenuOpen(false);
-    };
-    window.addEventListener('click', dismiss);
-    return () => window.removeEventListener('click', dismiss);
-  }, [menuOpen]);
 
   function createClip(event: FormEvent) {
     event.preventDefault();
-    if (!newTitle.trim() || !newContent.trim()) return;
+    if (!newContent.trim()) return;
     const clip: Clip = {
       id: `preview-${Date.now()}`,
       type: 'text',
       title: newTitle.trim(),
-      content: newContent.trim(),
+      content: newContent,
       source: '手动创建',
       time: new Date().toLocaleTimeString('zh-CN', {
         hour: '2-digit',
@@ -200,427 +359,419 @@ export function App() {
     setNewTitle('');
     setNewContent('');
     setModal(null);
-    setToast({ message: '已添加到本次示例预览，刷新后还原' });
+    setToast({ message: '已添加示例，刷新后还原' });
+    requestAnimationFrame(() => {
+      if (list.current) {
+        list.current.scrollTop = 0;
+        list.current.focus();
+      }
+    });
   }
   async function chooseTheme(theme: Theme) {
     if (await appearance.saveTheme(theme))
       setToast({ message: appearance.native ? '外观已保存' : '预览外观已更新' });
   }
 
-  const navButton = (key: View, label: string, icon: IconName, count: number) => (
-    <button
-      className={`nav-item ${view === key ? 'active' : ''}`}
-      aria-current={view === key ? 'page' : undefined}
-      onClick={() => navigate(key)}
-      title={label}
-      key={key}
-    >
-      <Icon name={icon} size={18} />
-      <span>{label}</span>
-      <span className="nav-count">{count}</span>
-    </button>
-  );
   return (
     <>
-      <div
-        className={`app-shell ${mobileDetail && selected ? 'show-mobile-detail' : ''}`}
-        aria-hidden={modal ? true : undefined}
-        data-testid="app-ready"
-      >
-        <a className="skip-link" href="#history-search">
-          跳到搜索
-        </a>
-        <aside className="sidebar" aria-label="工作区导航">
-          <div className="brand">
-            <BrandMark />
-            <span>
-              UClip<span className="brand-period">.</span>
-            </span>
-            <span className="brand-next">NEXT</span>
-          </div>
-          <button
-            className="workspace-switch"
-            onClick={() =>
-              setToast({ message: '当前是独立示例工作区，未读取真实剪贴板。', info: true })
-            }
-          >
-            <span className="workspace-avatar">
-              C<span />
-            </span>
-            <span>
-              <strong>我的空间</strong>
-              <small>个人工作区</small>
-            </span>
-            <Icon name="chevron" size={15} />
-          </button>
-          <div className="nav-caption">工作台</div>
-          <nav className="primary-nav" aria-label="历史范围">
-            {navButton('all', '全部记录', 'history', activeClips.length)}
-            {navButton('pinned', '已置顶', 'pin', activeClips.filter((clip) => clip.pinned).length)}
-          </nav>
-          <div className="nav-caption collection-caption">
-            我的分类<span>03</span>
-          </div>
-          <nav className="collection-nav" aria-label="内容分类">
-            {(Object.keys(collectionNames) as Collection[]).map((key) => (
+      <div className="app-shell" inert={modal ? true : undefined} data-testid="app-ready">
+        <header className="topbar">
+          <div className={`search-box ${result.error ? 'has-error' : ''}`}>
+            <Icon name="search" size={20} />
+            <label className="sr-only" htmlFor="history-search">
+              搜索历史
+            </label>
+            <input
+              ref={search}
+              id="history-search"
+              value={query}
+              placeholder="搜索历史…"
+              onChange={(event) => setQuery(event.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+              aria-invalid={!!result.error}
+              aria-describedby={result.error ? 'search-error' : undefined}
+            />
+            {query && (
               <button
-                className={`nav-item ${view === key ? 'active' : ''}`}
-                key={key}
-                onClick={() => navigate(key)}
-                aria-current={view === key ? 'page' : undefined}
-                title={collectionNames[key]}
-              >
-                <span className={`collection-dot ${key}`} />
-                <span>{collectionNames[key]}</span>
-                <span className="nav-count">
-                  {activeClips.filter((clip) => clip.collection === key).length}
-                </span>
-              </button>
-            ))}
-          </nav>
-          <div className="sidebar-divider" />
-          {navButton('trash', '回收站', 'trash', clips.filter((clip) => clip.deleted).length)}
-          <div className="sidebar-bottom">
-            <div className="workspace-note">
-              <span className="workspace-note-icon">
-                <Icon name="shield" size={16} />
-              </span>
-              <div>
-                <strong>留住灵感，保持专注</strong>
-                <p>让好内容随手可得。</p>
-              </div>
-            </div>
-            <button
-              className="nav-item settings-trigger"
-              data-testid="open-settings"
-              onClick={() => {
-                setSettingsTab('appearance');
-                setModal('settings');
-              }}
-              title="设置"
-            >
-              <Icon name="settings" size={18} />
-              <span>设置</span>
-              <kbd>{modifier} ,</kbd>
-            </button>
-            <div className="sidebar-signature">
-              <span className="preview-dot" />
-              设计预览<span>v0.1</span>
-            </div>
-          </div>
-        </aside>
-        <div className="workspace-main">
-          <header className="topbar">
-            <div className={`search-box ${result.error ? 'has-error' : ''}`}>
-              <Icon name="search" size={19} />
-              <label className="sr-only" htmlFor="history-search">
-                搜索剪贴板示例
-              </label>
-              <input
-                ref={search}
-                id="history-search"
-                value={query}
-                placeholder="搜索你的剪贴板…"
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setMenuOpen(false);
+                className="icon-button"
+                aria-label="清空搜索"
+                onClick={() => {
+                  setQuery('');
+                  search.current?.focus();
                 }}
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={!!result.error}
-                aria-describedby={result.error ? 'search-error' : undefined}
-              />
-              <button
-                className={`regex-toggle ${regex ? 'active' : ''}`}
-                title="正则表达式搜索"
-                aria-label="正则表达式搜索"
-                aria-pressed={regex}
-                onClick={() => setRegex(!regex)}
               >
-                .*
+                <Icon name="close" size={16} />
               </button>
-              {query ? (
-                <button
-                  className="icon-button search-clear"
-                  aria-label="清空搜索"
-                  onClick={() => {
-                    setQuery('');
-                    search.current?.focus();
-                  }}
-                >
-                  <Icon name="close" size={15} />
-                </button>
+            )}
+            <button
+              className={`regex-toggle ${regex ? 'active' : ''}`}
+              aria-label="正则表达式搜索"
+              aria-pressed={regex}
+              onClick={() => setRegex(!regex)}
+            >
+              .*
+            </button>
+          </div>
+          <div className="filter-bar">
+            <label className="scope-control">
+              <Icon
+                name={view === 'trash' ? 'trash' : view === 'pinned' ? 'pin' : 'history'}
+                size={15}
+              />
+              <span className="sr-only">历史范围</span>
+              <select
+                aria-label="历史范围"
+                value={view}
+                onChange={(event) => setView(event.target.value as View)}
+              >
+                {Object.entries(viewTitles).map(([key, label]) => (
+                  <option key={key} value={key} disabled={appearance.native && key !== 'all'}>
+                    {label}
+                    {appearance.native && key !== 'all' ? '（待接入）' : ''}
+                  </option>
+                ))}
+              </select>
+              <Icon name="chevron" size={12} />
+            </label>
+            <label className="type-control">
+              <span className="sr-only">内容类型</span>
+              <select
+                aria-label="内容类型"
+                value={type}
+                onChange={(event) => setType(event.target.value as ClipType | 'all')}
+              >
+                <option value="all">所有类型</option>
+                {Object.entries(typeNames).map(([key, label]) => (
+                  <option key={key} value={key} disabled={appearance.native && key === 'link'}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <Icon name="chevron" size={12} />
+            </label>
+            {(view !== 'all' || type !== 'all' || regex) && (
+              <button className="text-button clear-filters" onClick={clearFilters}>
+                重置
+              </button>
+            )}
+            <span className="result-count" aria-live="polite">
+              {result.pending
+                ? '搜索中'
+                : `${appearance.native ? live.total : result.items.length} 条`}
+            </span>
+            <button
+              className="icon-button app-more"
+              aria-label="更多选项"
+              aria-haspopup="menu"
+              aria-expanded={!!menu && !menu.clipId}
+              onClick={(event) => openMenu(event.currentTarget)}
+            >
+              <Icon name="more" size={20} />
+            </button>
+          </div>
+        </header>
+        {(appearance.error || live.statusError || live.status?.error) && (
+          <div className="service-error" role="alert" data-testid="service-error">
+            <Icon name="info" size={16} />
+            <span>
+              本地服务状态 ·{' '}
+              {appearance.error ||
+                live.statusError ||
+                (live.status?.error ? safeError(live.status.error).message : '')}
+            </span>
+            <button
+              className="text-button"
+              onClick={() => {
+                void appearance.refresh();
+                void live.refresh();
+              }}
+            >
+              刷新状态
+            </button>
+          </div>
+        )}
+        <main className="content-workspace">
+          <section className="history-panel" hidden={!!previewClip} aria-label="剪贴板历史">
+            <div
+              ref={list}
+              className={`history-scroll ${grid ? 'clip-grid' : ''}`}
+              tabIndex={0}
+              aria-label="历史列表，方向键选择，空格预览"
+              aria-busy={result.pending}
+            >
+              {result.pending && !result.items.length ? (
+                <div className="empty-state" role="status">
+                  <Icon name="search" size={24} />
+                  <strong>正在搜索…</strong>
+                </div>
+              ) : result.error ? (
+                <div className="empty-state" role="alert" id="search-error">
+                  <Icon name="info" size={24} />
+                  <strong>搜索未完成</strong>
+                  <p>{result.error}</p>
+                  <button className="secondary-button" onClick={() => setRegex(false)}>
+                    使用普通搜索
+                  </button>
+                </div>
+              ) : !result.items.length ? (
+                <div className="empty-state">
+                  <Icon name={view === 'trash' ? 'trash' : 'search'} size={26} />
+                  <strong>
+                    {view === 'trash' && !query && type === 'all'
+                      ? '回收站为空'
+                      : query || type !== 'all'
+                        ? '没有匹配的记录'
+                        : '暂无记录'}
+                  </strong>
+                  {(query || view !== 'all' || type !== 'all') && (
+                    <button className="text-button" onClick={clearFilters}>
+                      清除筛选
+                    </button>
+                  )}
+                </div>
               ) : (
-                <kbd>{modifier} K</kbd>
+                result.items.map((clip) => (
+                  <article
+                    key={clip.id}
+                    data-clip-id={clip.id}
+                    className={`clip-row ${selected?.id === clip.id ? 'selected' : ''} ${clip.type === 'image' ? 'image-row' : ''}`}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      openMenu(event.currentTarget.querySelector<HTMLElement>('.row-more')!, clip);
+                    }}
+                  >
+                    <button
+                      className="row-main"
+                      data-row-main
+                      aria-pressed={selected?.id === clip.id}
+                      aria-label={`${typeNames[clip.type]}：${clip.type === 'text' ? clip.content.slice(0, 60) : clip.title}`}
+                      onFocus={() => setSelectedId(clip.id)}
+                      onClick={() => setSelectedId(clip.id)}
+                    >
+                      {clip.image ? (
+                        <img className="row-thumbnail" src={clip.image} alt="" />
+                      ) : (
+                        <span className="row-icon">
+                          <Icon name={clip.type} size={19} />
+                        </span>
+                      )}
+                      <span className="row-content">
+                        <span
+                          className={`clip-excerpt ${clip.type === 'image' || clip.type === 'file' ? 'file-title' : ''}`}
+                        >
+                          {clip.type === 'image'
+                            ? clip.size
+                            : clip.type === 'file'
+                              ? clip.title
+                              : clip.content.replace(/\n\s*\n/g, '\n')}
+                        </span>
+                        <span className="clip-row-meta">
+                          {clip.source}
+                          <span>·</span>
+                          {clip.time}
+                          {clip.pinned && (
+                            <>
+                              <Icon name="pin" size={12} />
+                              <span className="sr-only">已置顶</span>
+                            </>
+                          )}
+                        </span>
+                      </span>
+                    </button>
+                    <div className="row-actions">
+                      <button
+                        className="row-copy text-button"
+                        aria-label={`${clip.deleted ? '恢复' : '复制'}：${clip.title || clip.content.slice(0, 20)}`}
+                        onClick={() => void copyClip(clip)}
+                      >
+                        {clip.deleted ? '恢复' : '复制'}
+                      </button>
+                      <button
+                        className="icon-button row-more"
+                        aria-label={`更多操作：${clip.title || clip.content.slice(0, 20)}`}
+                        aria-haspopup="menu"
+                        aria-expanded={menu?.clipId === clip.id}
+                        onClick={(event) => openMenu(event.currentTarget, clip)}
+                      >
+                        <Icon name="more" size={17} />
+                      </button>
+                    </div>
+                  </article>
+                ))
               )}
             </div>
-            <div className="topbar-actions">
-              <span className="preview-badge">
-                <span />
-                示例工作区
-              </span>
-              <button
-                className="icon-button theme-toggle"
-                onClick={() => {
-                  void chooseTheme(appearance.dark ? 'light' : 'dark');
-                }}
-                aria-label={appearance.dark ? '切换浅色主题' : '切换深色主题'}
-                disabled={
-                  appearance.saving ||
-                  appearance.loading ||
-                  (appearance.native && !appearance.snapshot)
-                }
-              >
-                <Icon name={appearance.dark ? 'sun' : 'moon'} size={18} />
-              </button>
-            </div>
-          </header>
-          <div className="workspace-heading">
-            <div>
-              <div className="heading-breadcrumb">
-                我的空间
-                <Icon name="chevron" size={12} />
-                {view === 'all' ? '剪贴板' : '内容管理'}
-              </div>
-              <div className="page-heading">
-                <h1>{viewTitles[view]}</h1>
-                <span>{result.items.length}</span>
-              </div>
-            </div>
-            <button className="new-button" onClick={() => setModal('new')}>
-              <Icon name="plus" size={16} />
-              <span>新建片段</span>
+          </section>
+          {previewClip && (
+            <ClipPreview
+              clip={previewClip}
+              onBack={closePreview}
+              onCopy={() => void copyClip(previewClip)}
+              onPin={() => togglePin(previewClip)}
+              error={appearance.native ? live.detailError : undefined}
+              onMore={(anchor) => openMenu(anchor, previewClip)}
+            />
+          )}
+        </main>
+        <footer className="statusbar">
+          {appearance.native ? (
+            <button
+              className="text-button capture-toggle"
+              disabled={
+                !live.status ||
+                live.mutating ||
+                (!live.status.available && !live.status.policy.enabled)
+              }
+              onClick={() => void saveCapture(!live.status?.policy.enabled)}
+            >
+              {!live.status
+                ? '正在连接…'
+                : !live.status.available
+                  ? live.status.policy.enabled
+                    ? '采集不可用 · 点击暂停'
+                    : '采集不可用'
+                  : live.status.policy.enabled
+                    ? '● 采集中 · 点击暂停'
+                    : '开始采集'}
             </button>
-          </div>
-          {appearance.error && (
-            <div className="service-error" role="alert" data-testid="service-error">
-              <Icon name="info" size={17} />
-              <span>
-                <strong>本地服务连接失败</strong> · {appearance.error}
-              </span>
+          ) : (
+            <span>示例数据 · 刷新后还原</span>
+          )}
+          {appearance.native && live.total > 25 && (
+            <div className="pagination">
               <button
-                onClick={() => {
-                  void appearance.refresh();
-                }}
+                className="text-button"
+                disabled={live.pending || !live.offset}
+                onClick={() => live.setOffset(Math.max(0, live.offset - 25))}
               >
-                重试
+                上一页
+              </button>
+              <span>{Math.floor(live.offset / 25) + 1}</span>
+              <button
+                className="text-button"
+                disabled={live.pending || live.offset + 25 >= live.total}
+                onClick={() => live.setOffset(live.offset + 25)}
+              >
+                下一页
               </button>
             </div>
           )}
-          <div className="filter-bar">
-            <div className="type-filters" aria-label="内容类型">
-              {filters.map((key) => (
-                <button
-                  className={type === key ? 'active' : ''}
-                  key={key}
-                  onClick={() => setType(key)}
-                  aria-pressed={type === key}
-                >
-                  {key !== 'all' && <Icon name={key} size={14} />}
-                  {key === 'all' ? '全部' : typeNames[key]}
-                </button>
-              ))}
-            </div>
-            <div className="view-controls">
-              <button
-                className="icon-button sort-control"
-                onClick={() => setOldest(!oldest)}
-                title={oldest ? '切换为最近复制优先' : '切换为最早复制优先'}
-                aria-label={oldest ? '最早复制优先' : '最近复制优先'}
-              >
-                <Icon name="sort" size={16} />
-                <span>{oldest ? '最早复制' : '最近复制'}</span>
-              </button>
-              <span className="control-divider" />
-              <button
-                className={`icon-button ${!grid ? 'active' : ''}`}
-                aria-label="列表视图"
-                aria-pressed={!grid}
-                onClick={() => setGrid(false)}
-              >
-                <Icon name="list" size={16} />
-              </button>
-              <button
-                className={`icon-button ${grid ? 'active' : ''}`}
-                aria-label="网格视图"
-                aria-pressed={grid}
-                onClick={() => setGrid(true)}
-              >
-                <Icon name="grid" size={15} />
-              </button>
-            </div>
-          </div>
-          <main className={`content-workspace ${grid ? 'grid-mode' : ''}`}>
-            <section className="history-panel" aria-label="剪贴板历史">
-              <div className="list-heading">
-                <span>{query ? '搜索结果' : view === 'trash' ? '已删除的示例' : '最近的灵感'}</span>
-                <span>{result.items.length} 条内容</span>
-              </div>
-              <div
-                className={`history-scroll ${grid ? 'clip-grid' : ''}`}
-                ref={list}
-                tabIndex={0}
-                aria-label="使用上下方向键选择内容"
-              >
-                {result.pending ? (
-                  <div className="empty-state" role="status">
-                    <Icon name="search" size={30} />
-                    <strong>正在筛选示例…</strong>
-                    <p>复杂表达式会自动停止，可随时修改搜索。</p>
-                  </div>
-                ) : result.error ? (
-                  <div className="empty-state" role="alert" id="search-error">
-                    <Icon name="search" size={30} />
-                    <strong>检查一下搜索条件</strong>
-                    <p>{result.error}</p>
-                    <button onClick={() => setRegex(false)}>使用普通搜索</button>
-                  </div>
-                ) : !result.items.length ? (
-                  <div className="empty-state">
-                    <Icon name={view === 'trash' ? 'trash' : 'search'} size={32} />
-                    <strong>{view === 'trash' ? '这里暂时很干净' : '还没有匹配的内容'}</strong>
-                    <p>
-                      {view === 'trash'
-                        ? '删除的示例会出现在这里，可以随时恢复。'
-                        : '试试其他关键词，或换一种内容类型。'}
-                    </p>
-                    {(query || type !== 'all') && (
-                      <button
-                        onClick={() => {
-                          setQuery('');
-                          setType('all');
-                        }}
-                      >
-                        清除筛选
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  result.items.map((clip, index) => (
-                    <div className="clip-group" key={clip.id}>
-                      {!grid && (index === 0 || result.items[index - 1]?.day !== clip.day) && (
-                        <div className="day-label">
-                          {clip.day}
-                          <span />
-                        </div>
-                      )}
-                      <button
-                        className={`clip-row ${selected?.id === clip.id ? 'selected' : ''} type-${clip.type}`}
-                        data-clip-id={clip.id}
-                        aria-pressed={selected?.id === clip.id}
-                        onClick={() => {
-                          setSelectedId(clip.id);
-                          setMobileDetail(true);
-                          setMenuOpen(false);
-                        }}
-                      >
-                        {grid && clip.image ? (
-                          <img
-                            className="grid-image"
-                            src={clip.image}
-                            width="1200"
-                            height="780"
-                            alt="山野插画示例"
-                          />
-                        ) : (
-                          <span className={`clip-type-icon ${clip.language ? 'code' : clip.type}`}>
-                            <Icon name={clip.language ? 'file' : clip.type} size={18} />
-                          </span>
-                        )}
-                        <span className="clip-row-content">
-                          <span className="clip-title">{clip.title}</span>
-                          <span className="clip-excerpt">
-                            {clip.type === 'image'
-                              ? `${clip.size} · 图片`
-                              : clip.type === 'file'
-                                ? `${clip.size} · 文件引用`
-                                : clip.content.replace(/\n/g, ' ')}
-                          </span>
-                          <span className="clip-row-meta">
-                            <span>{clip.source}</span>
-                            <span className="separator-dot">·</span>
-                            <span>{clip.time}</span>
-                            {clip.collection && (
-                              <span className={`tiny-collection ${clip.collection}`} />
-                            )}
-                          </span>
-                        </span>
-                        <span className="clip-row-trailing">
-                          {clip.pinned && <Icon name="pin" size={12} />}
-                          {selected?.id === clip.id && <span className="selected-arrow">↵</span>}
-                        </span>
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div className="list-footnote">
-                <Icon name="info" size={13} />
-                <span>示例数据 · 刷新后还原</span>
-              </div>
-            </section>
-            {selected ? (
-              <ClipPreview
-                clip={selected}
-                onPin={() => togglePin(selected)}
-                onDelete={() => removeClip(selected)}
-                onCollection={(collection) => {
-                  changeClip(selected.id, { collection });
-                  setToast({ message: `已将示例移入「${collectionNames[collection]}」` });
-                }}
-                onCopy={() => {
-                  void copyClip();
-                }}
-                onBack={() => setMobileDetail(false)}
-                menuOpen={menuOpen}
-                setMenuOpen={setMenuOpen}
-              />
-            ) : (
-              <div className="detail-empty">
-                <BrandMark />
-                <p>让每一段内容，都有一个落点。</p>
-                <span>选择一条记录，在这里查看完整内容</span>
-              </div>
-            )}
-          </main>
-          <footer className="statusbar">
-            <div>
-              <span
-                className={`status-dot ${appearance.error ? 'error' : appearance.loading ? 'pending' : ''}`}
-              />
-              <span>
-                {appearance.native
-                  ? appearance.loading
-                    ? '正在连接本地服务'
-                    : appearance.error
-                      ? '本地服务需要处理'
-                      : '本地服务已就绪'
-                  : '界面交互预览'}
-              </span>
-              <span className="statusbar-separator">/</span>
-              <span className="statusbar-hint">未读取系统剪贴板</span>
-            </div>
-            <button onClick={() => setModal('shortcuts')} className="shortcut-hints">
-              <span>
-                <kbd>↑</kbd>
-                <kbd>↓</kbd>选择
-              </span>
-              <span>
-                <kbd>↵</kbd>查看 / 复制
-              </span>
-              <Icon name="keyboard" size={16} />
-            </button>
-          </footer>
-        </div>
+          <button
+            className="text-button"
+            onClick={() => openModal('shortcuts')}
+            aria-label="快捷键帮助"
+          >
+            <span className="footer-hint">↵ {view === 'trash' ? '恢复' : '复制'}</span>
+            <Icon name="keyboard" size={16} />
+          </button>
+        </footer>
       </div>
+      {menu && (
+        <ActionMenu anchor={menu.anchor} onClose={() => setMenu(null)}>
+          {menuClip ? (
+            <>
+              {appearance.native && (
+                <button
+                  role="menuitem"
+                  disabled={!live.status?.pasteAvailable || !live.status.pasteTarget}
+                  onClick={() => menuAction(() => void copyClip(menuClip, true))}
+                >
+                  <Icon name="arrow" size={15} />
+                  粘贴到原应用
+                </button>
+              )}
+              {appearance.native && <p className="menu-label">分类、置顶待接入</p>}
+              <button role="menuitem" onClick={() => menuAction(() => openPreview(menuClip))}>
+                <Icon name="text" size={15} />
+                查看完整内容
+              </button>
+              <button
+                role="menuitem"
+                disabled={appearance.native}
+                onClick={() => menuAction(() => togglePin(menuClip))}
+              >
+                <Icon name="pin" size={15} />
+                {menuClip.pinned ? '取消置顶' : '置顶'}
+              </button>
+              {!appearance.native && !menuClip.deleted && (
+                <>
+                  <div className="menu-separator" />
+                  <p className="menu-label">移入分类</p>
+                  {(Object.keys(collectionNames) as Collection[]).map((key) => (
+                    <button
+                      role="menuitem"
+                      key={key}
+                      onClick={() =>
+                        menuAction(() => {
+                          changeClip(menuClip.id, { collection: key });
+                          setToast({ message: `示例已移入「${collectionNames[key]}」` });
+                        })
+                      }
+                    >
+                      <Icon name="folder" size={15} />
+                      {collectionNames[key]}
+                      {menuClip.collection === key && <Icon name="check" size={14} />}
+                    </button>
+                  ))}
+                </>
+              )}
+              <div className="menu-separator" />
+              <button
+                role="menuitem"
+                className={menuClip.deleted ? '' : 'destructive'}
+                disabled={!ready || live.mutating}
+                onClick={() => menuAction(() => removeClip(menuClip))}
+              >
+                <Icon name={menuClip.deleted ? 'restore' : 'trash'} size={15} />
+                {menuClip.deleted ? '恢复' : appearance.native ? '删除' : '移入回收站'}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                role="menuitem"
+                disabled={appearance.native}
+                onClick={() => menuAction(() => openModal('new'))}
+              >
+                <Icon name="plus" size={15} />
+                新建示例
+              </button>
+              <button role="menuitem" onClick={() => menuAction(() => setGrid(!grid))}>
+                <Icon name={grid ? 'list' : 'grid'} size={15} />
+                {grid ? '切换列表视图' : '切换网格视图'}
+              </button>
+              <button
+                role="menuitem"
+                disabled={appearance.native}
+                onClick={() => menuAction(() => setOldest(!oldest))}
+              >
+                <Icon name="sort" size={15} />
+                {oldest ? '改为最近优先' : '改为最早优先'}
+              </button>
+              <div className="menu-separator" />
+              <button
+                role="menuitem"
+                data-testid="open-settings"
+                aria-label="设置"
+                onClick={() => menuAction(() => openModal('settings'))}
+              >
+                <Icon name="settings" size={15} />
+                设置<span className="menu-shortcut">{modifier} ,</span>
+              </button>
+              <button role="menuitem" onClick={() => menuAction(() => openModal('shortcuts'))}>
+                <Icon name="keyboard" size={15} />
+                快捷键帮助
+              </button>
+            </>
+          )}
+        </ActionMenu>
+      )}
       {toast && (
-        <div className={`toast ${toast.info ? 'toast-info' : ''}`} role="status">
-          <span className="toast-icon">
-            <Icon name={toast.info ? 'info' : 'check'} size={16} />
-          </span>
+        <div className="toast" role="status">
           <span>{toast.message}</span>
           {toast.undo && (
             <button
+              className="text-button"
               onClick={() => {
                 toast.undo?.();
                 setToast(null);
@@ -635,218 +786,191 @@ export function App() {
         </div>
       )}
       {modal === 'settings' && (
-        <Modal
-          title="让这里，更像你的空间。"
-          description="细微的偏好，刚刚好的工作节奏。"
-          onClose={() => setModal(null)}
-          wide
-        >
-          <div className="settings-layout">
-            <nav aria-label="设置分类">
+        <Modal title="设置" onClose={closeModal}>
+          {appearance.native && (
+            <section className="capture-settings">
+              <h3>采集</h3>
+              <label className="setting-row">
+                记录新复制
+                <input
+                  type="checkbox"
+                  checked={!!live.status?.policy.enabled}
+                  disabled={
+                    !live.status ||
+                    live.mutating ||
+                    (!live.status.available && !live.status.policy.enabled)
+                  }
+                  onChange={(event) => void saveCapture(event.target.checked)}
+                />
+              </label>
+              <p className="settings-feedback">
+                只记录开启后的新复制，不补采已有剪贴板。来源无法可靠获取时标为未知。
+              </p>
+              <label className="policy-field">
+                排除正则（文本与文件路径）
+                <input
+                  aria-label="排除正则"
+                  value={policyPattern}
+                  maxLength={4096}
+                  onChange={(event) => setPolicyPattern(event.target.value)}
+                />
+              </label>
+              <label className="policy-field">
+                最多保留条数
+                <input
+                  aria-label="最多保留条数"
+                  type="number"
+                  min={1}
+                  max={1000}
+                  value={policyMax}
+                  onChange={(event) => setPolicyMax(Number(event.target.value))}
+                />
+              </label>
               <button
-                className={settingsTab === 'appearance' ? 'active' : ''}
-                onClick={() => setSettingsTab('appearance')}
+                className="secondary-button"
+                disabled={
+                  !live.status ||
+                  live.mutating ||
+                  !Number.isInteger(policyMax) ||
+                  policyMax < 1 ||
+                  policyMax > 1000
+                }
+                onClick={() => void saveCapture(!!live.status?.policy.enabled, true)}
               >
-                <Icon name="sun" size={16} />
-                外观
+                保存采集规则
               </button>
+              <p className="settings-feedback">
+                文本上限 4MiB；图片上限 8M 像素；文件引用最多 256 项。总历史载荷最多
+                128MiB，超限不截断。
+                {live.status?.shortcutAvailable ? ' Ctrl+Shift+V 唤起窗口。' : ''}
+              </p>
+            </section>
+          )}
+          <section className="settings-section">
+            <h3>外观</h3>
+            <label className="setting-row" htmlFor="theme">
+              主题
+              <select
+                id="theme"
+                value={appearance.theme}
+                disabled={
+                  appearance.saving ||
+                  appearance.loading ||
+                  (appearance.native && !appearance.snapshot)
+                }
+                onChange={(event) => void chooseTheme(event.target.value as Theme)}
+              >
+                <option value="system">跟随系统</option>
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+              </select>
+              <Icon name="chevron" size={12} />
+            </label>
+            <p className="settings-feedback" role="status">
+              {appearance.saving
+                ? '正在保存…'
+                : appearance.error ||
+                  (appearance.native ? '外观保存在此设备。' : '浏览器只记住外观偏好。')}
+            </p>
+          </section>
+          <details className="about-section">
+            <summary>关于与状态</summary>
+            <p>UClip · 0.1.0</p>
+            <p>
+              {appearance.native
+                ? '历史保存在此设备。文件仅保存引用；云同步、CLI 和完整管理尚未接入。自动回粘与跨平台验证状态单独报告。'
+                : '当前为浏览器界面预览，记录全部为内存示例。'}
+            </p>
+            {appearance.snapshot?.platform.capabilities.map((item) => (
+              <div className="capability-row" key={item.id}>
+                <span>{capabilityNames[item.id] ?? item.id}</span>
+                <span>{stateNames[item.state]}</span>
+              </div>
+            ))}
+            {appearance.native && (
               <button
-                className={settingsTab === 'about' ? 'active' : ''}
-                onClick={() => setSettingsTab('about')}
+                className="secondary-button"
+                disabled={appearance.loading || appearance.saving}
+                onClick={() => {
+                  void appearance.refresh();
+                  void live.refresh();
+                }}
               >
-                <Icon name="info" size={16} />
-                关于与状态
+                刷新服务状态
               </button>
-            </nav>
-            <div className="settings-content">
-              {settingsTab === 'appearance' ? (
-                <>
-                  <h3>界面主题</h3>
-                  <p className="setting-help">Moss · 苔序，让内容成为视觉的中心。</p>
-                  <div className="theme-options">
-                    {(['light', 'dark', 'system'] as Theme[]).map((theme) => (
-                      <button
-                        className={`theme-option theme-${theme} ${appearance.theme === theme ? 'chosen' : ''}`}
-                        key={theme}
-                        aria-pressed={appearance.theme === theme}
-                        onClick={() => {
-                          void chooseTheme(theme);
-                        }}
-                        disabled={
-                          appearance.saving ||
-                          appearance.loading ||
-                          (appearance.native && !appearance.snapshot)
-                        }
-                      >
-                        <span className="mini-window">
-                          <i />
-                          <span>
-                            <b />
-                            <b />
-                            <b />
-                          </span>
-                        </span>
-                        <span>
-                          {theme === 'light' ? '纸白' : theme === 'dark' ? '深墨' : '跟随系统'}
-                          {appearance.theme === theme && <Icon name="check" size={14} />}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="setting-row">
-                    <label htmlFor="theme">显示主题</label>
-                    <select
-                      id="theme"
-                      value={appearance.theme}
-                      onChange={(event) => {
-                        void chooseTheme(event.target.value as Theme);
-                      }}
-                      disabled={
-                        appearance.saving ||
-                        appearance.loading ||
-                        (appearance.native && !appearance.snapshot)
-                      }
-                    >
-                      <option value="system">跟随系统</option>
-                      <option value="light">纸白 · 浅色</option>
-                      <option value="dark">深墨 · 深色</option>
-                    </select>
-                  </div>
-                  <p className="settings-feedback" role="status">
-                    {appearance.saving
-                      ? '正在保存外观…'
-                      : appearance.error ||
-                        (appearance.native
-                          ? '外观保存在此设备，重新打开后仍然生效。'
-                          : '浏览器只记住外观偏好；示例内容刷新后还原。')}
-                  </p>
-                  <div className="design-note">
-                    <Icon name="shield" size={18} />
-                    <div>
-                      <strong>一个安静的本地空间</strong>
-                      <p>界面资源随应用提供，无需联网加载字体、图片或网站图标。</p>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="about-brand">
-                    <BrandMark />
-                    <strong>UClip</strong>
-                    <span>0.1.0 · Moss preview</span>
-                  </div>
-                  <p className="setting-help">
-                    这是一版可交互的界面设计。采集、原应用回粘和云同步尚未接入；当前列表全部为示例内容。
-                  </p>
-                  {appearance.snapshot && (
-                    <div className="capability-list">
-                      {appearance.snapshot.platform.capabilities.map((item) => (
-                        <div key={item.id}>
-                          <span>{capabilityNames[item.id] ?? item.id}</span>
-                          <span>{stateNames[item.state]}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="about-meta">
-                    <span>
-                      {appearance.native
-                        ? (appearance.snapshot?.platform.os ?? '桌面服务连接中')
-                        : '浏览器预览'}
-                    </span>
-                    <span>主题设计与业务数据独立</span>
-                  </div>
-                  {appearance.native && (
-                    <button
-                      className="secondary-button"
-                      disabled={appearance.loading || appearance.saving}
-                      onClick={() => {
-                        void appearance.refresh();
-                      }}
-                    >
-                      刷新服务状态
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
+            )}
+          </details>
         </Modal>
       )}
       {modal === 'new' && (
-        <Modal
-          title="留下一段新想法。"
-          description="添加到本次示例预览，刷新后还原。"
-          onClose={() => setModal(null)}
-        >
+        <Modal title="新建示例" description="仅保存在此次预览，刷新后还原。" onClose={closeModal}>
           <form className="new-form" onSubmit={createClip}>
-            <label htmlFor="clip-title">标题</label>
+            <label htmlFor="clip-title">标题（可选）</label>
             <input
               id="clip-title"
               data-autofocus
               value={newTitle}
               onChange={(event) => setNewTitle(event.target.value)}
-              placeholder="给这段内容起个名字"
               maxLength={96}
-              required
             />
             <label htmlFor="clip-content">内容</label>
             <textarea
               id="clip-content"
               value={newContent}
               onChange={(event) => setNewContent(event.target.value)}
-              placeholder="一段文字，一个念头，或者下次要用的片段…"
+              rows={6}
               maxLength={8000}
-              rows={7}
               required
             />
             <div className="form-actions">
-              <button className="secondary-button" type="button" onClick={() => setModal(null)}>
+              <button className="secondary-button" type="button" onClick={closeModal}>
                 取消
               </button>
-              <button className="primary-button" disabled={!newTitle.trim() || !newContent.trim()}>
+              <button className="primary-button" disabled={!newContent.trim()}>
                 添加示例
-                <Icon name="arrow" size={16} />
               </button>
             </div>
           </form>
         </Modal>
       )}
       {modal === 'shortcuts' && (
-        <Modal
-          title="让双手，留在键盘上。"
-          description="当前窗口内的快捷操作，不注册系统全局快捷键。"
-          onClose={() => setModal(null)}
-        >
+        <Modal title="快捷键" onClose={closeModal}>
           <div className="shortcut-list">
             <div>
               <span>聚焦搜索</span>
-              <span>
-                <kbd>{modifier}</kbd>
-                <kbd>K</kbd>
-              </span>
+              <kbd>{modifier} K</kbd>
             </div>
             <div>
-              <span>选择上一条 / 下一条</span>
-              <span>
-                <kbd>↑</kbd>
-                <kbd>↓</kbd>
-              </span>
+              <span>选择记录</span>
+              <kbd>↑ / ↓</kbd>
             </div>
             <div>
-              <span>搜索框内查看选中内容</span>
+              <span>复制 / 在回收站恢复</span>
               <kbd>Enter</kbd>
             </div>
             <div>
-              <span>关闭面板 / 清空搜索 / 返回列表</span>
+              <span>查看完整内容（列表焦点）</span>
+              <kbd>Space</kbd>
+            </div>
+            <div>
+              <span>删除记录（列表焦点）</span>
+              <kbd>Delete</kbd>
+            </div>
+            <div>
+              <span>关闭当前面板 / 清空搜索</span>
               <kbd>Esc</kbd>
             </div>
             <div>
-              <span>在控件之间移动</span>
-              <kbd>Tab</kbd>
+              <span>设置</span>
+              <kbd>{modifier} ,</kbd>
             </div>
           </div>
-          <p className="setting-help">桌面系统复制尚未接入。浏览器预览可通过按钮复制示例文本。</p>
+          <p className="settings-feedback">
+            以上快捷键仅在当前窗口内生效；
+            {appearance.native
+              ? 'Enter 只复制；自动回粘需单独选择，失败不会向任意窗口粘贴。'
+              : '浏览器只支持示例文本复制。'}
+          </p>
         </Modal>
       )}
     </>

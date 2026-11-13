@@ -4,12 +4,12 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 const APPLICATION_ID: i64 = 0x434c4e58; // CLNX: never open the previous application's database.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
 pub struct Storage {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 
 impl Storage {
@@ -48,13 +48,25 @@ impl Storage {
                 INSERT INTO settings(singleton, theme, revision) VALUES(1, 'system', 0);",
             )?;
             tx.pragma_update(None, "application_id", APPLICATION_ID)?;
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            tx.pragma_update(None, "user_version", 1)?;
+        }
+        if version < 2 {
+            tx.execute_batch("CREATE TABLE capture_policy(singleton INTEGER PRIMARY KEY CHECK(singleton=1),enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),exclude_pattern TEXT NOT NULL,max_items INTEGER NOT NULL CHECK(max_items BETWEEN 1 AND 1000),revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;
+            INSERT INTO capture_policy VALUES(1,0,'',500,0);
+            CREATE TABLE history_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;
+            INSERT INTO history_meta VALUES(1,0);
+            CREATE TABLE clips(id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('text','image','files')),text TEXT NOT NULL,data BLOB NOT NULL,width INTEGER,height INTEGER,file_count INTEGER NOT NULL DEFAULT 0,fingerprint BLOB NOT NULL,origin TEXT NOT NULL DEFAULT 'capture',pinned INTEGER NOT NULL DEFAULT 0,deleted INTEGER NOT NULL DEFAULT 0,collection TEXT,captured_at INTEGER NOT NULL,last_used_at INTEGER,sequence INTEGER NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;
+            CREATE INDEX clips_order ON clips(deleted,sequence DESC,id);
+            CREATE INDEX clips_fingerprint ON clips(fingerprint);")?;
+            tx.pragma_update(None, "user_version", 2)?;
         }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         connection.pragma_update(None, "foreign_keys", true)?;
         let storage = Self { connection };
+        storage.capture_policy()?;
+        storage.history_revision()?;
         storage.settings()?; // Fail startup on an invalid persisted setting.
         Ok(storage)
     }

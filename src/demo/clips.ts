@@ -4,13 +4,15 @@ export type ClipType = 'text' | 'link' | 'image' | 'file';
 export type Collection = 'work' | 'inspiration' | 'later';
 export type View = 'all' | 'pinned' | 'trash' | Collection;
 export interface Clip {
+  native?: boolean;
+  revision?: string;
   id: string;
   type: ClipType;
   title: string;
   content: string;
   source: string;
   time: string;
-  day: '今天' | '昨天';
+  day: string;
   pinned: boolean;
   collection: Collection | null;
   deleted?: boolean;

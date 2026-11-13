@@ -1,15 +1,44 @@
 # UClip
 
-UClip is a local-first clipboard manager. Version 0.1.0 currently provides a UI preview.
+UClip is a local-first clipboard manager for saving copied content, finding it quickly, and pasting it again. History stays on your computer.
 
-## Try the preview
+## Features
 
-- Moss dark and light themes.
-- Sample text, images, and file entries with on-demand previews.
-- Search, type filters, and regular expressions.
-- Basic keyboard navigation and saved theme preferences.
+- **Clipboard history:** keep copied text, images, and file or folder references across restarts.
+- **Quick search:** find entries by content or type, with regular expression support.
+- **Copy and paste:** copy a saved entry again, or paste it into the previous application on Linux X11.
+- **Capture controls:** pause or resume capture, set exclusions, and choose a history limit.
+- **Light and dark themes:** choose an appearance and keep your preference.
 
-The list uses in-memory examples and resets on refresh. System clipboard capture, persistent history, automatic pasting, and synchronization are not connected yet.
+## Getting started
+
+1. Open the app and enable capture.
+2. Copy content in another application. New copies appear in the history list.
+3. Search for an entry and press Enter or click Copy, then paste it into your destination application.
+4. On Linux X11, press Ctrl+Shift+V to open the window and choose the action to paste into the previous application.
+
+File entries store references, so the original files must still be available when used.
+
+## Default shortcuts
+
+| Action | Shortcut |
+| --- | --- |
+| Search | Ctrl/Cmd+K |
+| Settings | Ctrl/Cmd+, |
+| Copy the selected entry | Enter |
+| Preview full content | Space |
+| Delete the selected entry | Delete |
+| Go back, clear search, or hide the window | Esc |
+
+## Platforms
+
+| Platform | Status |
+| --- | --- |
+| Linux X11 | Native capture and automatic pasting verified on Linux Mint 22 |
+| Linux Wayland | Capture and automatic pasting are unavailable; native validation is pending |
+| Windows / macOS | Platform adapters are in development; native acceptance testing is pending |
+
+This is a development version. Cloud synchronization, a CLI, and migration from earlier products are not available yet.
 
 ## Run from source
 
@@ -20,8 +49,4 @@ npm ci
 npm run tauri:dev
 ```
 
-Use `npm run dev` to try the sample interface in a browser.
-
-## Platforms
-
-Windows, macOS, and Linux are planned targets. The native interface has been verified on Linux; other platforms still require validation.
+Use `npm run dev` to try the in-memory sample interface in a browser.

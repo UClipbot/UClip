@@ -1,0 +1,443 @@
+use crate::{
+    AppError, CapturePolicy, ClipKind, ErrorCode, HistoryItem, HistoryPage, HistoryQuery, Storage,
+    UpdateCapturePolicy,
+};
+use regex::{Regex, RegexBuilder};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use sha2::{Digest, Sha256};
+use std::{
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+pub const MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_IMAGE_PIXELS: u64 = 8_388_608;
+pub const MAX_HISTORY_BYTES: i64 = 128 * 1024 * 1024;
+pub const PAGE_SIZE: usize = 25;
+
+/// Only Rust platform adapters construct capture payloads. There is no arbitrary-payload IPC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipPayload {
+    Text(String),
+    Image {
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
+    Files(Vec<String>),
+}
+impl ClipPayload {
+    pub fn validate(&self) -> Result<(), AppError> {
+        let valid = match self {
+            Self::Text(text) => !text.is_empty() && text.len() <= MAX_TEXT_BYTES,
+            Self::Image {
+                width,
+                height,
+                rgba,
+            } => {
+                let pixels = u64::from(*width) * u64::from(*height);
+                pixels > 0 && pixels <= MAX_IMAGE_PIXELS && pixels * 4 == rgba.len() as u64
+            }
+            Self::Files(paths) => {
+                !paths.is_empty()
+                    && paths.len() <= 256
+                    && paths.iter().all(|path| {
+                        !path.contains('\0') && path.len() <= 32768 && Path::new(path).is_absolute()
+                    })
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(AppError::new(ErrorCode::LimitExceeded))
+        }
+    }
+    pub fn fingerprint(&self) -> Vec<u8> {
+        let mut hash = Sha256::new();
+        match self {
+            Self::Text(text) => {
+                hash.update(b"text\0");
+                hash.update(text.as_bytes());
+            }
+            Self::Image {
+                width,
+                height,
+                rgba,
+            } => {
+                hash.update(b"image\0");
+                hash.update(width.to_le_bytes());
+                hash.update(height.to_le_bytes());
+                hash.update(rgba);
+            }
+            Self::Files(files) => {
+                hash.update(b"files\0");
+                for path in files {
+                    hash.update((path.len() as u64).to_le_bytes());
+                    hash.update(path.as_bytes());
+                }
+            }
+        }
+        hash.finalize().to_vec()
+    }
+}
+
+pub fn pattern(value: &str, literal: bool) -> Result<Regex, AppError> {
+    if value.len() > 4096 {
+        return Err(AppError::new(ErrorCode::InvalidPattern));
+    }
+    RegexBuilder::new(&if literal {
+        regex::escape(value)
+    } else {
+        value.into()
+    })
+    .case_insensitive(true)
+    .size_limit(1024 * 1024)
+    .dfa_size_limit(1024 * 1024)
+    .build()
+    .map_err(|_| AppError::new(ErrorCode::InvalidPattern))
+}
+fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(i64::MAX as u128) as i64
+}
+fn kind_name(kind: ClipKind) -> &'static str {
+    match kind {
+        ClipKind::Text => "text",
+        ClipKind::Image => "image",
+        ClipKind::Files => "files",
+    }
+}
+fn parse_kind(kind: &str) -> rusqlite::Result<ClipKind> {
+    match kind {
+        "text" => Ok(ClipKind::Text),
+        "image" => Ok(ClipKind::Image),
+        "files" => Ok(ClipKind::Files),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+
+impl Storage {
+    pub fn capture_policy(&self) -> Result<CapturePolicy, AppError> {
+        Ok(self.connection.query_row("SELECT enabled,exclude_pattern,max_items,revision FROM capture_policy WHERE singleton=1", [], |r| Ok(CapturePolicy { enabled: r.get(0)?, exclude_pattern: r.get(1)?, max_items: r.get(2)?, revision: r.get::<_,i64>(3)?.to_string() }))?)
+    }
+    pub fn history_revision(&self) -> Result<String, AppError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT revision FROM history_meta WHERE singleton=1",
+                [],
+                |r| r.get::<_, i64>(0),
+            )?
+            .to_string())
+    }
+    pub fn update_capture_policy(
+        &mut self,
+        request: UpdateCapturePolicy,
+    ) -> Result<CapturePolicy, AppError> {
+        pattern(&request.exclude_pattern, false)?;
+        if !(1..=1000).contains(&request.max_items) {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let revision: i64 = request
+            .expected_revision
+            .parse()
+            .map_err(|_| AppError::new(ErrorCode::InvalidInput))?;
+        if revision < 0 || revision == i64::MAX || revision.to_string() != request.expected_revision
+        {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute("UPDATE capture_policy SET enabled=?1,exclude_pattern=?2,max_items=?3,revision=revision+1 WHERE singleton=1 AND revision=?4", params![request.enabled, request.exclude_pattern, request.max_items, revision])?;
+        if changed != 1 {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        prune(&tx, request.max_items, None)?;
+        tx.execute(
+            "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+            [],
+        )?;
+        tx.commit()?;
+        self.capture_policy()
+    }
+    pub fn capture(&mut self, payload: ClipPayload) -> Result<Option<String>, AppError> {
+        payload.validate()?;
+        let policy = self.capture_policy()?;
+        if !policy.enabled {
+            return Ok(None);
+        }
+        let (kind, text, data, width, height, count) = match &payload {
+            ClipPayload::Text(text) => (ClipKind::Text, text.clone(), vec![], None, None, 0),
+            ClipPayload::Image {
+                width,
+                height,
+                rgba,
+            } => (
+                ClipKind::Image,
+                String::new(),
+                rgba.clone(),
+                Some(*width),
+                Some(*height),
+                0,
+            ),
+            ClipPayload::Files(files) => (
+                ClipKind::Files,
+                serde_json::to_string(files).map_err(|_| AppError::new(ErrorCode::InvalidInput))?,
+                vec![],
+                None,
+                None,
+                files.len() as u32,
+            ),
+        };
+        if !policy.exclude_pattern.is_empty() {
+            let excluded = pattern(&policy.exclude_pattern, false)?;
+            let matches = match &payload {
+                ClipPayload::Text(value) => excluded.is_match(value),
+                ClipPayload::Files(paths) => paths.iter().any(|path| excluded.is_match(path)),
+                ClipPayload::Image { .. } => false,
+            };
+            if matches {
+                return Ok(None);
+            }
+        }
+        let fingerprint = payload.fingerprint();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Fingerprints are not identities. Only the unclassified, unpinned capture scope deduplicates.
+        let existing: Option<String> = tx.query_row("SELECT id FROM clips WHERE fingerprint=?1 AND origin='capture' AND pinned=0 AND deleted=0 AND collection IS NULL LIMIT 1", [&fingerprint], |r| r.get(0)).optional()?;
+        tx.execute(
+            "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+            [],
+        )?;
+        let sequence: i64 = tx.query_row(
+            "SELECT revision FROM history_meta WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )?;
+        let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,captured_at,sequence,revision) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,sequence=excluded.sequence,revision=clips.revision+1", params![id,kind_name(kind),text,data,width,height,count,fingerprint,now(),sequence])?;
+        prune(&tx, policy.max_items, Some(&id))?;
+        tx.commit()?;
+        Ok(Some(id))
+    }
+    pub fn history(&self, query: HistoryQuery) -> Result<HistoryPage, AppError> {
+        let revision = self.history_revision()?;
+        if query
+            .expected_revision
+            .as_ref()
+            .is_some_and(|v| *v != revision)
+        {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        if query.offset > 1000 {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let matcher = pattern(&query.query, !query.regex)?;
+        let mut statement = self.connection.prepare("SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision FROM clips WHERE deleted=0 ORDER BY sequence DESC,id")?;
+        let mut rows = statement.query([])?;
+        let mut total = 0;
+        let mut items = vec![];
+        while let Some(row) = rows.next()? {
+            let kind = parse_kind(&row.get::<_, String>(1)?)?;
+            if query.kind.is_some_and(|k| k != kind) {
+                continue;
+            }
+            let text: String = row.get(2)?;
+            let width: Option<u32> = row.get(5)?;
+            let height: Option<u32> = row.get(6)?;
+            let searchable = if kind == ClipKind::Image {
+                format!("图片 {} × {}", width.unwrap_or(0), height.unwrap_or(0))
+            } else if kind == ClipKind::Files {
+                serde_json::from_str::<Vec<String>>(&text)
+                    .map_err(|_| AppError::new(ErrorCode::Storage))?
+                    .join("\n")
+            } else {
+                text.clone()
+            };
+            if !matcher.is_match(&searchable) {
+                continue;
+            }
+            if total >= query.offset && items.len() < PAGE_SIZE {
+                let preview = if kind == ClipKind::Files {
+                    serde_json::from_str::<Vec<String>>(&text)
+                        .map_err(|_| AppError::new(ErrorCode::Storage))?
+                        .iter()
+                        .map(|p| {
+                            Path::new(p)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                        })
+                        .collect::<Vec<_>>()
+                        .join("、")
+                        .chars()
+                        .take(300)
+                        .collect()
+                } else {
+                    searchable.chars().take(300).collect()
+                };
+                items.push(HistoryItem {
+                    id: row.get(0)?,
+                    kind,
+                    preview,
+                    captured_at: row.get::<_, i64>(3)?.to_string(),
+                    last_used_at: row.get::<_, Option<i64>>(4)?.map(|v| v.to_string()),
+                    width,
+                    height,
+                    file_count: row.get(7)?,
+                    revision: row.get::<_, i64>(8)?.to_string(),
+                });
+            }
+            total += 1;
+        }
+        Ok(HistoryPage {
+            items,
+            total,
+            revision,
+        })
+    }
+    pub fn read_clip(&self, id: &str) -> Result<ClipPayload, AppError> {
+        if uuid::Uuid::parse_str(id).is_err() {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let row = self
+            .connection
+            .query_row(
+                "SELECT kind,text,data,width,height FROM clips WHERE id=?1 AND deleted=0",
+                [id],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Vec<u8>>(2)?,
+                        r.get::<_, Option<u32>>(3)?,
+                        r.get::<_, Option<u32>>(4)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| AppError::new(ErrorCode::NotFound))?;
+        let payload = match row.0.as_str() {
+            "text" => ClipPayload::Text(row.1),
+            "files" => ClipPayload::Files(
+                serde_json::from_str(&row.1).map_err(|_| AppError::new(ErrorCode::Storage))?,
+            ),
+            "image" => ClipPayload::Image {
+                width: row.3.ok_or_else(|| AppError::new(ErrorCode::Storage))?,
+                height: row.4.ok_or_else(|| AppError::new(ErrorCode::Storage))?,
+                rgba: row.2,
+            },
+            _ => return Err(AppError::new(ErrorCode::Storage)),
+        };
+        payload.validate()?;
+        Ok(payload)
+    }
+    pub fn change_clip_deletion(
+        &mut self,
+        request: crate::ChangeClipDeletion,
+    ) -> Result<crate::ClipDeletionSnapshot, AppError> {
+        if uuid::Uuid::parse_str(&request.id).is_err() {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let revision: i64 = request
+            .expected_revision
+            .parse()
+            .map_err(|_| AppError::new(ErrorCode::InvalidInput))?;
+        if revision < 0 || revision == i64::MAX || revision.to_string() != request.expected_revision
+        {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let policy = self.capture_policy()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: Option<(i64, bool)> = tx
+            .query_row(
+                "SELECT revision,deleted FROM clips WHERE id=?1",
+                [&request.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let (current_revision, deleted) =
+            current.ok_or_else(|| AppError::new(ErrorCode::NotFound))?;
+        if current_revision != revision || deleted == request.deleted {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        tx.execute(
+            "UPDATE clips SET deleted=?1,revision=revision+1 WHERE id=?2 AND revision=?3",
+            params![request.deleted, request.id, revision],
+        )?;
+        if !request.deleted {
+            // Undo must never evict another active record to make room.
+            let count: u32 =
+                tx.query_row("SELECT count(*) FROM clips WHERE deleted=0", [], |r| {
+                    r.get(0)
+                })?;
+            let bytes: i64 = tx.query_row(
+                "SELECT coalesce(sum(length(CAST(text AS BLOB))+length(data)),0) FROM clips",
+                [],
+                |r| r.get(0),
+            )?;
+            if count > policy.max_items || bytes > MAX_HISTORY_BYTES {
+                return Err(AppError::new(ErrorCode::LimitExceeded));
+            }
+        }
+        // Retained deleted payloads share the byte budget and have a bounded count.
+        // Keep the record just changed so a successful delete always starts undoable.
+        prune(&tx, policy.max_items, Some(&request.id))?;
+        tx.execute(
+            "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(crate::ClipDeletionSnapshot {
+            id: request.id,
+            revision: (revision + 1).to_string(),
+            deleted: request.deleted,
+        })
+    }
+
+    pub fn mark_used(&mut self, id: &str) -> Result<(), AppError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.execute(
+            "UPDATE clips SET last_used_at=?1,revision=revision+1 WHERE id=?2 AND deleted=0",
+            params![now(), id],
+        )? != 1
+        {
+            return Err(AppError::new(ErrorCode::NotFound));
+        }
+        tx.execute(
+            "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+fn prune(tx: &rusqlite::Transaction<'_>, max: u32, keep: Option<&str>) -> Result<(), AppError> {
+    loop {
+        let (count, bytes, deleted): (i64,i64,i64) = tx.query_row("SELECT count(*) FILTER(WHERE deleted=0),coalesce(sum(length(CAST(text AS BLOB))+length(data)),0),count(*) FILTER(WHERE deleted<>0) FROM clips", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        if count <= i64::from(max) && bytes <= MAX_HISTORY_BYTES && deleted <= 1000 {
+            return Ok(());
+        }
+        let removed_deleted = if bytes > MAX_HISTORY_BYTES || deleted > 1000 {
+            tx.execute("DELETE FROM clips WHERE id=(SELECT id FROM clips WHERE deleted<>0 AND (?1 IS NULL OR id<>?1) ORDER BY sequence LIMIT 1)",[keep])?
+        } else {
+            0
+        };
+        if removed_deleted > 0 {
+            continue;
+        }
+        let changed = tx.execute("DELETE FROM clips WHERE id=(SELECT id FROM clips WHERE origin='capture' AND deleted=0 AND pinned=0 AND collection IS NULL AND (?1 IS NULL OR id<>?1) ORDER BY sequence LIMIT 1)", [keep])?;
+        if changed == 0 {
+            return Err(AppError::new(ErrorCode::LimitExceeded));
+        }
+    }
+}

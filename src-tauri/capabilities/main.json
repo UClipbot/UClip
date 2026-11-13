@@ -1,8 +1,20 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Only the local main window may read app status and manage non-secret appearance settings.",
+  "description": "Local main window may query history, update capture policy and request validated clipboard actions.",
   "local": true,
-  "windows": ["main"],
-  "permissions": ["allow-bootstrap", "allow-get-settings", "allow-update-settings"]
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-bootstrap",
+    "allow-get-settings",
+    "allow-update-settings",
+    "allow-history-query",
+    "allow-clip-detail",
+    "allow-clipboard-status",
+    "allow-update-capture-policy",
+    "allow-copy-clip",
+    "allow-change-clip-deletion"
+  ]
 }
