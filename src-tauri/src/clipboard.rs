@@ -19,9 +19,9 @@ use uclip_core::{
 };
 
 #[derive(Clone)]
-struct Captured {
-    payload: ClipPayload,
-    source_app: Option<String>,
+pub(super) struct Captured {
+    pub(super) payload: ClipPayload,
+    pub(super) source_app: Option<String>,
 }
 use tokio::sync::oneshot;
 pub(super) const MARKER: &str = "application/x-uclip-internal";
@@ -338,17 +338,20 @@ fn stable_read(
     if before != expected_generation {
         return Err(AppError::new(ErrorCode::Busy));
     }
-    let payload = context.read(marker)?;
+    #[cfg(target_os = "windows")]
+    let captured = context.read(marker)?;
+    #[cfg(target_os = "macos")]
+    let captured = context.read(marker)?.map(|payload| Captured {
+        payload,
+        source_app: None,
+    });
     if before != watch.generation()? {
         return Err(AppError::new(ErrorCode::Busy));
     }
-    if let Some(payload) = &payload {
-        payload.validate()?;
+    if let Some(snapshot) = &captured {
+        snapshot.payload.validate()?;
     }
-    Ok(payload.map(|payload| Captured {
-        payload,
-        source_app: None,
-    }))
+    Ok(captured)
 }
 
 pub fn normalize_files(files: Vec<String>) -> Result<Vec<String>, AppError> {

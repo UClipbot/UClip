@@ -1,15 +1,24 @@
 use super::*;
+use crate::clipboard::Captured;
 use ::windows::{
-    core::{w, PCWSTR},
+    core::{w, Owned, PCWSTR, PWSTR},
     Win32::{
         Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND},
-        System::{DataExchange::*, Memory::*},
+        System::{
+            DataExchange::*,
+            Memory::*,
+            Threading::{
+                OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+                PROCESS_QUERY_LIMITED_INFORMATION,
+            },
+        },
         UI::{
             Shell::{DragQueryFileW, HDROP},
             WindowsAndMessaging::*,
         },
     },
 };
+use std::path::Path;
 
 // Created, used and destroyed on the clipboard actor. No HWND crosses threads.
 pub struct Context {
@@ -53,8 +62,27 @@ impl Context {
             }
         }
     }
-    pub fn read(&self, marker: &[u8]) -> Result<Option<ClipPayload>, AppError> {
+    pub fn read(&self, marker: &[u8]) -> Result<Option<Captured>, AppError> {
         let guard = self.open()?;
+        let owner = clipboard_owner();
+        let Some(payload) = self.read_payload(marker, guard)? else {
+            return Ok(None);
+        };
+        // Resolve metadata after releasing the clipboard lock. The caller also checks its sequence.
+        let source_app = owner.and_then(|owner| {
+            let name = process_name(owner.1)?;
+            (clipboard_owner() == Some(owner)).then_some(name)
+        });
+        Ok(Some(Captured {
+            payload,
+            source_app,
+        }))
+    }
+    fn read_payload(
+        &self,
+        marker: &[u8],
+        guard: OpenGuard,
+    ) -> Result<Option<ClipPayload>, AppError> {
         let formats = formats()?;
         if crate::clipboard::sensitive(&formats, |name| buffer(register(name)?, 16)) {
             return Ok(None);
@@ -175,6 +203,40 @@ impl Context {
         Ok(OpenGuard)
     }
 }
+fn clipboard_owner() -> Option<(HWND, u32)> {
+    // SAFETY: Windows provides the handle; the optional PID output is writable.
+    let window = unsafe { GetClipboardOwner() }.ok()?;
+    let mut pid = 0;
+    let thread = unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+    (thread != 0 && pid != 0).then_some((window, pid))
+}
+
+fn process_name(pid: u32) -> Option<String> {
+    // SAFETY: Use a non-inheritable, query-only handle and a bounded writable UTF-16 buffer.
+    let process =
+        unsafe { Owned::new(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?) };
+    let mut path = vec![0u16; 32_768];
+    let mut length = path.len() as u32;
+    unsafe {
+        QueryFullProcessImageNameW(
+            *process,
+            PROCESS_NAME_WIN32,
+            PWSTR(path.as_mut_ptr()),
+            &mut length,
+        )
+    }
+    .ok()?;
+    let path = String::from_utf16(path.get(..length as usize)?).ok()?;
+    executable_name(&path)
+}
+
+fn executable_name(path: &str) -> Option<String> {
+    // Store the executable name only. The path can contain private usernames and directories.
+    let name = Path::new(path).file_stem()?.to_str()?.trim();
+    (!name.is_empty() && name.len() <= 256 && !name.chars().any(char::is_control))
+        .then(|| name.to_owned())
+}
+
 impl Drop for Context {
     fn drop(&mut self) {
         let _ = unsafe { DestroyWindow(self.window) };
@@ -262,4 +324,20 @@ fn buffer(format: u32, maximum: usize) -> Result<Vec<u8>, AppError> {
     let result = unsafe { std::slice::from_raw_parts(pointer.cast::<u8>(), length) }.to_vec();
     let _ = unsafe { GlobalUnlock(memory) };
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::executable_name;
+
+    #[test]
+    fn source_metadata_keeps_only_a_bounded_executable_name() {
+        assert_eq!(
+            executable_name(r"C:\Users\Private\Example App.exe").as_deref(),
+            Some("Example App")
+        );
+        assert_eq!(executable_name(""), None);
+        assert_eq!(executable_name("bad\tname.exe"), None);
+        assert_eq!(executable_name(&format!("{}.exe", "x".repeat(257))), None);
+    }
 }
