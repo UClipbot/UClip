@@ -201,8 +201,8 @@ export const english = {
   these_shortcuts_apply_only_in_the_current_window:
     'These shortcuts apply only in the current window; ',
   the_browser_can_only_copy_sample_text: 'The browser can only copy sample text.',
-  the_copy_shortcut_only_copies_select_automatic_paste_separately_failures_never_paste_into_an_arbitrary_window:
-    'The copy shortcut only copies. Select automatic paste separately; failures never paste into an arbitrary window.',
+  double_click_pastes_at_the_original_cursor:
+    'Double-click a record to paste at the original cursor. Use Copy to keep it on the clipboard.',
   actions_menu: 'Actions menu',
   back: 'Back',
   back_to_history: 'Back to history',
@@ -494,8 +494,8 @@ export const chinese: Record<keyof typeof english, string> = {
   close_panel_clear_search: '关闭当前面板 / 清空搜索',
   these_shortcuts_apply_only_in_the_current_window: '以上快捷键仅在当前窗口内生效；',
   the_browser_can_only_copy_sample_text: '浏览器只支持示例文本复制。',
-  the_copy_shortcut_only_copies_select_automatic_paste_separately_failures_never_paste_into_an_arbitrary_window:
-    '复制快捷键只复制；自动回粘需单独选择，失败不会向任意窗口粘贴。',
+  double_click_pastes_at_the_original_cursor:
+    '双击记录可粘贴到原光标位置。只需复制时，可使用菜单中的「复制」。',
   actions_menu: '操作菜单',
   back: '返回',
   back_to_history: '返回历史列表',

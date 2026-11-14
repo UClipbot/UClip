@@ -20,6 +20,17 @@ use ::windows::{
 };
 use std::path::Path;
 
+#[derive(Clone, Copy)]
+pub(crate) struct ClipboardWrite {
+    owner: isize,
+}
+
+impl ClipboardWrite {
+    pub(crate) fn is_current(self) -> bool {
+        unsafe { GetClipboardOwner() }.ok() == Some(HWND(self.owner as _))
+    }
+}
+
 // Created, used and destroyed on the clipboard actor. No HWND crosses threads.
 pub struct Context {
     window: HWND,
@@ -138,7 +149,7 @@ impl Context {
         }
         Ok(None)
     }
-    pub fn write(&self, payload: ClipPayload, marker: &[u8]) -> Result<(), AppError> {
+    pub fn write(&self, payload: ClipPayload, marker: &[u8]) -> Result<ClipboardWrite, AppError> {
         let mut representations = match payload {
             ClipPayload::Text(value) => {
                 if value.contains('\0') {
@@ -195,7 +206,10 @@ impl Context {
             }
             memory.0 = HGLOBAL::default();
         }
-        Ok(())
+        // While this actor serializes writes, a replacement publication changes ownership.
+        Ok(ClipboardWrite {
+            owner: self.window.0 as isize,
+        })
     }
     fn open(&self) -> Result<OpenGuard, AppError> {
         // No automatic retry of OS writes. A busy clipboard is a safe explicit failure.
@@ -203,6 +217,7 @@ impl Context {
         Ok(OpenGuard)
     }
 }
+
 fn clipboard_owner() -> Option<(HWND, u32)> {
     // SAFETY: Windows provides the handle; the optional PID output is writable.
     let window = unsafe { GetClipboardOwner() }.ok()?;

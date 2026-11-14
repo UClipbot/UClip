@@ -119,12 +119,13 @@ pub async fn copy_clip(
     state: State<'_, AppState>,
     id: String,
     paste: bool,
+    fallback_to_copy: Option<bool>,
 ) -> Result<uclip_core::CopyResult, AppError> {
     state
         .clipboard
         .as_ref()
         .map_err(Clone::clone)?
-        .copy(id, paste)
+        .copy(id, paste, fallback_to_copy.unwrap_or(false))
         .await
 }
 

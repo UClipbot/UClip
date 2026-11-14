@@ -1,13 +1,25 @@
 //! Automatic paste is deliberately independent from clipboard write success.
+#[cfg(target_os = "windows")]
+mod windows;
+
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use uclip_core::{AppError, ErrorCode};
 
+pub struct PreparedPaste {
+    #[cfg(target_os = "windows")]
+    target: windows::Prepared,
+}
+
 pub struct PasteService {
     #[cfg(target_os = "linux")]
     inner: Option<Arc<Mutex<x11::Desktop>>>,
+    #[cfg(target_os = "windows")]
+    inner: Option<Arc<Mutex<windows::Desktop>>>,
+    #[cfg(target_os = "windows")]
+    app: Option<tauri::AppHandle>,
     stop: Arc<AtomicBool>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -63,8 +75,34 @@ impl PasteService {
                 };
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            let desktop = Arc::new(Mutex::new(windows::Desktop::default()));
+            let worker = desktop.clone();
+            let stopped = stop.clone();
+            let thread = std::thread::Builder::new()
+                .name("uclip-desktop-target".into())
+                .spawn(move || {
+                    while !stopped.load(Ordering::SeqCst) {
+                        let Ok(mut desktop) = worker.lock() else {
+                            break;
+                        };
+                        desktop.observe();
+                        drop(desktop);
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                })
+                .ok();
+            Self {
+                inner: thread.as_ref().map(|_| desktop),
+                app,
+                stop,
+                thread: Mutex::new(thread),
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let _ = app;
+        #[cfg(not(target_os = "windows"))]
         Self {
             #[cfg(target_os = "linux")]
             inner: None,
@@ -73,6 +111,10 @@ impl PasteService {
         }
     }
     pub fn available(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            self.inner.is_some()
+        }
         #[cfg(target_os = "linux")]
         {
             self.inner
@@ -80,12 +122,16 @@ impl PasteService {
                 .and_then(|d| d.lock().ok())
                 .is_some_and(|d| d.healthy)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             false
         }
     }
     pub fn has_target(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            self.prepare().is_ok()
+        }
         #[cfg(target_os = "linux")]
         {
             self.inner
@@ -93,16 +139,19 @@ impl PasteService {
                 .and_then(|d| d.lock().ok())
                 .is_some_and(|d| d.target.is_some())
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             false
         }
     }
     pub fn capture_target(&self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         if let Some(inner) = &self.inner {
             if let Ok(mut desktop) = inner.lock() {
+                #[cfg(target_os = "linux")]
                 let _ = desktop.capture_target();
+                #[cfg(target_os = "windows")]
+                desktop.observe();
             }
         }
     }
@@ -119,7 +168,18 @@ impl PasteService {
             false
         }
     }
-    pub fn validate(&self) -> Result<(), AppError> {
+    pub fn prepare(&self) -> Result<PreparedPaste, AppError> {
+        #[cfg(target_os = "windows")]
+        {
+            let target = self
+                .inner
+                .as_ref()
+                .ok_or_else(|| AppError::new(ErrorCode::Restricted))?
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Unavailable))?
+                .prepare()?;
+            Ok(PreparedPaste { target })
+        }
         #[cfg(target_os = "linux")]
         {
             self.inner
@@ -127,14 +187,30 @@ impl PasteService {
                 .ok_or_else(|| AppError::new(ErrorCode::Restricted))?
                 .lock()
                 .map_err(|_| AppError::new(ErrorCode::Unavailable))?
-                .validate()
+                .validate()?;
+            Ok(PreparedPaste {})
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             Err(AppError::new(ErrorCode::Restricted))
         }
     }
-    pub fn paste(&self) -> Result<(), AppError> {
+    pub fn paste(
+        &self,
+        prepared: PreparedPaste,
+        #[cfg(target_os = "windows")] publication: crate::clipboard_native::ClipboardWrite,
+    ) -> Result<(), AppError> {
+        #[cfg(not(target_os = "windows"))]
+        let _ = prepared;
+        #[cfg(target_os = "windows")]
+        {
+            self.inner
+                .as_ref()
+                .ok_or_else(|| AppError::new(ErrorCode::Restricted))?
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Unavailable))?
+                .paste(prepared.target, publication, self.app.as_ref())
+        }
         #[cfg(target_os = "linux")]
         {
             self.inner
@@ -144,7 +220,7 @@ impl PasteService {
                 .map_err(|_| AppError::new(ErrorCode::Unavailable))?
                 .paste()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             Err(AppError::new(ErrorCode::Restricted))
         }

@@ -424,9 +424,6 @@ option {
   opacity: 1;
   pointer-events: auto;
 }
-.row-copy {
-  color: var(--text);
-}
 .clip-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -964,9 +961,6 @@ kbd {
   }
   .row-actions {
     padding-right: 3px;
-  }
-  .row-copy {
-    padding: 4px;
   }
   .row-more {
     width: 28px;

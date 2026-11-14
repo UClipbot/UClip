@@ -8,6 +8,8 @@ pub use macos::Context;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
+pub(crate) use windows::ClipboardWrite;
+#[cfg(target_os = "windows")]
 pub use windows::Context;
 const MAX_ENCODED_IMAGE: usize = 40 * 1024 * 1024;
 fn error() -> AppError {

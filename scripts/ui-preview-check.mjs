@@ -30,7 +30,8 @@ const rowMenu = async (id, name) => {
 const selected = () => page.locator('.clip-row.selected').getAttribute('data-clip-id');
 const rows = page.locator('.clip-row');
 const search = page.locator('#history-search');
-const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+const clipboard = async () =>
+  (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
 const reports = [];
 const contrastSamples = [];
 const interactions = [];
@@ -84,16 +85,16 @@ try {
   );
   assert.equal(await search.evaluate((e) => e === document.activeElement), true);
   assert.equal(await page.locator('.sidebar, .detail-panel').count(), 0);
-  // No detail navigation is needed for either keyboard or row copy; actions bind to their own ID.
+  // Keyboard and menu copy both work directly from the history list.
   await search.press('Enter');
   assert.match(await clipboard(), /好的工具/);
-  await page.locator('[data-clip-id="link-1"]').hover();
-  await page.locator('[data-clip-id="link-1"] .row-copy').click();
+  await rowMenu('link-1', '复制');
   assert.equal(await clipboard(), 'https://linear.app/features');
-  assert.equal(await selected(), 'note-1');
-  await search.focus();
-  await search.press('ArrowDown');
+  await page.evaluate(() => navigator.clipboard.writeText('double-click sentinel'));
+  await page.locator('[data-clip-id="link-1"] [data-row-main]').dblclick();
+  assert.equal(await clipboard(), 'https://linear.app/features');
   assert.equal(await selected(), 'link-1');
+  await search.focus();
   await search.press('Enter');
   assert.equal(await clipboard(), 'https://linear.app/features');
   await page.evaluate(() => navigator.clipboard.writeText('IME sentinel'));
@@ -157,7 +158,7 @@ try {
   await page.locator('[aria-label="内容类型"]').selectOption('image');
   assert.equal(await rows.count(), 1);
   assert.equal(await rows.first().getAttribute('data-clip-id'), 'image-1');
-  await page.locator('.row-copy').click();
+  await rowMenu('image-1', '复制');
   assert.match(await page.locator('.toast').textContent(), /图片复制尚未接入/);
   await page.getByRole('button', { name: '重置', exact: true }).click();
   await search.fill('设计');
@@ -211,7 +212,7 @@ try {
   await page.locator('#clip-content').fill(content);
   await page.locator('.new-form .primary-button').click();
   const createdId = await selected();
-  await page.locator(`[data-clip-id="${createdId}"] .row-copy`).click();
+  await rowMenu(createdId, '复制');
   assert.equal(await clipboard(), content);
   await rowMenu(createdId, '移入回收站');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
@@ -319,7 +320,6 @@ try {
             '.capture-toggle span',
             '.scope-control select',
             '.type-control select',
-            '.row-copy',
           ].map((selector) => {
             const e = document.querySelector(selector);
             const foreground = getComputedStyle(e).color;

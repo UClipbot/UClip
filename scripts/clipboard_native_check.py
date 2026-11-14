@@ -109,7 +109,8 @@ class ClipboardChecks:
         self.timings.append({'action':'text capture commit','ms':round((time.monotonic()-started)*1000,2)})
         assert self.action('clip_detail', id=item['id'], thumbnail=False)['text'] == self.text
         wait(lambda: self.execute('return document.querySelectorAll(".clip-row").length===1'), 'real history visible')
-        self.click('.row-copy')
+        self.click('.row-more')
+        self.click('[data-testid="copy-history-item"]')
         wait(lambda: self.execute('return document.querySelector(".toast")?.textContent.includes("已复制")'), 'UI copy')
         self.received('text',self.text)
         time.sleep(0.2); assert self.query()['total']==1

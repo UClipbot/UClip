@@ -57,7 +57,7 @@ pub fn report() -> PlatformReport {
                 "paste_to_app",
                 if wayland_hint {
                     State::Restricted
-                } else if cfg!(target_os = "linux") {
+                } else if cfg!(any(target_os = "linux", target_os = "windows")) {
                     State::Unverified
                 } else {
                     State::NotImplemented
@@ -65,7 +65,7 @@ pub fn report() -> PlatformReport {
                 if wayland_hint {
                     "恢复外部焦点与模拟按键受 compositor 限制，尚未实现。"
                 } else {
-                    "Linux X11 提供独立目标校验与回粘请求，其他平台尚未接入。"
+                    "Windows 和 Linux X11 在验证原应用焦点后请求回粘。"
                 },
             ),
             capability(

@@ -245,7 +245,7 @@ export function App() {
       setToast({ message: safeError(error).message });
     }
   }
-  async function copyClip(clip: Clip, paste = false) {
+  async function copyClip(clip: Clip, paste = false, fallbackToCopy = false) {
     if (!ready || !result.items.some((item) => item.id === clip.id)) return;
     if (clip.deleted) {
       removeClip(clip);
@@ -255,7 +255,7 @@ export function App() {
       if (copying.current) return;
       copying.current = true;
       try {
-        const outcome = await live.copy(clip.id, paste);
+        const outcome = await live.copy(clip.id, paste, fallbackToCopy);
         setToast({
           message: outcome.warning
             ? `${outcome.pasteRequested ? t('copied_and_requested_paste_to_original_app') : t('copied')}；${t(safeError(outcome.warning).message)}`
@@ -263,6 +263,7 @@ export function App() {
               ? t('copied_and_requested_paste_to_original_app')
               : t('copied'),
         });
+        if (fallbackToCopy && outcome.pasteRequested) void desktop.hide().catch(() => {});
       } catch (error) {
         setToast({ message: safeError(error).message });
       } finally {
@@ -831,10 +832,7 @@ export function App() {
                       aria-label={`${t(typeNames[clip.type])}：${clip.type === 'text' ? clip.content.slice(0, 60) : clip.title}`}
                       onFocus={() => setSelectedId(clip.id)}
                       onClick={() => setSelectedId(clip.id)}
-                      onDoubleClick={() => {
-                        if (appearance.native)
-                          void copyClip(clip, live.status?.pasteAvailable ?? false);
-                      }}
+                      onDoubleClick={() => void copyClip(clip, true, true)}
                     >
                       {clip.type === 'image' ? (
                         clip.image ? (
@@ -900,13 +898,6 @@ export function App() {
                       </span>
                     </button>
                     <div className="row-actions">
-                      <button
-                        className="row-copy text-button"
-                        aria-label={`${clip.deleted ? t('restore') : t('copy')}：${clip.title || clip.content.slice(0, 20)}`}
-                        onClick={() => void copyClip(clip)}
-                      >
-                        {clip.deleted ? t('restore') : t('copy')}
-                      </button>
                       <button
                         className="icon-button row-more"
                         aria-label={t('more_actions_0', {
@@ -1042,7 +1033,7 @@ export function App() {
         <ActionMenu anchor={menu.anchor} onClose={() => setMenu(null)}>
           {menuClip ? (
             <>
-              {appearance.native && (
+              {appearance.native && !menuClip.deleted && (
                 <button
                   role="menuitem"
                   disabled={!live.status?.pasteAvailable || !live.status.pasteTarget}
@@ -1050,6 +1041,16 @@ export function App() {
                 >
                   <Icon name="arrow" size={15} />
                   {t('paste_to_original_app_2')}
+                </button>
+              )}
+              {!menuClip.deleted && (
+                <button
+                  role="menuitem"
+                  data-testid="copy-history-item"
+                  onClick={() => menuAction(() => void copyClip(menuClip))}
+                >
+                  <Icon name="copy" size={15} />
+                  {t('copy')}
                 </button>
               )}
               <button role="menuitem" onClick={() => menuAction(() => openPreview(menuClip))}>
@@ -1785,9 +1786,7 @@ export function App() {
           <p className="settings-feedback">
             {t('these_shortcuts_apply_only_in_the_current_window')}
             {appearance.native
-              ? t(
-                  'the_copy_shortcut_only_copies_select_automatic_paste_separately_failures_never_paste_into_an_arbitrary_window',
-                )
+              ? t('double_click_pastes_at_the_original_cursor')
               : t('the_browser_can_only_copy_sample_text')}
           </p>
         </Modal>

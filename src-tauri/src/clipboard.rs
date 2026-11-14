@@ -1,4 +1,6 @@
 //! All clipboard reads/writes live on a bounded actor, independently of the WebView.
+#[cfg(target_os = "windows")]
+use crate::clipboard_native::ClipboardWrite;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use crate::clipboard_native::Context as ClipboardContext;
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -28,7 +30,7 @@ pub(super) const MARKER: &str = "application/x-uclip-internal";
 type Reply<T> = oneshot::Sender<Result<T, AppError>>;
 enum Request {
     Policy(UpdateCapturePolicy, Reply<CapturePolicy>),
-    Copy(String, bool, Reply<CopyResult>),
+    Copy(String, bool, bool, Reply<CopyResult>),
     Deletion(
         uclip_core::ChangeClipDeletion,
         Reply<uclip_core::ClipDeletionSnapshot>,
@@ -121,11 +123,24 @@ impl ClipboardService {
                             }
                             let _ = reply.send(response);
                         }
-                        Ok(Request::Copy(id, auto_paste, reply)) => {
+                        Ok(Request::Copy(id, auto_paste, fallback_to_copy, reply)) => {
                             let response = block(core.read_clip(id.clone())).and_then(|payload| {
-                                if auto_paste {
-                                    paste.validate()?;
-                                }
+                                let prepared = match auto_paste.then(|| paste.prepare()).transpose()
+                                {
+                                    Err(error)
+                                        if fallback_to_copy
+                                            && matches!(
+                                                error.code,
+                                                ErrorCode::TargetLost | ErrorCode::Restricted
+                                            ) =>
+                                    {
+                                        None
+                                    }
+                                    result => result?,
+                                };
+                                #[cfg(target_os = "windows")]
+                                let publication = write(&context, payload, &marker)?;
+                                #[cfg(not(target_os = "windows"))]
                                 write(&context, payload, &marker)?;
                                 let usage = block(core.mark_used(id));
                                 let mut result = CopyResult {
@@ -134,8 +149,12 @@ impl ClipboardService {
                                     paste_requested: false,
                                     warning: usage.err(),
                                 };
-                                if auto_paste {
-                                    match paste.paste() {
+                                if let Some(prepared) = prepared {
+                                    match paste.paste(
+                                        prepared,
+                                        #[cfg(target_os = "windows")]
+                                        publication,
+                                    ) {
                                         Ok(()) => result.paste_requested = true,
                                         Err(e) => result.warning = Some(e),
                                     }
@@ -283,9 +302,14 @@ impl ClipboardService {
     pub fn capture_target(&self) {
         self.paste.capture_target();
     }
-    pub async fn copy(&self, id: String, paste: bool) -> Result<CopyResult, AppError> {
+    pub async fn copy(
+        &self,
+        id: String,
+        paste: bool,
+        fallback_to_copy: bool,
+    ) -> Result<CopyResult, AppError> {
         let (tx, rx) = oneshot::channel();
-        self.submit(Request::Copy(id, paste, tx))?;
+        self.submit(Request::Copy(id, paste, fallback_to_copy, tx))?;
         rx.await.map_err(|_| error())?
     }
     pub async fn change_deletion(
@@ -421,10 +445,24 @@ fn write(context: &ClipboardContext, payload: ClipPayload, marker: &[u8]) -> Res
         ])
         .map_err(|_| error())
 }
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn write(
+    context: &ClipboardContext,
+    payload: ClipPayload,
+    marker: &[u8],
+) -> Result<ClipboardWrite, AppError> {
+    validate_native_write(&payload)?;
+    context.write(payload, marker)
+}
+#[cfg(target_os = "macos")]
 fn write(context: &ClipboardContext, payload: ClipPayload, marker: &[u8]) -> Result<(), AppError> {
+    validate_native_write(&payload)?;
+    context.write(payload, marker)
+}
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn validate_native_write(payload: &ClipPayload) -> Result<(), AppError> {
     payload.validate()?;
-    if let ClipPayload::Files(paths) = &payload {
+    if let ClipPayload::Files(paths) = payload {
         if paths
             .iter()
             .any(|p| !PathBuf::from(p).try_exists().unwrap_or(false))
@@ -432,7 +470,7 @@ fn write(context: &ClipboardContext, payload: ClipPayload, marker: &[u8]) -> Res
             return Err(AppError::new(ErrorCode::MissingFile));
         }
     }
-    context.write(payload, marker)
+    Ok(())
 }
 pub fn detail(id: String, payload: ClipPayload, thumbnail: bool) -> Result<ClipDetail, AppError> {
     let (text, image_data_url) = match payload {

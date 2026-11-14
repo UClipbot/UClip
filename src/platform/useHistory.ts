@@ -261,8 +261,8 @@ export function useHistory(
       await refresh();
     }
   }
-  async function copy(id: string, paste: boolean) {
-    const result = await invoke<CopyResult>('copy_clip', { id, paste });
+  async function copy(id: string, paste: boolean, fallbackToCopy: boolean) {
+    const result = await invoke<CopyResult>('copy_clip', { id, paste, fallbackToCopy });
     await refresh();
     return result;
   }
