@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='target/debug/uclip-desktop')
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
+    parser.add_argument('--filters-only', action='store_true', help='Filter popup focus, keyboard selection and external blur auto-hide.')
     parser.add_argument('--language-only', action='store_true', help='Native language forms, cross-window updates, errors and restart persistence.')
     parser.add_argument('--manual-only',action='store_true',help='Isolated real manual text creation.')
     parser.add_argument('--titlebar-only',action='store_true',help='Isolated native/custom titlebar and window controls.')
@@ -193,6 +194,10 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.filters_only:
+                    from filter_native_check import run
+                    run(invoke, execute, click, wait_for, env, directory, log)
+                    return
                 if args.language_only:
                     from language_native_check import run, verify_restart
                     saved = run(invoke, invoke_current, execute, execute_main, click, wait_for, capture, directory, env)

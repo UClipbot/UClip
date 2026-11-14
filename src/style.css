@@ -247,10 +247,10 @@ button:hover {
 .scope-control {
   color: var(--text);
 }
-.scope-control select {
+.scope-control .filter-trigger {
   max-width: 140px;
 }
-.type-control select {
+.type-control .filter-trigger {
   max-width: 100px;
 }
 select {
@@ -943,10 +943,10 @@ kbd {
   .filter-bar {
     gap: 2px;
   }
-  .scope-control select {
+  .scope-control .filter-trigger {
     max-width: 110px;
   }
-  .type-control select {
+  .type-control .filter-trigger {
     max-width: 86px;
   }
   .history-scroll {
@@ -1000,8 +1000,8 @@ kbd {
 .type-control {
   position: relative;
 }
-.scope-control select,
-.type-control select {
+.scope-control .filter-trigger,
+.type-control .filter-trigger {
   padding-right: 18px;
 }
 .scope-control > svg:last-child,
@@ -1203,4 +1203,19 @@ kbd {
 .native-preview-footer p {
   margin: 10px 0 0;
   font-size: 11px;
+}
+
+.filter-trigger {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 6px 18px 6px 3px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.action-menu [role='menuitemradio'][aria-checked='true'] {
+  background: var(--selected);
 }

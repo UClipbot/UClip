@@ -13,6 +13,11 @@ def settled(c, count=None):
 
 
 def select_value(c, selector, value):
+    if c.execute('return document.querySelector(arguments[0]).matches(".filter-trigger")', [selector]):
+        c.click(selector)
+        c.click(f'.action-menu button[value="{value}"]')
+        wait(lambda:c.execute('return document.querySelector(arguments[0]).value===arguments[1]',[selector,value]), 'filter value')
+        return
     index=c.execute('return Array.from(document.querySelector(arguments[0]).options).findIndex(option=>option.value===arguments[1])',[selector,value])
     assert index >= 0, (selector,value)
     c.click(selector)
@@ -154,7 +159,7 @@ def run_capture_chain(c):
     before = history(c)['total']
     scope(c, 'pinned')
     c.enter('#history-search', '置顶合成样本')
-    c.click('[aria-label="内容类型"] option[value="text"]')
+    select_value(c, '[aria-label="内容类型"]', 'text')
     settled(c, 1)
     dedup_ui(c, 3)
     assert history(c)['total'] == before - 3
@@ -169,7 +174,7 @@ def run_capture_chain(c):
     assert all(Path(p).exists() for p in c.files)
     c.expected_active = history(c)['total']
     c.click('[aria-label="清空搜索"]')
-    c.click('[aria-label="内容类型"] option[value="all"]')
+    select_value(c, '[aria-label="内容类型"]', 'all')
     settled(c, 4)
     dedup_ui(c, 0)
     print('PASS: real external text/image/files capture → pin → recapture → full-history dedup under text/search filters; fresh feedback, distinct pixels/path order and exact native writeback', flush=True)

@@ -154,15 +154,18 @@ try {
     lastId,
   );
   assert.equal(await page.locator('.history-scroll').evaluate((e) => e.scrollTop), scrolled);
-  await page.locator('[aria-label="历史范围"]').selectOption('inspiration');
-  await page.locator('[aria-label="内容类型"]').selectOption('image');
+  await page.locator('[aria-label="历史范围"]').click();
+  await page.locator('.action-menu button[value="inspiration"]').click();
+  await page.locator('[aria-label="内容类型"]').click();
+  await page.locator('.action-menu button[value="image"]').click();
   assert.equal(await rows.count(), 1);
   assert.equal(await rows.first().getAttribute('data-clip-id'), 'image-1');
   await rowMenu('image-1', '复制');
   assert.match(await page.locator('.toast').textContent(), /图片复制尚未接入/);
   await page.getByRole('button', { name: '重置', exact: true }).click();
   await search.fill('设计');
-  await page.locator('[aria-label="历史范围"]').selectOption('work');
+  await page.locator('[aria-label="历史范围"]').click();
+  await page.locator('.action-menu button[value="work"]').click();
   assert.equal(await search.inputValue(), '设计');
   await page.getByRole('button', { name: '重置', exact: true }).click();
   interactions.push(
@@ -195,7 +198,8 @@ try {
     true,
   );
   await rowMenu('note-1', '取消置顶');
-  await page.locator('[aria-label="历史范围"]').selectOption('pinned');
+  await page.locator('[aria-label="历史范围"]').click();
+  await page.locator('.action-menu button[value="pinned"]').click();
   assert.equal(await rows.count(), 2);
   await page.getByRole('button', { name: '重置', exact: true }).click();
   await rowMenu('note-1', '置顶');
@@ -218,7 +222,8 @@ try {
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   assert.equal(await page.locator(`[data-clip-id="${createdId}"]`).count(), 1);
   await rowMenu(createdId, '移入回收站');
-  await page.locator('[aria-label="历史范围"]').selectOption('trash');
+  await page.locator('[aria-label="历史范围"]').click();
+  await page.locator('.action-menu button[value="trash"]').click();
   await search.focus();
   await search.press('Enter');
   assert.equal(await rows.count(), 0);
@@ -318,8 +323,8 @@ try {
             '.clip-row.selected .clip-row-meta',
             '.statusbar',
             '.capture-toggle span',
-            '.scope-control select',
-            '.type-control select',
+            '.scope-control .filter-trigger',
+            '.type-control .filter-trigger',
           ].map((selector) => {
             const e = document.querySelector(selector);
             const foreground = getComputedStyle(e).color;

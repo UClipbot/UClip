@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Icon } from './components/Icon';
 import { Modal } from './components/Modal';
 import { ActionMenu } from './components/ActionMenu';
+import { FilterMenu } from './components/FilterMenu';
 import { ClipPreview } from './components/ClipPreview';
 import {
   initialClips,
@@ -688,18 +689,16 @@ export function App() {
         <header className="topbar">
           {searchBox}
           <div className="filter-bar">
-            <label className="scope-control">
+            <div className="scope-control">
               <Icon
                 name={view === 'trash' ? 'trash' : view === 'pinned' ? 'pin' : 'history'}
                 size={15}
               />
-              <span className="sr-only">{t('history_scope')}</span>
-              <select
-                aria-label={t('history_scope')}
+              <FilterMenu
+                label={t('history_scope')}
                 value={view}
-                onChange={(event) => setView(event.target.value as AppView)}
-              >
-                {Object.entries(
+                onChange={(value) => setView(value as AppView)}
+                options={Object.entries(
                   appearance.native
                     ? {
                         all: t('all_history'),
@@ -710,31 +709,30 @@ export function App() {
                         trash: t('trash'),
                       }
                     : viewTitles,
-                ).map(([key, label]) => (
-                  <option key={key} value={key} disabled={appearance.native && key === 'trash'}>
-                    {appearance.native && key.startsWith('collection:') ? label : t(label)}
-                    {appearance.native && key === 'trash' ? t('not_implemented_2') : ''}
-                  </option>
-                ))}
-              </select>
+                ).map(([key, label]) => ({
+                  value: key,
+                  label: `${appearance.native && key.startsWith('collection:') ? label : t(label)}${appearance.native && key === 'trash' ? t('not_implemented_2') : ''}`,
+                  disabled: appearance.native && key === 'trash',
+                }))}
+              />
               <Icon name="chevron" size={12} />
-            </label>
-            <label className="type-control">
-              <span className="sr-only">{t('content_type')}</span>
-              <select
-                aria-label={t('content_type')}
+            </div>
+            <div className="type-control">
+              <FilterMenu
+                label={t('content_type')}
                 value={type}
-                onChange={(event) => setType(event.target.value as ClipType | 'all')}
-              >
-                <option value="all">{t('all_types')}</option>
-                {Object.entries(typeNames).map(([key, label]) => (
-                  <option key={key} value={key} disabled={appearance.native && key === 'link'}>
-                    {t(label)}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => setType(value as ClipType | 'all')}
+                options={[
+                  { value: 'all', label: t('all_types') },
+                  ...Object.entries(typeNames).map(([key, label]) => ({
+                    value: key,
+                    label: t(label),
+                    disabled: appearance.native && key === 'link',
+                  })),
+                ]}
+              />
               <Icon name="chevron" size={12} />
-            </label>
+            </div>
             {(view !== 'all' || type !== 'all' || regex) && (
               <button className="text-button clear-filters" onClick={clearFilters}>
                 {t('reset')}

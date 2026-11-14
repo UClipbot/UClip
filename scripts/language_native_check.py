@@ -4,6 +4,14 @@ import sqlite3
 import subprocess
 
 
+def assert_collection_label(execute):
+    execute('document.querySelector(".scope-control button").click()')
+    try:
+        assert execute('return [...document.querySelectorAll(".action-menu button")].some(e=>e.textContent===arguments[0])', ['\u8bbe\u7f6e'])
+    finally:
+        execute('document.querySelector(".scope-control button").click()')
+
+
 def run(invoke, invoke_current, execute, execute_main, click, wait, capture, directory, env):
     print('Native system languages:', execute('return navigator.languages'), flush=True)
     initial = invoke('get_settings')['value']
@@ -38,7 +46,7 @@ def run(invoke, invoke_current, execute, execute_main, click, wait, capture, dir
     assert execute('return document.querySelector("#modal-title").textContent') == 'Settings'
     assert execute_main('return document.querySelector("#history-search").placeholder') == 'Search history…'
     assert execute_main('return document.querySelector(".clip-excerpt").textContent') == text
-    assert execute_main('return [...document.querySelectorAll(".scope-control option")].some(e=>e.textContent==="\u8bbe\u7f6e")')
+    assert_collection_label(execute_main)
     assert execute_main('return document.querySelector(".clip-row-meta").textContent.includes("Manually created")')
     assert subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', '^UClip · Settings$'], env=env, stdout=subprocess.DEVNULL).returncode == 0
     capture('language-english')
@@ -75,5 +83,5 @@ def verify_restart(invoke, execute, wait, saved):
     wait(lambda: execute('return document.documentElement.lang === "en"'), 'saved language after process restart')
     assert invoke('get_settings')['value'] == saved
     assert execute('return document.querySelector("#history-search").placeholder') == 'Search history…'
-    assert execute('return [...document.querySelectorAll(".scope-control option")].some(e=>e.textContent==="\u8bbe\u7f6e")')
+    assert_collection_label(execute)
     print('PASS language: preference, revision and user content survive a native process restart', flush=True)
