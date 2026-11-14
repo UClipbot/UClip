@@ -1,4 +1,5 @@
 import { t, formatHistoryTime } from './i18n';
+import { selectRange } from './platform/selection';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Icon } from './components/Icon';
 import { Modal } from './components/Modal';
@@ -62,6 +63,13 @@ export function App() {
   const [oldest, setOldest] = useState(false);
   const [grid, setGrid] = useState(false);
   const [selectedId, setSelectedId] = useState('note-1');
+  const [selection, setSelection] = useState<{ scope: string; ids: string[] }>({
+    scope: '',
+    ids: [],
+  });
+  const anchorId = useRef('note-1');
+  const [batchBusy, setBatchBusy] = useState(false);
+  const batchLock = useRef(false);
   const [preview, setPreview] = useState<{ id: string; focus: HTMLElement | null } | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [modal, setModal] = useState<AppModal | null>(null);
@@ -138,6 +146,172 @@ export function App() {
       if (first) setSelectedId(first.id);
     }
   }, [result.items, result.pending, result.error, selectedId]);
+  const selectionScope = JSON.stringify([query, regex, type, view, live.offset, oldest]);
+  useEffect(() => {
+    setSelection({ scope: selectionScope, ids: [] });
+    anchorId.current = '';
+  }, [selectionScope]);
+  const explicitSelection =
+    selection.scope === selectionScope
+      ? result.items.filter((clip) => selection.ids.includes(clip.id))
+      : [];
+  const selectedClips = selection.scope === selectionScope ? explicitSelection : [];
+  function selectClip(id: string, extend = false, toggle = false) {
+    if (!ready || batchLock.current) return;
+    const ids = result.items.map((clip) => clip.id);
+    const next = extend
+      ? selectRange(ids, anchorId.current, id)
+      : toggle
+        ? selectedClips.some((clip) => clip.id === id)
+          ? selectedClips.filter((clip) => clip.id !== id).map((clip) => clip.id)
+          : [...selectedClips.map((clip) => clip.id), id]
+        : [id];
+    if (!extend) anchorId.current = id;
+    setSelectedId(id);
+    setSelection({ scope: selectionScope, ids: next });
+  }
+  function clearSelection() {
+    if (batchLock.current) return;
+    setSelection({ scope: selectionScope, ids: [] });
+    anchorId.current = '';
+  }
+  async function removeSelected() {
+    if (!ready || batchLock.current || copying.current || live.mutating || !selectedClips.length)
+      return;
+    if (selectedClips.length === 1) {
+      removeClip(selectedClips[0]!);
+      return;
+    }
+    const targets = [...selectedClips];
+    batchLock.current = true;
+    setBatchBusy(true);
+    try {
+      if (!appearance.native) {
+        const ids = new Set(targets.map((clip) => clip.id));
+        setClips((current) =>
+          current.map((clip) => (ids.has(clip.id) ? { ...clip, deleted: !clip.deleted } : clip)),
+        );
+        setToast({
+          message: t('batch_changed', { 0: targets.length }),
+          undo: () => {
+            setClips((current) =>
+              current.map((clip) => {
+                const original = targets.find((target) => target.id === clip.id);
+                return original ? { ...clip, deleted: original.deleted } : clip;
+              }),
+            );
+          },
+        });
+      } else {
+        const outcome = await live.changeDeletions(
+          targets.map((clip) => ({
+            id: clip.id,
+            expectedRevision: clip.revision!,
+            deleted: true,
+          })),
+        );
+        const undo = outcome.completed.length
+          ? () => {
+              if (batchLock.current) return;
+              batchLock.current = true;
+              setBatchBusy(true);
+              void live
+                .changeDeletions(
+                  outcome.completed.map((clip) => ({
+                    id: clip.id,
+                    expectedRevision: clip.revision,
+                    deleted: false,
+                  })),
+                )
+                .then((restored) =>
+                  setToast({
+                    message: restored.failure
+                      ? t('batch_partial', {
+                          0: restored.completed.length,
+                          1: outcome.completed.length,
+                          2: t(safeError(restored.failure).message),
+                        })
+                      : t('deletion_undone'),
+                  }),
+                )
+                .catch((error) => setToast({ message: safeError(error).message }))
+                .finally(() => {
+                  batchLock.current = false;
+                  setBatchBusy(false);
+                });
+            }
+          : undefined;
+        setToast({
+          message: outcome.failure
+            ? t('batch_partial', {
+                0: outcome.completed.length,
+                1: targets.length,
+                2: t(safeError(outcome.failure).message),
+              })
+            : t('batch_changed', { 0: outcome.completed.length }),
+          undo,
+        });
+      }
+      setSelection({ scope: selectionScope, ids: [] });
+      list.current?.focus({ preventScroll: true });
+    } catch (error) {
+      setToast({ message: safeError(error).message });
+    } finally {
+      batchLock.current = false;
+      setBatchBusy(false);
+    }
+  }
+  async function copySelected(paste = false, fallbackToCopy = false) {
+    if (!ready || batchLock.current || copying.current || !selectedClips.length) return;
+    if (selectedClips.length === 1) {
+      await copyClip(selectedClips[0]!, paste, fallbackToCopy);
+      return;
+    }
+    const targets = [...selectedClips];
+    if (
+      targets.some((clip) => clip.deleted || clip.type === 'image') ||
+      targets.some((clip) => (clip.type === 'file') !== (targets[0]!.type === 'file'))
+    ) {
+      setToast({ message: t('batch_paste_types') });
+      return;
+    }
+    copying.current = true;
+    batchLock.current = true;
+    setBatchBusy(true);
+    try {
+      if (appearance.native) {
+        const outcome = await live.copy(
+          targets[0]!.id,
+          paste,
+          fallbackToCopy,
+          targets.map((clip) => clip.id),
+        );
+        setToast({
+          message: outcome.warning
+            ? `${outcome.pasteRequested ? t('copied_and_requested_paste_to_original_app') : t('copied')} · ${t(safeError(outcome.warning).message)}`
+            : outcome.pasteRequested
+              ? t('copied_and_requested_paste_to_original_app')
+              : t('copied'),
+        });
+        if (outcome.pasteRequested) void desktop.hide().catch(() => {});
+      } else if (targets[0]!.type === 'file') {
+        setToast({ message: t('copying_0_is_not_available_yet', { 0: t('file') }) });
+      } else {
+        await navigator.clipboard.writeText(targets.map((clip) => clip.content).join('\n'));
+        setToast({ message: t('sample_text_copied') });
+      }
+    } catch (error) {
+      setToast({
+        message: appearance.native
+          ? safeError(error).message
+          : t('the_browser_blocked_copying_select_and_copy_text_in_the_full_preview'),
+      });
+    } finally {
+      copying.current = false;
+      batchLock.current = false;
+      setBatchBusy(false);
+    }
+  }
   const previewBase = preview && result.items.find((clip) => clip.id === preview.id);
   const previewClip =
     previewBase && appearance.native
@@ -164,7 +338,7 @@ export function App() {
     setClips((current) => current.map((clip) => (clip.id === id ? { ...clip, ...update } : clip)));
   }
   async function togglePin(clip: Clip) {
-    if (!ready || live.mutating || clip.deleted) return;
+    if (!ready || batchLock.current || live.mutating || clip.deleted) return;
     if (appearance.native) {
       if (!clip.revision) return;
       try {
@@ -198,6 +372,7 @@ export function App() {
     }
   }
   function removeClip(clip: Clip) {
+    if (batchLock.current) return;
     if (appearance.native) {
       void deleteNativeClip(clip);
       return;
@@ -248,7 +423,7 @@ export function App() {
     }
   }
   async function copyClip(clip: Clip, paste = false, fallbackToCopy = false) {
-    if (!ready || !result.items.some((item) => item.id === clip.id)) return;
+    if (batchLock.current || !ready || !result.items.some((item) => item.id === clip.id)) return;
     if (clip.deleted) {
       removeClip(clip);
       return;
@@ -306,7 +481,7 @@ export function App() {
     }
   }
   function openPreview(clip: Clip) {
-    if (!ready) return;
+    if (!ready || batchLock.current) return;
     setSelectedId(clip.id);
     setPreview({ id: clip.id, focus: menu?.anchor ?? (document.activeElement as HTMLElement) });
   }
@@ -323,7 +498,7 @@ export function App() {
       setMenu(null);
       return;
     }
-    if (clip) setSelectedId(clip.id);
+    if (clip && !selectedClips.some((item) => item.id === clip.id)) selectClip(clip.id);
     setMenu({ anchor, clipId: clip?.id });
   }
   function menuAction(action: () => void) {
@@ -448,8 +623,26 @@ export function App() {
         return;
       const keys = appearance.native ? desktop.status?.keyboard.bindings : DEFAULT_KEYS;
       if (!keys) return;
+      const inListMovement = (action: string) =>
+        (action === 'up' || action === 'down') && event.target !== search.current && event.shiftKey;
       const is = (action: keyof typeof keys) =>
-        matchesKey(event, keys[action], modifier === '⌘', action === 'up' || action === 'down');
+        matchesKey(
+          inListMovement(action)
+            ? {
+                ...event,
+                code: event.code,
+                ctrlKey: event.ctrlKey,
+                metaKey: event.metaKey,
+                altKey: event.altKey,
+                shiftKey: keys[action].shift,
+                isComposing: event.isComposing,
+                repeat: event.repeat,
+              }
+            : event,
+          keys[action],
+          modifier === '⌘',
+          action === 'up' || action === 'down',
+        );
       if (is('settings') && !modal) {
         event.preventDefault();
         openModal('settings');
@@ -460,6 +653,9 @@ export function App() {
         if (preview) {
           event.preventDefault();
           closePreview();
+        } else if (selectedClips.length > 1) {
+          event.preventDefault();
+          clearSelection();
         } else if (query) {
           event.preventDefault();
           setQuery('');
@@ -478,6 +674,27 @@ export function App() {
       if (preview) return;
       const target = event.target as HTMLElement;
       const inList = target === list.current || target.matches('[data-row-main]');
+      const withinList = target === list.current || !!list.current?.contains(target);
+      if (
+        withinList &&
+        event.code === 'KeyC' &&
+        !event.altKey &&
+        !event.shiftKey &&
+        (modifier === '⌘' ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
+      ) {
+        // Let the system copy an explicit text selection, and keep input editing native.
+        if (window.getSelection()?.isCollapsed === false) return;
+        if (selectedClips.length) {
+          event.preventDefault();
+          if (!event.repeat) void copySelected();
+        }
+        return;
+      }
+      if (withinList && is('remove')) {
+        event.preventDefault();
+        void removeSelected();
+        return;
+      }
       if (target !== search.current && !inList) return;
       // Option/Alt character entry in the search field keeps its native editing behavior.
       if (
@@ -488,6 +705,12 @@ export function App() {
         /^(Key|Digit|Comma|Period|Slash)/.test(event.code)
       )
         return;
+      if (inList && (event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyA') {
+        event.preventDefault();
+        if (ready && !batchLock.current)
+          setSelection({ scope: selectionScope, ids: result.items.map((clip) => clip.id) });
+        return;
+      }
       if (is('down') || is('up')) {
         if (!ready || !result.items.length) return;
         event.preventDefault();
@@ -497,7 +720,7 @@ export function App() {
             Math.max(0, Math.min(result.items.length - 1, index + (is('down') ? 1 : -1)))
           ];
         if (next) {
-          setSelectedId(next.id);
+          selectClip(next.id, event.shiftKey);
           list.current
             ?.querySelector(`[data-clip-id="${next.id}"]`)
             ?.scrollIntoView({ block: 'nearest' });
@@ -507,18 +730,13 @@ export function App() {
               ?.focus({ preventScroll: true });
         }
       }
-      if (is('remove') && inList) {
-        event.preventDefault();
-        if (ready && selected) removeClip(selected);
-        return;
-      }
       if (is('copy')) {
         event.preventDefault();
-        if (ready && selected) void copyClip(selected);
+        if (ready && selected) void copySelected();
       }
       if (is('preview') && inList) {
         event.preventDefault();
-        if (ready && selected) openPreview(selected);
+        if (ready && selectedClips.length === 1) openPreview(selectedClips[0]!);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -767,7 +985,16 @@ export function App() {
             className="history-panel"
             hidden={!!previewClip}
             aria-label={t('clipboard_history')}
+            onClick={(event) => {
+              const target = event.target as HTMLElement;
+              if (target.closest('.clip-row, button, input, a')) return;
+              clearSelection();
+              list.current?.focus({ preventScroll: true });
+            }}
           >
+            <span className="sr-only" aria-live="polite">
+              {t('selected_count', { 0: selectedClips.length })}
+            </span>
             <HistoryViewport
               listRef={list}
               resetKey={JSON.stringify([query, regex, type, view, live.offset, oldest, grid])}
@@ -818,7 +1045,7 @@ export function App() {
                     data-clip-id={clip.id}
                     data-clip-type={clip.type}
                     data-clip-revision={clip.revision}
-                    className={`clip-row ${selected?.id === clip.id ? 'selected' : ''} ${clip.type === 'image' ? 'image-row' : ''}`}
+                    className={`clip-row ${selectedClips.some((item) => item.id === clip.id) ? 'selected' : ''} ${clip.type === 'image' ? 'image-row' : ''}`}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       openMenu(event.currentTarget.querySelector<HTMLElement>('.row-more')!, clip);
@@ -827,11 +1054,18 @@ export function App() {
                     <button
                       className="row-main"
                       data-row-main
-                      aria-pressed={selected?.id === clip.id}
+                      aria-pressed={selectedClips.some((item) => item.id === clip.id)}
                       aria-label={`${t(typeNames[clip.type])}：${clip.type === 'text' ? clip.content.slice(0, 60) : clip.title}`}
-                      onFocus={() => setSelectedId(clip.id)}
-                      onClick={() => setSelectedId(clip.id)}
-                      onDoubleClick={() => void copyClip(clip, true, true)}
+                      onFocus={() => {
+                        setSelectedId(clip.id);
+                      }}
+                      onClick={(event) =>
+                        selectClip(clip.id, event.shiftKey, event.ctrlKey || event.metaKey)
+                      }
+                      onDoubleClick={(event) => {
+                        if (!event.ctrlKey && !event.metaKey && !event.shiftKey)
+                          void copySelected(true, true);
+                      }}
                     >
                       {clip.type === 'image' ? (
                         clip.image ? (
@@ -1037,95 +1271,120 @@ export function App() {
               {appearance.native && !menuClip.deleted && (
                 <button
                   role="menuitem"
-                  disabled={!live.status?.pasteAvailable || !live.status.pasteTarget}
-                  onClick={() => menuAction(() => void copyClip(menuClip, true))}
+                  disabled={
+                    !ready || batchBusy || !live.status?.pasteAvailable || !live.status.pasteTarget
+                  }
+                  onClick={() =>
+                    menuAction(
+                      () =>
+                        void (selectedClips.length > 1
+                          ? copySelected(true)
+                          : copyClip(menuClip, true)),
+                    )
+                  }
                 >
                   <Icon name="arrow" size={15} />
-                  {t('paste_to_original_app_2')}
+                  {t(selectedClips.length > 1 ? 'paste_selected' : 'paste_to_original_app_2')}
                 </button>
               )}
               {!menuClip.deleted && (
                 <button
                   role="menuitem"
                   data-testid="copy-history-item"
-                  onClick={() => menuAction(() => void copyClip(menuClip))}
+                  disabled={!ready || batchBusy}
+                  onClick={() =>
+                    menuAction(
+                      () => void (selectedClips.length > 1 ? copySelected() : copyClip(menuClip)),
+                    )
+                  }
                 >
                   <Icon name="copy" size={15} />
                   {t('copy')}
                 </button>
               )}
-              <button role="menuitem" onClick={() => menuAction(() => openPreview(menuClip))}>
-                <Icon name="text" size={15} />
-                {t('view_full_content')}
-              </button>
-              <button
-                role="menuitem"
-                data-testid="toggle-pin"
-                disabled={!ready || live.mutating || menuClip.deleted}
-                onClick={() => menuAction(() => void togglePin(menuClip))}
-              >
-                <Icon name="pin" size={15} />
-                {menuClip.pinned ? t('unpin') : t('pin')}
-              </button>
-              {appearance.native && (
+              {selectedClips.length <= 1 && (
                 <>
-                  <button
-                    role="menuitem"
-                    disabled={!ready || live.mutating}
-                    data-testid="move-to-collection"
-                    onClick={() => menuAction(() => openTransfer(menuClip, 'move'))}
-                  >
-                    <Icon name="folder" size={15} />
-                    {t('move_to_collection')}
+                  <button role="menuitem" onClick={() => menuAction(() => openPreview(menuClip))}>
+                    <Icon name="text" size={15} />
+                    {t('view_full_content')}
                   </button>
                   <button
                     role="menuitem"
-                    disabled={!ready || live.mutating || !live.collections.length}
-                    data-testid="copy-to-collection"
-                    onClick={() => menuAction(() => openTransfer(menuClip, 'copy'))}
+                    data-testid="toggle-pin"
+                    disabled={!ready || live.mutating || menuClip.deleted}
+                    onClick={() => menuAction(() => void togglePin(menuClip))}
                   >
-                    <Icon name="copy" size={15} />
-                    {t('copy_to_collection')}
+                    <Icon name="pin" size={15} />
+                    {menuClip.pinned ? t('unpin') : t('pin')}
                   </button>
-                </>
-              )}
-              {!appearance.native && !menuClip.deleted && (
-                <>
-                  <div className="menu-separator" />
-                  <p className="menu-label">{t('move_to_collection_2')}</p>
-                  {(Object.keys(collectionNames) as Collection[]).map((key) => (
-                    <button
-                      role="menuitem"
-                      key={key}
-                      onClick={() =>
-                        menuAction(() => {
-                          changeClip(menuClip.id, { collection: key });
-                          setToast({
-                            message: t('sample_moved_to_0', { 0: t(collectionNames[key]) }),
-                          });
-                        })
-                      }
-                    >
-                      <Icon name="folder" size={15} />
-                      {t(collectionNames[key])}
-                      {menuClip.collection === key && <Icon name="check" size={14} />}
-                    </button>
-                  ))}
+                  {appearance.native && (
+                    <>
+                      <button
+                        role="menuitem"
+                        disabled={!ready || live.mutating}
+                        data-testid="move-to-collection"
+                        onClick={() => menuAction(() => openTransfer(menuClip, 'move'))}
+                      >
+                        <Icon name="folder" size={15} />
+                        {t('move_to_collection')}
+                      </button>
+                      <button
+                        role="menuitem"
+                        disabled={!ready || live.mutating || !live.collections.length}
+                        data-testid="copy-to-collection"
+                        onClick={() => menuAction(() => openTransfer(menuClip, 'copy'))}
+                      >
+                        <Icon name="copy" size={15} />
+                        {t('copy_to_collection')}
+                      </button>
+                    </>
+                  )}
+                  {!appearance.native && !menuClip.deleted && (
+                    <>
+                      <div className="menu-separator" />
+                      <p className="menu-label">{t('move_to_collection_2')}</p>
+                      {(Object.keys(collectionNames) as Collection[]).map((key) => (
+                        <button
+                          role="menuitem"
+                          key={key}
+                          onClick={() =>
+                            menuAction(() => {
+                              changeClip(menuClip.id, { collection: key });
+                              setToast({
+                                message: t('sample_moved_to_0', { 0: t(collectionNames[key]) }),
+                              });
+                            })
+                          }
+                        >
+                          <Icon name="folder" size={15} />
+                          {t(collectionNames[key])}
+                          {menuClip.collection === key && <Icon name="check" size={14} />}
+                        </button>
+                      ))}
+                    </>
+                  )}
                 </>
               )}
               <div className="menu-separator" />
               <button
                 role="menuitem"
                 className={menuClip.deleted ? '' : 'destructive'}
-                disabled={!ready || live.mutating}
-                onClick={() => menuAction(() => removeClip(menuClip))}
+                data-testid="delete-history-item"
+                disabled={!ready || batchBusy || live.mutating}
+                onClick={() =>
+                  menuAction(() =>
+                    selectedClips.length > 1 ? void removeSelected() : removeClip(menuClip),
+                  )
+                }
               >
                 <Icon name={menuClip.deleted ? 'restore' : 'trash'} size={15} />
                 {menuClip.deleted
                   ? t('restore')
-                  : appearance.native
-                    ? t('delete')
-                    : t('move_to_trash')}
+                  : selectedClips.length > 1
+                    ? t('delete_selected')
+                    : appearance.native
+                      ? t('delete')
+                      : t('move_to_trash')}
               </button>
             </>
           ) : (

@@ -240,8 +240,35 @@ export function useHistory(
       await refresh();
     }
   }
-  async function copy(id: string, paste: boolean, fallbackToCopy: boolean) {
-    const result = await invoke<CopyResult>('copy_clip', { id, paste, fallbackToCopy });
+  async function changeDeletions(requests: ChangeClipDeletion[]) {
+    if (mutation.current) throw safeError({ code: 'busy' });
+    mutation.current = true;
+    statusGeneration.current++;
+    setMutating(true);
+    setPending(true);
+    const completed: ClipDeletionSnapshot[] = [];
+    let failure: unknown;
+    try {
+      for (const request of requests) {
+        try {
+          completed.push(await invoke<ClipDeletionSnapshot>('change_clip_deletion', { request }));
+        } catch (error) {
+          failure = error;
+          break;
+        }
+      }
+      return { completed, failure };
+    } finally {
+      mutation.current = false;
+      if (mounted.current) {
+        setMutating(false);
+        setQueryEpoch((epoch) => epoch + 1);
+      }
+      await refresh();
+    }
+  }
+  async function copy(id: string, paste: boolean, fallbackToCopy: boolean, ids?: string[]) {
+    const result = await invoke<CopyResult>('copy_clip', { id, ids, paste, fallbackToCopy });
     await refresh();
     return result;
   }
@@ -316,6 +343,7 @@ export function useHistory(
     createText,
     mutating,
     copy,
+    changeDeletions,
     refresh,
     retryQuery: () => setQueryEpoch((epoch) => epoch + 1),
   };

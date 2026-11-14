@@ -184,6 +184,9 @@ impl CoreService {
     pub async fn read_clip(&self, id: String) -> Result<crate::ClipPayload, AppError> {
         self.operation(move |s| s.read_clip(&id)).await
     }
+    pub async fn read_clips(&self, ids: Vec<String>) -> Result<crate::ClipPayload, AppError> {
+        self.operation(move |s| s.read_clips(&ids)).await
+    }
     pub async fn change_clip_deletion(
         &self,
         request: crate::ChangeClipDeletion,

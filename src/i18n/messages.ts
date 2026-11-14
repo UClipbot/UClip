@@ -1,5 +1,13 @@
 // Stable English message IDs; keep user content out of this catalog.
 export const english = {
+  selected_count: '{0} selected',
+  paste_selected: 'Paste selected',
+  delete_selected: 'Delete selected',
+  batch_changed: 'Updated {0} items',
+  batch_partial: 'Completed {0} of {1}: {2}',
+  batch_paste_types:
+    'Select only text items or only file references. Multiple images and mixed types cannot be pasted together.',
+
   image_0_1: 'Image {0} × {1}',
   file_references: 'File references',
   language_and_appearance_preferences_are_saved_on_this_device:
@@ -309,6 +317,13 @@ export const english = {
 } as const;
 
 export const chinese: Record<keyof typeof english, string> = {
+  selected_count: '已选择 {0} 项',
+  paste_selected: '粘贴选中项',
+  delete_selected: '删除选中项',
+  batch_changed: '已更新 {0} 项',
+  batch_partial: '已完成 {0}/{1} 项：{2}',
+  batch_paste_types: '请选择纯文本条目或纯文件引用；暂不支持多张图片或混合类型一起粘贴。',
+
   image_0_1: '图片 {0} × {1}',
   file_references: '文件引用',
   language_and_appearance_preferences_are_saved_on_this_device: '语言和外观偏好保存在此设备。',

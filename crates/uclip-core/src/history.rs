@@ -394,6 +394,32 @@ impl Storage {
         payload.validate()?;
         Ok(payload)
     }
+    /// Build one bounded clipboard publication in caller-specified display order.
+    pub fn read_clips(&self, ids: &[String]) -> Result<ClipPayload, AppError> {
+        if ids.is_empty()
+            || ids.len() > 100
+            || ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len()
+        {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let mut payload = self.read_clip(&ids[0])?;
+        for id in &ids[1..] {
+            match (&mut payload, self.read_clip(id)?) {
+                (ClipPayload::Text(text), ClipPayload::Text(next)) => {
+                    if text.len() + 1 + next.len() > MAX_TEXT_BYTES {
+                        return Err(AppError::new(ErrorCode::LimitExceeded));
+                    }
+                    text.push('\n');
+                    text.push_str(&next);
+                }
+                (ClipPayload::Files(files), ClipPayload::Files(next)) => files.extend(next),
+                _ => return Err(AppError::new(ErrorCode::Restricted)),
+            }
+            payload.validate()?;
+        }
+        Ok(payload)
+    }
+
     pub fn change_clip_deletion(
         &mut self,
         request: crate::ChangeClipDeletion,
@@ -632,6 +658,89 @@ pub(crate) fn validate_save_payload(
 #[cfg(test)]
 mod disk_tests {
     use super::*;
+
+    #[test]
+    fn batch_read_preserves_order_and_rejects_invalid_or_incompatible_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut storage = Storage::open(&directory.path().join("batch.sqlite3")).unwrap();
+        let a = storage
+            .capture(ClipPayload::Text("first".into()))
+            .unwrap()
+            .unwrap();
+        let b = storage
+            .capture(ClipPayload::Text("second".into()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            storage.read_clips(&[b.clone(), a.clone()]).unwrap(),
+            ClipPayload::Text("second\nfirst".into())
+        );
+        assert_eq!(
+            storage.read_clips(&[]).unwrap_err().code,
+            ErrorCode::InvalidInput
+        );
+        assert_eq!(
+            storage
+                .read_clips(&[a.clone(), a.clone()])
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidInput
+        );
+        let f = storage
+            .capture(ClipPayload::Files(vec![std::env::temp_dir()
+                .join("one.txt")
+                .to_str()
+                .unwrap()
+                .into()]))
+            .unwrap()
+            .unwrap();
+        let g = storage
+            .capture(ClipPayload::Files(vec![std::env::temp_dir()
+                .join("two.txt")
+                .to_str()
+                .unwrap()
+                .into()]))
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(storage.read_clips(&[f.clone(), g]).unwrap(), ClipPayload::Files(paths) if paths.len() == 2)
+        );
+        assert_eq!(
+            storage.read_clips(&[a.clone(), f]).unwrap_err().code,
+            ErrorCode::Restricted
+        );
+        let image = storage
+            .capture(ClipPayload::Image {
+                width: 1,
+                height: 1,
+                rgba: vec![0; 4],
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            storage.read_clips(&[a.clone(), image]).unwrap_err().code,
+            ErrorCode::Restricted
+        );
+        let large = storage
+            .capture(ClipPayload::Text("x".repeat(MAX_TEXT_BYTES)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            storage.read_clips(&[large, b]).unwrap_err().code,
+            ErrorCode::LimitExceeded
+        );
+        storage
+            .change_clip_deletion(crate::ChangeClipDeletion {
+                id: a.clone(),
+                expected_revision: "0".into(),
+                deleted: true,
+            })
+            .unwrap();
+        assert_eq!(
+            storage.read_clips(&[a]).unwrap_err().code,
+            ErrorCode::NotFound
+        );
+    }
 
     #[test]
     fn sqlite_full_rolls_back_content_revision_and_change_record_then_recovers() {

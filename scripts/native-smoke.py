@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='target/debug/uclip-desktop')
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
+    parser.add_argument('--multiselect-only', action='store_true', help='Multi-selection native copy, deletion and undo.')
     parser.add_argument('--filters-only', action='store_true', help='Filter popup focus, keyboard selection and external blur auto-hide.')
     parser.add_argument('--language-only', action='store_true', help='Native language forms, cross-window updates, errors and restart persistence.')
     parser.add_argument('--manual-only',action='store_true',help='Isolated real manual text creation.')
@@ -194,6 +195,10 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.multiselect_only:
+                    from multiselect_native_check import run
+                    run(invoke, execute, click, wait_for, env)
+                    return
                 if args.filters_only:
                     from filter_native_check import run
                     run(invoke, execute, click, wait_for, env, directory, log)

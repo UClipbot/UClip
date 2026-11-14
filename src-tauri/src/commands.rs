@@ -124,6 +124,7 @@ pub async fn update_capture_policy(
 pub async fn copy_clip(
     state: State<'_, AppState>,
     id: String,
+    ids: Option<Vec<String>>,
     paste: bool,
     fallback_to_copy: Option<bool>,
 ) -> Result<uclip_core::CopyResult, AppError> {
@@ -131,7 +132,11 @@ pub async fn copy_clip(
         .clipboard
         .as_ref()
         .map_err(Clone::clone)?
-        .copy(id, paste, fallback_to_copy.unwrap_or(false))
+        .copy(
+            ids.unwrap_or_else(|| vec![id]),
+            paste,
+            fallback_to_copy.unwrap_or(false),
+        )
         .await
 }
 

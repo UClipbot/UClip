@@ -30,7 +30,7 @@ pub(super) const MARKER: &str = "application/x-uclip-internal";
 type Reply<T> = oneshot::Sender<Result<T, AppError>>;
 enum Request {
     Policy(UpdateCapturePolicy, Reply<CapturePolicy>),
-    Copy(String, bool, bool, Reply<CopyResult>),
+    Copy(Vec<String>, bool, bool, Reply<CopyResult>),
     Deletion(
         uclip_core::ChangeClipDeletion,
         Reply<uclip_core::ClipDeletionSnapshot>,
@@ -123,44 +123,48 @@ impl ClipboardService {
                             }
                             let _ = reply.send(response);
                         }
-                        Ok(Request::Copy(id, auto_paste, fallback_to_copy, reply)) => {
-                            let response = block(core.read_clip(id.clone())).and_then(|payload| {
-                                let prepared = match auto_paste.then(|| paste.prepare()).transpose()
-                                {
-                                    Err(error)
-                                        if fallback_to_copy
-                                            && matches!(
-                                                error.code,
-                                                ErrorCode::TargetLost | ErrorCode::Restricted
-                                            ) =>
-                                    {
-                                        None
+                        Ok(Request::Copy(ids, auto_paste, fallback_to_copy, reply)) => {
+                            let response =
+                                block(core.read_clips(ids.clone())).and_then(|payload| {
+                                    let prepared =
+                                        match auto_paste.then(|| paste.prepare()).transpose() {
+                                            Err(error)
+                                                if fallback_to_copy
+                                                    && matches!(
+                                                        error.code,
+                                                        ErrorCode::TargetLost
+                                                            | ErrorCode::Restricted
+                                                    ) =>
+                                            {
+                                                None
+                                            }
+                                            result => result?,
+                                        };
+                                    #[cfg(target_os = "windows")]
+                                    let publication = write(&context, payload, &marker)?;
+                                    #[cfg(not(target_os = "windows"))]
+                                    write(&context, payload, &marker)?;
+                                    let usage = ids
+                                        .into_iter()
+                                        .try_for_each(|id| block(core.mark_used(id)));
+                                    let mut result = CopyResult {
+                                        copied: true,
+                                        usage_saved: usage.is_ok(),
+                                        paste_requested: false,
+                                        warning: usage.err(),
+                                    };
+                                    if let Some(prepared) = prepared {
+                                        match paste.paste(
+                                            prepared,
+                                            #[cfg(target_os = "windows")]
+                                            publication,
+                                        ) {
+                                            Ok(()) => result.paste_requested = true,
+                                            Err(e) => result.warning = Some(e),
+                                        }
                                     }
-                                    result => result?,
-                                };
-                                #[cfg(target_os = "windows")]
-                                let publication = write(&context, payload, &marker)?;
-                                #[cfg(not(target_os = "windows"))]
-                                write(&context, payload, &marker)?;
-                                let usage = block(core.mark_used(id));
-                                let mut result = CopyResult {
-                                    copied: true,
-                                    usage_saved: usage.is_ok(),
-                                    paste_requested: false,
-                                    warning: usage.err(),
-                                };
-                                if let Some(prepared) = prepared {
-                                    match paste.paste(
-                                        prepared,
-                                        #[cfg(target_os = "windows")]
-                                        publication,
-                                    ) {
-                                        Ok(()) => result.paste_requested = true,
-                                        Err(e) => result.warning = Some(e),
-                                    }
-                                }
-                                Ok(result)
-                            });
+                                    Ok(result)
+                                });
                             let _ = reply.send(response);
                         }
                         Ok(Request::Deletion(request, reply)) => {
@@ -304,12 +308,12 @@ impl ClipboardService {
     }
     pub async fn copy(
         &self,
-        id: String,
+        ids: Vec<String>,
         paste: bool,
         fallback_to_copy: bool,
     ) -> Result<CopyResult, AppError> {
         let (tx, rx) = oneshot::channel();
-        self.submit(Request::Copy(id, paste, fallback_to_copy, tx))?;
+        self.submit(Request::Copy(ids, paste, fallback_to_copy, tx))?;
         rx.await.map_err(|_| error())?
     }
     pub async fn change_deletion(
