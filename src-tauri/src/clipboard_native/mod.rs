@@ -26,6 +26,7 @@ fn check_length(length: usize, maximum: usize) -> Result<(), AppError> {
         Ok(())
     }
 }
+#[cfg(any(target_os = "macos", test))]
 fn text(bytes: Vec<u8>) -> Result<Option<ClipPayload>, AppError> {
     check_length(bytes.len(), MAX_TEXT_BYTES)?;
     let value = String::from_utf8(bytes).map_err(|_| invalid())?;

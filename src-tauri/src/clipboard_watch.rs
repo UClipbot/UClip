@@ -1,4 +1,6 @@
 use uclip_core::{AppError, ErrorCode};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn error() -> AppError {
     AppError::new(ErrorCode::Clipboard)
 }
