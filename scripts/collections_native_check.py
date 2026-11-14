@@ -55,6 +55,7 @@ def transfer_ui(c, clip_id, mode, destination):
 
 
 def run(c,capture):
+    c.policy(enabled=False)
     assert not c.action('clipboard_status')['policy']['enabled']
     c.activate(c.window('^UClip$'))
     a=category_ui(c,'工作 🦀');b=category_ui(c,'素材')

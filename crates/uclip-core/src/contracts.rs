@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-pub const CONTRACT_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -355,7 +355,6 @@ pub struct ClipTransferSnapshot {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesktopPreferences {
     pub close_to_tray: bool,
-    pub always_on_top: bool,
     pub auto_hide: bool,
     pub native_titlebar: bool,
     pub shortcut: String,
@@ -366,7 +365,6 @@ pub struct DesktopPreferences {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateDesktopPreferences {
     pub close_to_tray: bool,
-    pub always_on_top: bool,
     pub auto_hide: bool,
     pub native_titlebar: bool,
     pub shortcut: String,
@@ -382,4 +380,27 @@ pub struct DesktopStatus {
     pub shortcut_available: bool,
     pub autostart_enabled: Option<bool>,
     pub error: Option<AppError>,
+}
+
+/// Logical coordinates relative to the local history WebView.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewAnchor {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Presentation metadata only. The preview reads content through the core detail use case.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HoverPreviewRequest {
+    pub token: String,
+    pub id: String,
+    pub kind: ClipKind,
+    pub source: String,
+    pub saved_at: String,
+    pub size: Option<String>,
+    pub anchor: PreviewAnchor,
 }

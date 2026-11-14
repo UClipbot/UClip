@@ -240,7 +240,7 @@ try {
   assert.equal(await clipboard(), 'Query sentinel');
   await page.locator('#search-error').waitFor();
   assert.match(await page.locator('#search-error').textContent(), /耗时过长/);
-  await page.keyboard.press('Control+,');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+,' : 'Control+,');
   await page.getByRole('dialog').waitFor();
   await page.keyboard.press('Escape');
   await search.fill('[');

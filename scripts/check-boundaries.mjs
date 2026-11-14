@@ -5,6 +5,7 @@ const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf
 const config = JSON.parse(read('src-tauri/tauri.conf.json'));
 const capability = JSON.parse(read('src-tauri/capabilities/main.json'));
 const settingsCapability = JSON.parse(read('src-tauri/capabilities/settings.json'));
+const previewCapability = JSON.parse(read('src-tauri/capabilities/hover-preview.json'));
 const registered = read('src-tauri/src/lib.rs').match(/generate_handler!\[([\s\S]*?)\]/)?.[1];
 const manifested = read('src-tauri/build.rs').match(/\.commands\(&\[([\s\S]*?)\]\)/)?.[1];
 assert(registered && manifested, 'Command registration must remain inspectable.');
@@ -25,12 +26,14 @@ assert.equal(capability.remote, undefined);
 assert.deepEqual(
   capability.permissions.toSorted(),
   [
-    ...commands.map((name) => `allow-${name.replaceAll('_', '-')}`),
+    ...commands
+      .filter((name) => !['get_hover_preview', 'hover_preview_presence'].includes(name))
+      .map((name) => `allow-${name.replaceAll('_', '-')}`),
     'core:event:allow-listen',
     'core:event:allow-unlisten',
   ].sort(),
 );
-assert.deepEqual(config.app.security.capabilities, ['main', 'settings']);
+assert.deepEqual(config.app.security.capabilities, ['main', 'settings', 'hover-preview']);
 assert.deepEqual(settingsCapability.windows, ['settings']);
 assert.equal(settingsCapability.local, true);
 assert.equal(settingsCapability.remote, undefined);
@@ -48,6 +51,21 @@ assert.deepEqual(
     'allow-update-key-bindings',
     'allow-set-autostart',
     'allow-close-main-window',
+  ].toSorted(),
+);
+assert.deepEqual(previewCapability.windows, ['hover-preview']);
+assert.equal(previewCapability.local, true);
+assert.equal(previewCapability.remote, undefined);
+assert.deepEqual(
+  previewCapability.permissions.toSorted(),
+  [
+    'core:event:allow-listen',
+    'core:event:allow-unlisten',
+    'allow-bootstrap',
+    'allow-clip-detail',
+    'allow-get-hover-preview',
+    'allow-hover-preview-presence',
+    'allow-hide-hover-preview',
   ].toSorted(),
 );
 assert.equal(config.app.withGlobalTauri, false);

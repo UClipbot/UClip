@@ -44,7 +44,7 @@ def run(invoke, execute, click, env, directory, capture, execute_main, capture_m
         wait(lambda: execute('const e=document.querySelector(arguments[0]); return e && !e.disabled', ['[aria-label="使用系统原生标题栏"]']), 'titlebar setting ready')
 
     initial = action('desktop_status')
-    assert initial['preferences']['closeToTray'] and initial['preferences']['alwaysOnTop'], initial
+    assert initial['preferences']['closeToTray'] and not initial['preferences']['autoHide'], initial
     assert initial['autostartEnabled'] and not initial['preferences']['nativeTitlebar'], initial
     wait(lambda: execute_main('return !!document.querySelector(".window-titlebar")'), 'custom titlebar by default')
     wait(lambda: decorations(False), 'custom native window by default')

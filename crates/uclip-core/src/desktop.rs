@@ -22,8 +22,8 @@ impl Storage {
     }
 
     pub fn desktop_preferences(&self) -> Result<DesktopPreferences, AppError> {
-        Ok(self.connection.query_row("SELECT close_to_tray,always_on_top,auto_hide,shortcut,revision,native_titlebar FROM desktop_preferences WHERE singleton=1", [], |r| Ok(DesktopPreferences {
-            close_to_tray: r.get(0)?, always_on_top: r.get(1)?, auto_hide: r.get(2)?, shortcut: r.get(3)?, revision: r.get::<_, i64>(4)?.to_string(), native_titlebar: r.get(5)?
+        Ok(self.connection.query_row("SELECT close_to_tray,auto_hide,shortcut,revision,native_titlebar FROM desktop_preferences WHERE singleton=1", [], |r| Ok(DesktopPreferences {
+            close_to_tray: r.get(0)?, auto_hide: r.get(1)?, shortcut: r.get(2)?, revision: r.get::<_, i64>(3)?.to_string(), native_titlebar: r.get(4)?
         }))?)
     }
 
@@ -45,7 +45,7 @@ impl Storage {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
         let tx = self.connection.transaction()?;
-        if tx.execute("UPDATE desktop_preferences SET close_to_tray=?1,always_on_top=?2,auto_hide=?3,shortcut=?4,native_titlebar=?5,revision=revision+1 WHERE singleton=1 AND revision=?6", params![request.close_to_tray,request.always_on_top,request.auto_hide,request.shortcut,request.native_titlebar,revision])? != 1 {
+        if tx.execute("UPDATE desktop_preferences SET close_to_tray=?1,auto_hide=?2,shortcut=?3,native_titlebar=?4,revision=revision+1 WHERE singleton=1 AND revision=?5", params![request.close_to_tray,request.auto_hide,request.shortcut,request.native_titlebar,revision])? != 1 {
             return Err(AppError::new(ErrorCode::Conflict));
         }
         tx.commit()?;

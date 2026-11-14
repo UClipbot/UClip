@@ -11,7 +11,7 @@ def run(checks):
     c = checks
     status = c.action('desktop_status')
     assert status['shortcutAvailable'], status
-    assert status['preferences']['closeToTray'] and status['preferences']['alwaysOnTop']
+    assert status['preferences']['closeToTray'] and not status['preferences']['autoHide']
     assert status['autostartEnabled'] and not status['preferences']['nativeTitlebar']
     window = c.window('^UClip$')
 
@@ -27,14 +27,14 @@ def run(checks):
 
     def save(**changes):
         p = c.action('desktop_status')['preferences']
-        request = {key: p[key] for key in ['closeToTray', 'alwaysOnTop', 'autoHide', 'shortcut', 'nativeTitlebar']}
+        request = {key: p[key] for key in ['closeToTray', 'autoHide', 'shortcut', 'nativeTitlebar']}
         request['expectedRevision'] = p['revision']
         request.update(changes)
         return c.action('update_desktop_preferences', request=request)
 
-    save(alwaysOnTop=True)
+    save(autoHide=False)
     wait(lambda: '_NET_WM_STATE_ABOVE' in subprocess.check_output(['xprop','-id',window,'_NET_WM_STATE'],env=c.env,text=True), 'window stays above')
-    save(alwaysOnTop=False, closeToTray=True)
+    save(closeToTray=True)
     subprocess.run(['wmctrl','-ic',hex(int(window))],env=c.env,check=True)
     wait(lambda:not visible(),'close hides without destroying the WebView')
     c.key('key','ctrl+shift+v')
@@ -53,7 +53,7 @@ def run(checks):
     try:
         assert grabber.read()['grabbed']
         before=c.action('desktop_status')['preferences']
-        request={key:before[key] for key in ['closeToTray','alwaysOnTop','autoHide','shortcut','nativeTitlebar']}
+        request={key:before[key] for key in ['closeToTray','autoHide','shortcut','nativeTitlebar']}
         request.update(shortcut='Control+Alt+J',expectedRevision=before['revision'])
         conflict=c.invoke('update_desktop_preferences',{'request':request})
         assert not conflict['ok'] and conflict['error']['code']=='shortcut_conflict',conflict
@@ -69,12 +69,12 @@ def run(checks):
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TRIGGER fixture_desktop_failure BEFORE UPDATE ON desktop_preferences BEGIN SELECT RAISE(ABORT,'fixture'); END")
     try:
-        request={key:before[key] for key in ['closeToTray','alwaysOnTop','autoHide','shortcut','nativeTitlebar']}
-        request.update(alwaysOnTop=True,shortcut='Control+Alt+L',expectedRevision=before['revision'])
+        request={key:before[key] for key in ['closeToTray','autoHide','shortcut','nativeTitlebar']}
+        request.update(autoHide=False,shortcut='Control+Alt+L',expectedRevision=before['revision'])
         failed=c.invoke('update_desktop_preferences',{'request':request})
         assert not failed['ok'] and failed['error']['code']=='storage',failed
         assert c.action('desktop_status')['preferences']==before
-        assert '_NET_WM_STATE_ABOVE' not in subprocess.check_output(['xprop','-id',window,'_NET_WM_STATE'],env=c.env,text=True)
+        assert '_NET_WM_STATE_ABOVE' in subprocess.check_output(['xprop','-id',window,'_NET_WM_STATE'],env=c.env,text=True)
         c.action('hide_main_window')
         c.key('key','ctrl+alt+l')
         time.sleep(0.2)
@@ -109,11 +109,11 @@ def run(checks):
         wait(lambda:not visible(),'unprotected blur hides')
         c.key('key','ctrl+alt+k')
         wait(visible,'shortcut after blur hiding')
-        save(alwaysOnTop=True)
+        save(autoHide=False)
         c.action('set_desktop_interaction',active=False)
         c.activate(target)
         time.sleep(0.6)
-        assert visible(),'always-on-top was auto hidden'
+        assert visible(),'pinned window was auto hidden'
         subprocess.run(['xprop','-id',target,'-f','_NET_WM_PID','32c','-set','_NET_WM_PID','0'],env=c.env,check=True,stdout=subprocess.DEVNULL)
         c.key('key','ctrl+alt+k')
         wait(visible,'wake from an unverifiable external window')
@@ -122,7 +122,7 @@ def run(checks):
         assert not refused['ok'] and refused['error']['code']=='target_lost',refused
     finally:
         external.terminate();external.wait(timeout=5)
-    save(closeToTray=False,alwaysOnTop=False,autoHide=False,shortcut='CommandOrControl+Shift+V')
+    save(closeToTray=False,autoHide=False,shortcut='CommandOrControl+Shift+V')
     c.activate(window)
     subprocess.run(['wmctrl','-ir',hex(int(window)),'-e','0,120,90,700,600'],env=c.env,check=True)
     database=next(Path(c.directory,'data').rglob('foundation.sqlite3'))
@@ -131,7 +131,7 @@ def run(checks):
             row=connection.execute('SELECT width,height FROM window_placement WHERE singleton=1').fetchone()
             return row and row[0]==700 and row[1]==600
     wait(geometry,'debounced native geometry persists')
-    print('PASS P2: native blur guard, automatic hiding, topmost exemption, window geometry persistence',flush=True)
+    print('PASS P2: native blur guard, automatic hiding, pin exemption, window geometry persistence',flush=True)
 
     # Delay the actual storage worker behind bounded, deliberately stale writes.
     # WAL readers alone do not block; this tests real IPC delay without modifying Tauri internals.

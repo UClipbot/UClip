@@ -2,6 +2,7 @@ import { t, formatHistoryDate, formatHistoryTime } from '../i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { safeError } from './client';
+import { useClipDetail } from './useClipDetail';
 import type {
   ChangeClipDeletion,
   ChangeClipPin,
@@ -39,8 +40,7 @@ export function useHistory(
   const [loading, setPending] = useState(native);
   const [error, setError] = useState('');
   const [statusError, setStatusError] = useState('');
-  const [detail, setDetail] = useState<ClipDetail | null>(null);
-  const [detailError, setDetailError] = useState('');
+  const { detail, detailError } = useClipDetail(native, previewId);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [mutating, setMutating] = useState(false);
   const statusGeneration = useRef(0);
@@ -171,27 +171,6 @@ export function useHistory(
     settingsOnly,
   ]);
   useEffect(() => {
-    if (!native || !previewId) {
-      setDetail(null);
-      setDetailError('');
-      return;
-    }
-    let active = true;
-    setDetail(null);
-    setDetailError('');
-    invoke<ClipDetail>('clip_detail', { id: previewId, thumbnail: false }).then(
-      (value) => {
-        if (active) setDetail(value);
-      },
-      (error) => {
-        if (active) setDetailError(safeError(error).message);
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, [native, previewId]);
-  useEffect(() => {
     if (!native || !page) return;
     let active = true;
     void (async () => {
@@ -286,6 +265,7 @@ export function useHistory(
   const items: Clip[] = (page?.items ?? []).map((item) => ({
     id: item.id,
     revision: item.revision,
+    savedAt: item.capturedAt,
     matchRanges: item.matchRanges,
     native: true,
     type: item.kind === 'files' ? 'file' : item.kind,

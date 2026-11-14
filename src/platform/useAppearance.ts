@@ -89,7 +89,7 @@ export function useAppearance() {
   useEffect(() => {
     document.documentElement.lang = locale;
     // Only the main window supplies the resolved system language to native menus.
-    if (native && snapshot && new URLSearchParams(location.search).get('window') !== 'settings') {
+    if (native && snapshot && !new URLSearchParams(location.search).get('window')) {
       void desktop.setUiLanguage(resolveLanguage(language, navigator.languages)).catch(() => {});
     }
   }, [language, locale, !!snapshot]);

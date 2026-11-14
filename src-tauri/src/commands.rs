@@ -50,10 +50,16 @@ pub async fn history_query(
 }
 #[tauri::command]
 pub async fn clip_detail(
+    window: tauri::WebviewWindow,
     state: State<'_, AppState>,
     id: String,
     thumbnail: bool,
 ) -> Result<uclip_core::ClipDetail, AppError> {
+    if window.label() == crate::hover_preview::LABEL
+        && crate::hover_preview::current(window.app_handle())?.is_none_or(|value| value.id != id)
+    {
+        return Err(AppError::new(uclip_core::ErrorCode::NotFound));
+    }
     static DETAIL_BUDGET: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
     let _permit = DETAIL_BUDGET
         .try_acquire()
@@ -276,12 +282,10 @@ pub async fn update_desktop_preferences(
         .ok_or_else(|| AppError::new(ErrorCode::Unavailable))?;
     let operation = async {
         if request.native_titlebar != previous.native_titlebar {
-            window
-                .set_decorations(request.native_titlebar)
-                .map_err(|_| AppError::new(ErrorCode::Unavailable))?;
+            crate::desktop::set_titlebar(&window, request.native_titlebar).await?;
         }
         window
-            .set_always_on_top(request.always_on_top)
+            .set_always_on_top(true)
             .map_err(|_| AppError::new(ErrorCode::Unavailable))?;
         core.update_desktop_preferences(request).await
     }
@@ -307,8 +311,8 @@ pub async fn update_desktop_preferences(
             Ok(saved)
         }
         Err(error) => {
-            let _ = window.set_decorations(previous.native_titlebar);
-            let _ = window.set_always_on_top(previous.always_on_top);
+            let _ = crate::desktop::set_titlebar(&window, previous.native_titlebar).await;
+            let _ = window.set_always_on_top(true);
             if newly_registered {
                 let handle = app.clone();
                 let _ = tauri::async_runtime::spawn_blocking(move || {
@@ -348,6 +352,7 @@ pub fn set_desktop_interaction(app: tauri::AppHandle, active: bool) {
 }
 #[tauri::command]
 pub async fn hide_main_window(app: tauri::AppHandle) -> Result<(), AppError> {
+    crate::hover_preview::hide(&app, None, false)?;
     use tauri::Manager;
     if !app.state::<crate::desktop::DesktopState>().recoverable() {
         return Err(AppError::new(uclip_core::ErrorCode::Restricted));
@@ -360,6 +365,7 @@ pub async fn hide_main_window(app: tauri::AppHandle) -> Result<(), AppError> {
 
 #[tauri::command]
 pub async fn minimize_main_window(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    crate::hover_preview::hide(window.app_handle(), None, false)?;
     window
         .minimize()
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
@@ -530,4 +536,39 @@ pub fn set_ui_language(
         .ui_language
         .store(resolved, std::sync::atomic::Ordering::SeqCst);
     crate::desktop::update_ui_language(&app)
+}
+
+#[tauri::command]
+pub async fn show_hover_preview(
+    app: tauri::AppHandle,
+    request: uclip_core::HoverPreviewRequest,
+) -> Result<(), AppError> {
+    let token = request.token.clone();
+    let result = crate::hover_preview::show(app.clone(), request).await;
+    if result.is_err() {
+        let _ = crate::hover_preview::hide(&app, Some(&token), false);
+    }
+    result
+}
+#[tauri::command]
+pub fn hide_hover_preview(
+    app: tauri::AppHandle,
+    token: String,
+    unless_hovered: bool,
+) -> Result<(), AppError> {
+    crate::hover_preview::hide(&app, Some(&token), unless_hovered)
+}
+#[tauri::command]
+pub fn get_hover_preview(
+    app: tauri::AppHandle,
+) -> Result<Option<uclip_core::HoverPreviewRequest>, AppError> {
+    crate::hover_preview::current(&app)
+}
+#[tauri::command]
+pub fn hover_preview_presence(
+    app: tauri::AppHandle,
+    token: String,
+    hovered: bool,
+) -> Result<(), AppError> {
+    crate::hover_preview::presence(app, token, hovered)
 }

@@ -32,7 +32,7 @@ fn migrates_settings_v1_atomically_and_rejects_partial_v2() {
     let s = Storage::open(&path).unwrap();
     assert_eq!(s.settings().unwrap().theme, Theme::Dark);
     assert_eq!(s.settings().unwrap().revision, "7");
-    assert!(!s.capture_policy().unwrap().enabled);
+    assert!(s.capture_policy().unwrap().enabled);
     drop(s);
     let conn = Connection::open(&path).unwrap();
     assert_eq!(
@@ -142,6 +142,14 @@ fn capacity_never_deletes_the_just_saved_record_and_rolls_back_when_protected() 
 fn paused_filtered_invalid_and_oversize_data_never_land() {
     let dir = tempfile::tempdir().unwrap();
     let mut s = Storage::open(&dir.path().join("s.sqlite3")).unwrap();
+    let p = s.capture_policy().unwrap();
+    s.update_capture_policy(UpdateCapturePolicy {
+        enabled: false,
+        exclude_pattern: String::new(),
+        max_items: p.max_items,
+        expected_revision: p.revision,
+    })
+    .unwrap();
     assert!(s
         .capture(ClipPayload::Text("paused".into()))
         .unwrap()
@@ -185,6 +193,69 @@ fn paused_filtered_invalid_and_oversize_data_never_land() {
     );
     assert_eq!(s.capture_policy().unwrap().revision, p.revision);
     assert_eq!(s.history(query("")).unwrap().total, 0);
+}
+
+#[test]
+fn capture_starts_enabled_and_preserves_an_explicit_pause_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("capture.sqlite3");
+    let mut s = Storage::open(&path).unwrap();
+    let p = s.capture_policy().unwrap();
+    assert!(p.enabled);
+    assert!(s
+        .capture(ClipPayload::Text("first copy".into()))
+        .unwrap()
+        .is_some());
+    let paused = s
+        .update_capture_policy(UpdateCapturePolicy {
+            enabled: false,
+            exclude_pattern: "private".into(),
+            max_items: 25,
+            expected_revision: p.revision,
+        })
+        .unwrap();
+    drop(s);
+    let mut s = Storage::open(&path).unwrap();
+    assert_eq!(
+        serde_json::to_value(s.capture_policy().unwrap()).unwrap(),
+        serde_json::to_value(paused).unwrap()
+    );
+    assert!(s
+        .capture(ClipPayload::Text("paused copy".into()))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn capture_default_upgrade_only_enables_untouched_policies_once() {
+    let dir = tempfile::tempdir().unwrap();
+    for (enabled, revision) in [(false, 0), (false, 1), (true, 2)] {
+        let path = dir
+            .path()
+            .join(format!("capture-{enabled}-{revision}.sqlite3"));
+        drop(Storage::open(&path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("PRAGMA user_version=10;").unwrap();
+        connection
+            .execute(
+                "UPDATE capture_policy SET enabled=?1,revision=?2",
+                rusqlite::params![enabled, revision],
+            )
+            .unwrap();
+        drop(connection);
+        let storage = Storage::open(&path).unwrap();
+        let policy = storage.capture_policy().unwrap();
+        assert_eq!(policy.enabled, enabled || revision == 0);
+        assert_eq!(
+            policy.revision,
+            (if revision == 0 { 1 } else { revision }).to_string()
+        );
+        drop(storage);
+        assert_eq!(
+            serde_json::to_value(Storage::open(&path).unwrap().capture_policy().unwrap()).unwrap(),
+            serde_json::to_value(policy).unwrap()
+        );
+    }
 }
 #[test]
 fn searches_all_candidates_before_paging_and_stale_pages_fail() {
@@ -608,6 +679,14 @@ fn manual_creation_uses_shared_rules_but_preserves_distinct_user_identities_whil
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("manual.sqlite3");
     let mut s = Storage::open(&path).unwrap();
+    let p = s.capture_policy().unwrap();
+    s.update_capture_policy(UpdateCapturePolicy {
+        enabled: false,
+        exclude_pattern: String::new(),
+        max_items: p.max_items,
+        expected_revision: p.revision,
+    })
+    .unwrap();
     let text = "  中文\n\n手工副本 🦀  ".to_string();
     let a = s.create_text(text.clone()).unwrap();
     let b = s.create_text(text.clone()).unwrap();

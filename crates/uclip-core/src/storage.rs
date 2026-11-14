@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, Language, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 11;
 const APPLICATION_ID: i64 = 0x434c4e58; // Stable database format ID (CLNX), independent of the product name.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -52,7 +52,7 @@ impl Storage {
         }
         if version < 2 {
             tx.execute_batch("CREATE TABLE capture_policy(singleton INTEGER PRIMARY KEY CHECK(singleton=1),enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),exclude_pattern TEXT NOT NULL,max_items INTEGER NOT NULL CHECK(max_items BETWEEN 1 AND 1000),revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;
-            INSERT INTO capture_policy VALUES(1,0,'',500,0);
+            INSERT INTO capture_policy VALUES(1,1,'',500,0);
             CREATE TABLE history_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;
             INSERT INTO history_meta VALUES(1,0);
             CREATE TABLE clips(id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('text','image','files')),text TEXT NOT NULL,data BLOB NOT NULL,width INTEGER,height INTEGER,file_count INTEGER NOT NULL DEFAULT 0,fingerprint BLOB NOT NULL,origin TEXT NOT NULL DEFAULT 'capture',pinned INTEGER NOT NULL DEFAULT 0,deleted INTEGER NOT NULL DEFAULT 0,collection TEXT,captured_at INTEGER NOT NULL,last_used_at INTEGER,sequence INTEGER NOT NULL,revision INTEGER NOT NULL CHECK(revision>=0)) STRICT;
@@ -129,6 +129,18 @@ impl Storage {
         if version < 9 {
             tx.execute_batch("ALTER TABLE settings ADD COLUMN language TEXT NOT NULL DEFAULT 'system' CHECK(language IN ('system','zh-CN','en'));")?;
             tx.pragma_update(None, "user_version", 9)?;
+        }
+        if version < 10 {
+            // Pinning controls blur hiding only; native windows are always topmost.
+            // Retain the legacy column; only auto_hide remains a preference.
+            tx.execute_batch("UPDATE desktop_preferences SET auto_hide=CASE WHEN always_on_top=1 THEN 0 ELSE auto_hide END,always_on_top=1;")?;
+            tx.pragma_update(None, "user_version", 10)?;
+        }
+        if version < 11 {
+            // Enable the former untouched default once; explicit user choices
+            // always advance revision and must survive upgrades and restarts.
+            tx.execute_batch("UPDATE capture_policy SET enabled=1,revision=revision+1 WHERE singleton=1 AND enabled=0 AND revision=0;")?;
+            tx.pragma_update(None, "user_version", 11)?;
         }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;

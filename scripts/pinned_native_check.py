@@ -52,6 +52,7 @@ def dedup_ui(c, removed):
 
 
 def run(c, capture):
+    c.policy(enabled=False)
     assert not c.action('clipboard_status')['policy']['enabled']
     c.activate(c.window('^UClip$'))
     c.pinned_text = '置顶合成样本 🦀\n' + '完整内容 '.ljust(330, '长') + '\n保留结尾空白  '

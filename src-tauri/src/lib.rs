@@ -9,6 +9,7 @@ mod clipboard_watch;
 mod clipboard_x11;
 mod commands;
 mod desktop;
+mod hover_preview;
 mod paste;
 mod paths;
 mod platform;
@@ -53,6 +54,7 @@ pub fn run() {
             });
         }))
         .manage(desktop::DesktopState::default())
+        .manage(hover_preview::PreviewState::default())
         .on_window_event(desktop::window_event)
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
@@ -83,6 +85,10 @@ pub fn run() {
             commands::start_main_window_drag,
             commands::close_main_window,
             commands::open_settings_window,
+            commands::show_hover_preview,
+            commands::hide_hover_preview,
+            commands::get_hover_preview,
+            commands::hover_preview_presence,
             commands::quit_app,
         ])
         .setup(|app| {
@@ -153,26 +159,48 @@ pub fn run() {
                     clipboard,
                 });
                 // Creating a WebView in an async task avoids Windows synchronous-handler deadlocks.
-                let result = WebviewWindowBuilder::new(
+                let native_titlebar = handle
+                    .state::<desktop::DesktopState>()
+                    .preferences()
+                    .is_none_or(|p| p.native_titlebar);
+                let window = WebviewWindowBuilder::new(
                     &handle,
                     "main",
                     WebviewUrl::App("index.html".into()),
                 )
                 .title("UClip")
-                .decorations(
-                    handle
-                        .state::<desktop::DesktopState>()
-                        .preferences()
-                        .is_none_or(|p| p.native_titlebar),
-                )
+                .always_on_top(true)
+                .decorations(cfg!(target_os = "macos") || native_titlebar)
                 .inner_size(640.0, 650.0)
                 .min_inner_size(480.0, 390.0)
-                .on_navigation(local_navigation)
-                .build();
-                if result.is_ok() {
+                .on_navigation(local_navigation);
+                #[cfg(target_os = "macos")]
+                let window = window
+                    .visible(false)
+                    .hidden_title(!native_titlebar)
+                    .title_bar_style(if native_titlebar {
+                        tauri::TitleBarStyle::Visible
+                    } else {
+                        tauri::TitleBarStyle::Overlay
+                    });
+                let result = async {
+                    let window = window
+                        .build()
+                        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
+                    #[cfg(target_os = "macos")]
+                    desktop::set_titlebar(&window, native_titlebar).await?;
                     let _ = desktop::restore(&handle).await;
                     let _ = desktop::install_tray(&handle).await;
+                    #[cfg(target_os = "macos")]
+                    window
+                        .show()
+                        .and_then(|_| window.set_focus())
+                        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
+                    #[cfg(not(target_os = "macos"))]
+                    let _ = window;
+                    Ok::<(), AppError>(())
                 }
+                .await;
                 if result.is_err() {
                     eprintln!("desktop_window_creation_failed");
                     handle.exit(1);

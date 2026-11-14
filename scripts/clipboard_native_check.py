@@ -98,11 +98,7 @@ class ClipboardChecks:
         wait(lambda: subprocess.check_output(['xdotool','getactivewindow'],env=self.env,text=True).strip()==str(window), 'active window')
     def run(self):
         assert self.query()['total'] == 0
-        self.set('text', text='既有内容不补采')
-        self.click('.capture-toggle')
-        wait(lambda: self.action('clipboard_status')['policy']['enabled'], 'capture enabled')
-        time.sleep(0.2)
-        assert self.query()['total'] == 0
+        assert self.action('clipboard_status')['policy']['enabled'], 'fresh startup must listen without a click'
         started = self.set('text', text=self.text)
         item = wait(lambda: next(iter(self.query('首版文本')['items']), None), 'text capture')
         self.ids['text'] = item['id']

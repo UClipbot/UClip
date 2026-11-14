@@ -44,6 +44,54 @@ impl DesktopState {
 fn unavailable() -> AppError {
     AppError::new(ErrorCode::Unavailable)
 }
+
+pub async fn set_titlebar(window: &tauri::WebviewWindow, native: bool) -> Result<(), AppError> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.set_decorations(native).map_err(|_| unavailable())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSWindow, NSWindowButton, NSWindowTitleVisibility};
+        // Keep the titled NSWindow frame: borderless windows lose the system's
+        // rounded corners. Overlay lets the custom chrome fill the titlebar area.
+        window
+            .set_title_bar_style(if native {
+                tauri::TitleBarStyle::Visible
+            } else {
+                tauri::TitleBarStyle::Overlay
+            })
+            .map_err(|_| unavailable())?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        window
+            .with_webview(move |webview| {
+                // SAFETY: with_webview runs on the macOS main thread and supplies
+                // the live NSWindow associated with this WebView. Do not retain it.
+                let result = unsafe { webview.ns_window().cast::<NSWindow>().as_ref() }
+                    .ok_or_else(unavailable)
+                    .map(|window| {
+                        window.setTitleVisibility(if native {
+                            NSWindowTitleVisibility::Visible
+                        } else {
+                            NSWindowTitleVisibility::Hidden
+                        });
+                        for kind in [
+                            NSWindowButton::CloseButton,
+                            NSWindowButton::MiniaturizeButton,
+                            NSWindowButton::ZoomButton,
+                        ] {
+                            if let Some(button) = window.standardWindowButton(kind) {
+                                button.setHidden(!native);
+                            }
+                        }
+                    });
+                let _ = tx.send(result);
+            })
+            .map_err(|_| unavailable())?;
+        rx.await.map_err(|_| unavailable())?
+    }
+}
+
 pub fn wayland() -> bool {
     cfg!(target_os = "linux")
         && (std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s == "wayland")
@@ -99,6 +147,7 @@ pub fn show(app: &tauri::AppHandle, toggle: bool) -> Result<(), AppError> {
         && window.is_focused().unwrap_or(false)
         && !app.state::<DesktopState>().protected.load(Ordering::SeqCst)
     {
+        crate::hover_preview::hide(app, None, false)?;
         return window.hide().map_err(|_| unavailable());
     }
     #[cfg(target_os = "linux")]
@@ -155,6 +204,11 @@ pub fn settings_title(app: &tauri::AppHandle) -> &'static str {
     }
 }
 pub fn update_ui_language(app: &tauri::AppHandle) -> Result<(), AppError> {
+    if let Some(window) = app.get_webview_window(crate::hover_preview::LABEL) {
+        window
+            .set_title(crate::hover_preview::title(app))
+            .map_err(|_| unavailable())?;
+    }
     if let Some(window) = app.get_webview_window("settings") {
         window
             .set_title(settings_title(app))
@@ -245,7 +299,6 @@ pub async fn restore(app: &tauri::AppHandle) -> Result<(), AppError> {
         .map_err(Clone::clone)?
         .clone();
     let placement = core.window_placement().await?;
-    let preferences = core.desktop_preferences().await?;
     let window = app.get_webview_window("main").ok_or_else(unavailable)?;
     let desktop = app.state::<DesktopState>();
     desktop.restoring.store(true, Ordering::SeqCst);
@@ -269,9 +322,7 @@ pub async fn restore(app: &tauri::AppHandle) -> Result<(), AppError> {
                 window.maximize().map_err(|_| unavailable())?;
             }
         }
-        window
-            .set_always_on_top(preferences.always_on_top)
-            .map_err(|_| unavailable())?;
+        window.set_always_on_top(true).map_err(|_| unavailable())?;
         Ok(())
     })();
     desktop.restoring.store(false, Ordering::SeqCst);
@@ -311,6 +362,7 @@ pub async fn save_placement(app: &tauri::AppHandle) -> Result<(), AppError> {
     core.save_window_placement(placement).await
 }
 pub fn window_event(window: &tauri::Window, event: &WindowEvent) {
+    crate::hover_preview::window_event(window, event);
     if window.label() != "main" {
         return;
     }
@@ -318,6 +370,7 @@ pub fn window_event(window: &tauri::Window, event: &WindowEvent) {
     let state = app.state::<DesktopState>();
     match event {
         WindowEvent::CloseRequested { api, .. } => {
+            let _ = crate::hover_preview::hide(app, None, false);
             if !crate::EXIT_STARTED.load(Ordering::SeqCst) {
                 // Save before hiding, as hiding may no longer generate geometry events.
                 api.prevent_close();
@@ -339,6 +392,7 @@ pub fn window_event(window: &tauri::Window, event: &WindowEvent) {
         WindowEvent::Moved(_) | WindowEvent::Resized(_)
             if !state.restoring.load(Ordering::SeqCst) =>
         {
+            let _ = crate::hover_preview::hide(app, None, false);
             let epoch = state.geometry_epoch.fetch_add(1, Ordering::SeqCst) + 1;
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
@@ -359,11 +413,10 @@ pub fn window_event(window: &tauri::Window, event: &WindowEvent) {
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                 let state = app.state::<DesktopState>();
-                let hide = state
-                    .preferences()
-                    .is_some_and(|p| p.auto_hide && !p.always_on_top)
+                let hide = state.preferences().is_some_and(|p| p.auto_hide)
                     && state.recoverable()
                     && !state.protected.load(Ordering::SeqCst)
+                    && !crate::hover_preview::protects_main(&app)
                     && !app
                         .get_webview_window("settings")
                         .is_some_and(|w| w.is_visible().unwrap_or(true))
@@ -371,6 +424,7 @@ pub fn window_event(window: &tauri::Window, event: &WindowEvent) {
                 if hide {
                     if let Some(w) = app.get_webview_window("main") {
                         if !w.is_focused().unwrap_or(true) {
+                            let _ = crate::hover_preview::hide(&app, None, false);
                             let _ = w.hide();
                         }
                     }

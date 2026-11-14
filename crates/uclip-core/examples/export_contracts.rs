@@ -31,6 +31,8 @@ fn main() {
         HistoryItem::decl(&config),
         HistoryPage::decl(&config),
         ClipDetail::decl(&config),
+        PreviewAnchor::decl(&config),
+        HoverPreviewRequest::decl(&config),
         ClipboardStatus::decl(&config),
         CopyResult::decl(&config),
         Theme::decl(&config),

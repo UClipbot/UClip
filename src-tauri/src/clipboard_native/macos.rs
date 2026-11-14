@@ -3,10 +3,16 @@ use objc2::{rc::autoreleasepool, runtime::ProtocolObject};
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem};
 use objc2_foundation::{NSArray, NSData, NSString};
 
+#[path = "macos_source.rs"]
+mod source;
+
 pub struct Context;
 impl Context {
     pub fn new() -> Result<Self, AppError> {
         Ok(Self)
+    }
+    pub(crate) fn source_application(&self) -> source::Source {
+        source::Source::capture()
     }
     pub fn read(&self, marker: &[u8]) -> Result<Option<ClipPayload>, AppError> {
         autoreleasepool(|_| {

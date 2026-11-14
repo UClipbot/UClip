@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "hover-preview",
+  "description": "The local hover preview may read its current content and close itself.",
+  "local": true,
+  "windows": [
+    "hover-preview"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-bootstrap",
+    "allow-clip-detail",
+    "allow-get-hover-preview",
+    "allow-hover-preview-presence",
+    "allow-hide-hover-preview"
+  ]
+}

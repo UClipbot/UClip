@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'vitest';
 import {
   formatHistoryDate,
   formatHistoryTime,
+  formatTimestamp,
   getLocale,
   resolveLanguage,
   setLocale,
@@ -79,4 +80,21 @@ test('safe errors translate by known code without showing server content', () =>
     'Could not save locally. Check disk space and permissions.',
   );
   expect(translate('zh-CN', error.message)).toContain('\u672c\u5730\u4fdd\u5b58\u5931\u8d25');
+});
+
+test('preview timestamps include the full local date and seconds in both languages', () => {
+  const timestamp = new Date(2026, 10, 14, 17, 8, 9).getTime();
+  for (const language of ['en', 'zh-CN'] as const) {
+    setLocale(language);
+    expect(formatTimestamp(timestamp)).toBe(
+      new Intl.DateTimeFormat(language, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }).format(timestamp),
+    );
+  }
 });

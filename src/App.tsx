@@ -18,6 +18,7 @@ import { useHistory } from './platform/useHistory';
 import { KeyboardSettings } from './components/KeyboardSettings';
 import { WindowTitlebar } from './components/WindowTitlebar';
 import { HistoryViewport } from './components/HistoryViewport';
+import { HoverPreview } from './components/HoverPreview';
 import { DEFAULT_KEYS, matchesKey, formatKey } from './platform/keyboard';
 import { useDesktop } from './platform/useDesktop';
 import { safeError } from './platform/client';
@@ -552,6 +553,7 @@ export function App() {
       source: t('manually_created'),
       time: formatHistoryTime(Date.now()),
       day: 'today',
+      savedAt: String(Date.now()),
       pinned: false,
       collection: ['work', 'inspiration', 'later'].includes(view) ? (view as Collection) : null,
     };
@@ -576,7 +578,7 @@ export function App() {
     update: Partial<
       Pick<
         import('./generated/contracts').UpdateDesktopPreferences,
-        'closeToTray' | 'alwaysOnTop' | 'autoHide' | 'shortcut' | 'nativeTitlebar'
+        'closeToTray' | 'autoHide' | 'shortcut' | 'nativeTitlebar'
       >
     >,
   ) {
@@ -585,7 +587,6 @@ export function App() {
     try {
       await desktop.save({
         closeToTray: p.closeToTray,
-        alwaysOnTop: p.alwaysOnTop,
         autoHide: p.autoHide,
         nativeTitlebar: p.nativeTitlebar,
         shortcut: p.shortcut,
@@ -932,6 +933,15 @@ export function App() {
               onMore={(anchor) => openMenu(anchor, previewClip)}
             />
           )}
+          {ready && !modal && !menu && !preview && !settingsWindow && (
+            <HoverPreview
+              key={JSON.stringify([query, regex, type, view, live.offset, oldest, grid])}
+              listRef={list}
+              clips={result.items}
+              native={appearance.native}
+              onError={(message) => setToast({ message: t(message) })}
+            />
+          )}
         </main>
         <footer className="statusbar" aria-label={t('bottom_toolbar')}>
           <button
@@ -996,24 +1006,17 @@ export function App() {
             </button>
             <button
               className="icon-button"
-              aria-label={t('always_on_top')}
+              aria-label={t('keep_window_visible')}
               title={
                 appearance.native
-                  ? desktop.status?.preferences.alwaysOnTop
-                    ? t('window_fixed_click_to_hide_on_blur')
-                    : desktop.status?.preferences.autoHide
-                      ? t('hide_on_blur_click_to_keep_visible')
-                      : t('click_to_keep_the_window_visible')
-                  : t('always_on_top_requires_the_desktop_app')
+                  ? desktop.status?.preferences.autoHide
+                    ? t('hide_on_blur_click_to_keep_visible')
+                    : t('window_fixed_click_to_hide_on_blur')
+                  : t('window_pinning_requires_the_desktop_app')
               }
-              aria-pressed={!!desktop.status?.preferences.alwaysOnTop}
+              aria-pressed={!!desktop.status && !desktop.status.preferences.autoHide}
               disabled={!appearance.native || !desktop.status || desktop.busy}
-              onClick={() =>
-                void saveDesktop({
-                  alwaysOnTop: !desktop.status?.preferences.alwaysOnTop,
-                  ...(desktop.status?.preferences.alwaysOnTop ? { autoHide: true } : {}),
-                })
-              }
+              onClick={() => void saveDesktop({ autoHide: !desktop.status?.preferences.autoHide })}
             >
               <Icon name="pin" size={17} />
             </button>
@@ -1520,21 +1523,12 @@ export function App() {
                     />
                   </label>
                   <label className="setting-row">
-                    {t('always_on_top')}
+                    {t('keep_window_visible')}
                     <input
                       type="checkbox"
-                      checked={!!desktop.status?.preferences.alwaysOnTop}
+                      checked={!!desktop.status && !desktop.status.preferences.autoHide}
                       disabled={!desktop.status || desktop.busy}
-                      onChange={(event) => void saveDesktop({ alwaysOnTop: event.target.checked })}
-                    />
-                  </label>
-                  <label className="setting-row">
-                    {t('hide_on_blur')}
-                    <input
-                      type="checkbox"
-                      checked={!!desktop.status?.preferences.autoHide}
-                      disabled={!desktop.status || desktop.busy}
-                      onChange={(event) => void saveDesktop({ autoHide: event.target.checked })}
+                      onChange={(event) => void saveDesktop({ autoHide: !event.target.checked })}
                     />
                   </label>
                   <label className="setting-row">
@@ -1576,9 +1570,7 @@ export function App() {
                           ? t('show_window_shortcut_available_esc_hides_the_window')
                           : t('the_show_window_shortcut_is_unavailable')),
                     )}{' '}
-                    {t(
-                      'always_on_top_prevents_hiding_on_blur_menus_settings_and_previews_keep_the_window_open_on_linux_closing_quits_if_there_is_no_reliable_way_to_restore_the_window',
-                    )}
+                    {t('window_pin_behavior')}
                   </p>
                 </section>
               )}

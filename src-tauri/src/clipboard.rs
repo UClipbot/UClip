@@ -365,10 +365,15 @@ fn stable_read(
     #[cfg(target_os = "windows")]
     let captured = context.read(marker)?;
     #[cfg(target_os = "macos")]
-    let captured = context.read(marker)?.map(|payload| Captured {
-        payload,
-        source_app: None,
-    });
+    let captured = {
+        let source = context.source_application();
+        let payload = context.read(marker)?;
+        let source_app = payload.as_ref().and_then(|_| source.finish());
+        payload.map(|payload| Captured {
+            payload,
+            source_app,
+        })
+    };
     if before != watch.generation()? {
         return Err(AppError::new(ErrorCode::Busy));
     }

@@ -7,11 +7,10 @@ fn desktop_preferences_and_geometry_survive_restart_with_conflict_and_failure_pr
     let path = dir.path().join("desktop.sqlite3");
     let mut s = Storage::open(&path).unwrap();
     let p = s.desktop_preferences().unwrap();
-    assert!(p.close_to_tray && p.always_on_top && !p.auto_hide);
+    assert!(p.close_to_tray && !p.auto_hide);
     assert!(!p.native_titlebar);
     let mut update = UpdateDesktopPreferences {
         close_to_tray: false,
-        always_on_top: false,
         auto_hide: false,
         native_titlebar: true,
         shortcut: "Control+Alt+K".into(),
@@ -85,7 +84,6 @@ fn v5_titlebar_migration_preserves_existing_preferences_and_content() {
     let saved = s
         .update_desktop_preferences(UpdateDesktopPreferences {
             close_to_tray: true,
-            always_on_top: true,
             auto_hide: false,
             native_titlebar: false,
             shortcut: "Control+Alt+K".into(),
@@ -168,7 +166,7 @@ fn v6_upgrade_preserves_disabled_preferences_and_never_requests_autostart() {
     c.execute_batch("UPDATE desktop_preferences SET close_to_tray=0,always_on_top=0,native_titlebar=1; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=6;").unwrap();
     let mut s = Storage::open(&path).unwrap();
     let p = s.desktop_preferences().unwrap();
-    assert!(!p.close_to_tray && !p.always_on_top && p.native_titlebar);
+    assert!(!p.close_to_tray && !p.auto_hide && p.native_titlebar);
     assert_eq!(p.revision, "0");
     assert!(!s.take_autostart_default().unwrap());
     assert_eq!(
@@ -186,5 +184,71 @@ fn v6_upgrade_preserves_disabled_preferences_and_never_requests_autostart() {
         c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
             .unwrap(),
         6
+    );
+}
+
+#[test]
+fn v9_migration_preserves_blur_behavior_for_every_legacy_pin_combination() {
+    for legacy_topmost in [false, true] {
+        for legacy_auto_hide in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("v9.sqlite3");
+            let mut storage = Storage::open(&path).unwrap();
+            let id = storage.create_text("pin migration fixture".into()).unwrap();
+            drop(storage);
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute(
+                    "UPDATE desktop_preferences SET always_on_top=?1,auto_hide=?2,revision=17",
+                    (legacy_topmost, legacy_auto_hide),
+                )
+                .unwrap();
+            connection.pragma_update(None, "user_version", 9).unwrap();
+            let storage = Storage::open(&path).unwrap();
+            let preferences = storage.desktop_preferences().unwrap();
+            assert_eq!(preferences.auto_hide, legacy_auto_hide && !legacy_topmost);
+            assert_eq!(preferences.revision, "17");
+            assert_eq!(
+                storage.read_clip(&id).unwrap(),
+                uclip_core::ClipPayload::Text("pin migration fixture".into())
+            );
+            drop(storage);
+            assert_eq!(
+                Storage::open(&path).unwrap().desktop_preferences().unwrap(),
+                preferences
+            );
+        }
+    }
+}
+
+#[test]
+fn failed_pin_migration_preserves_schema_and_legacy_preferences() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("failed-v9.sqlite3");
+    drop(Storage::open(&path).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    connection.execute_batch("UPDATE desktop_preferences SET always_on_top=1,auto_hide=1; PRAGMA user_version=9; CREATE TRIGGER fail_pin_migration BEFORE UPDATE ON desktop_preferences BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+    assert_eq!(Storage::open(&path).err().unwrap().code, ErrorCode::Storage);
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
+            .unwrap(),
+        9
+    );
+    assert!(connection
+        .query_row("SELECT auto_hide FROM desktop_preferences", [], |row| row
+            .get::<_, bool>(
+            0
+        ))
+        .unwrap());
+    connection
+        .execute_batch("DROP TRIGGER fail_pin_migration")
+        .unwrap();
+    assert!(
+        !Storage::open(&path)
+            .unwrap()
+            .desktop_preferences()
+            .unwrap()
+            .auto_hide
     );
 }

@@ -3,7 +3,9 @@
   "identifier": "main",
   "description": "Local main window may query history, update capture policy and request validated clipboard actions.",
   "local": true,
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
@@ -35,6 +37,8 @@
     "allow-quit-app",
     "allow-create-text",
     "allow-update-key-bindings",
-    "allow-open-settings-window"
+    "allow-open-settings-window",
+    "allow-show-hover-preview",
+    "allow-hide-hover-preview"
   ]
 }

@@ -17,7 +17,7 @@ def run(invoke, execute, env, log, wait):
         return action('history_query', request={'query': '', 'regex': False, 'kind': None, 'offset': 0, 'expectedRevision': None})['items']
 
     p = action('desktop_status')['preferences']
-    action('update_desktop_preferences', request={**{k: v for k, v in p.items() if k != 'revision'}, 'alwaysOnTop': False, 'autoHide': False, 'expectedRevision': p['revision']})
+    action('update_desktop_preferences', request={**{k: v for k, v in p.items() if k != 'revision'}, 'autoHide': False, 'expectedRevision': p['revision']})
     policy = action('clipboard_status')['policy']
     action('update_capture_policy', request={**{k: v for k, v in policy.items() if k != 'revision'}, 'enabled': True, 'expectedRevision': policy['revision']})
     browser = Client(['node', 'scripts/browser-source-fixture.mjs', env.get('UCLIP_PLAYWRIGHT_MODULE', 'playwright')], env, log)

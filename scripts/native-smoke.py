@@ -215,7 +215,7 @@ def main():
                 if args.desktop_defaults_only:
                     desktop = invoke('desktop_status')['value']
                     preferences = desktop['preferences']
-                    assert preferences['closeToTray'] and preferences['alwaysOnTop'] and not preferences['nativeTitlebar'], desktop
+                    assert preferences['closeToTray'] and not preferences['autoHide'] and not preferences['nativeTitlebar'], desktop
                     wait_for(lambda: execute('return !!document.querySelector(".window-titlebar")'), 'default custom titlebar')
                     directory_path = Path(env['XDG_CONFIG_HOME'], 'autostart')
                     if autostart_failure:
@@ -405,7 +405,7 @@ def main():
                     desktop=invoke('desktop_status')['value']
                     assert not desktop['shortcutAvailable']
                     preferences=desktop['preferences']
-                    refused=invoke('update_desktop_preferences',{'request':{'closeToTray':True,'alwaysOnTop':False,'autoHide':False,'nativeTitlebar':preferences['nativeTitlebar'],'shortcut':preferences['shortcut'],'expectedRevision':preferences['revision']}})
+                    refused=invoke('update_desktop_preferences',{'request':{'closeToTray':True,'autoHide':False,'nativeTitlebar':preferences['nativeTitlebar'],'shortcut':preferences['shortcut'],'expectedRevision':preferences['revision']}})
                     assert not refused['ok'] and refused['error']['code']=='restricted',refused
                     assert invoke('desktop_status')['value']['preferences']==preferences
                     history=invoke('history_query',{'request':{'query':'中文','regex':False,'kind':None,'offset':0,'expectedRevision':None}})

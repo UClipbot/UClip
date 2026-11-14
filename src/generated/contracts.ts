@@ -8,9 +8,9 @@ export type KeyboardSnapshot = { bindings: KeyBindings, revision: string, };
 
 export type UpdateKeyBindings = { bindings: KeyBindings, expectedRevision: string, };
 
-export type DesktopPreferences = { closeToTray: boolean, alwaysOnTop: boolean, autoHide: boolean, nativeTitlebar: boolean, shortcut: string, revision: string, };
+export type DesktopPreferences = { closeToTray: boolean, autoHide: boolean, nativeTitlebar: boolean, shortcut: string, revision: string, };
 
-export type UpdateDesktopPreferences = { closeToTray: boolean, alwaysOnTop: boolean, autoHide: boolean, nativeTitlebar: boolean, shortcut: string, expectedRevision: string, };
+export type UpdateDesktopPreferences = { closeToTray: boolean, autoHide: boolean, nativeTitlebar: boolean, shortcut: string, expectedRevision: string, };
 
 export type DesktopStatus = { keyboard: KeyboardSnapshot, preferences: DesktopPreferences, trayAvailable: boolean, shortcutAvailable: boolean, autostartEnabled: boolean | null, error: AppError | null, };
 
@@ -61,6 +61,10 @@ matchRanges: Array<[number, number]>, };
 export type HistoryPage = { items: Array<HistoryItem>, total: number, revision: string, };
 
 export type ClipDetail = { id: string, text: string, imageDataUrl: string | null, };
+
+export type PreviewAnchor = { x: number, y: number, width: number, height: number, };
+
+export type HoverPreviewRequest = { token: string, id: string, kind: ClipKind, source: string, savedAt: string, size: string | null, anchor: PreviewAnchor, };
 
 export type ClipboardStatus = { policy: CapturePolicy, historyRevision: string, available: boolean, error: AppError | null, pasteAvailable: boolean, pasteTarget: boolean, shortcutAvailable: boolean, };
 

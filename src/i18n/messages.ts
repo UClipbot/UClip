@@ -88,8 +88,8 @@ export const english = {
   settings_0: 'Settings {0}',
   switch_to_dark_theme: 'Switch to dark theme',
   switch_to_light_theme: 'Switch to light theme',
-  always_on_top: 'Always on top',
-  always_on_top_requires_the_desktop_app: 'Always on top requires the desktop app',
+  keep_window_visible: 'Keep window visible',
+  window_pinning_requires_the_desktop_app: 'Window pinning requires the desktop app',
   click_to_keep_the_window_visible: 'Click to keep the window visible',
   hide_on_blur_click_to_keep_visible: 'Hide on blur · Click to keep visible',
   window_fixed_click_to_hide_on_blur: 'Window fixed · Click to hide on blur',
@@ -167,8 +167,8 @@ export const english = {
   the_show_window_shortcut_is_unavailable: 'The show window shortcut is unavailable.',
   show_window_shortcut_available_esc_hides_the_window:
     'Show window shortcut available; Esc hides the window.',
-  always_on_top_prevents_hiding_on_blur_menus_settings_and_previews_keep_the_window_open_on_linux_closing_quits_if_there_is_no_reliable_way_to_restore_the_window:
-    'Always on top prevents hiding on blur. Menus, settings, and previews keep the window open. On Linux, closing quits if there is no reliable way to restore the window.',
+  window_pin_behavior:
+    'The window always stays on top. Pinning prevents hiding on blur. Menus, settings, and previews keep the window open. On Linux, closing quits if there is no reliable way to restore the window.',
   use_system_title_bar: 'Use system title bar',
   turn_off_to_use_the_custom_title_bar_with_dragging_minimize_maximize_and_close_controls_applies_immediately_and_persists_after_restart:
     'Turn off to use the custom title bar with dragging, minimize, maximize, and close controls. Applies immediately and persists after restart.',
@@ -210,6 +210,15 @@ export const english = {
   more_content_actions: 'More content actions',
   file_reference_sample: 'File reference sample',
   content_preview: 'Content preview',
+  modified_time: 'Modified',
+  close_preview: 'Close preview',
+  preview_position_limited:
+    'Your desktop controls window placement. Move this preview to a comfortable position.',
+  retry_preview: 'Retry',
+  preview_window_hint:
+    'Click to keep reading. Move or resize this window as needed. Esc closes it.',
+  latest_capture_or_save: 'Latest capture or save',
+  content_preview_timed_out: 'Content preview timed out. Try opening it again.',
   history_list_arrow_keys_select_space_previews: 'History list; arrow keys select, Space previews',
   window_shortcuts: 'Window shortcuts',
   click_a_shortcut_and_press_new_keys_input_methods_menus_and_text_editing_take_priority_esc_always_provides_a_way_out:
@@ -386,8 +395,8 @@ export const chinese: Record<keyof typeof english, string> = {
   settings_0: '设置 {0}',
   switch_to_dark_theme: '切换为深色主题',
   switch_to_light_theme: '切换为浅色主题',
-  always_on_top: '窗口置顶',
-  always_on_top_requires_the_desktop_app: '窗口置顶仅在桌面可用',
+  keep_window_visible: '固定窗口',
+  window_pinning_requires_the_desktop_app: '固定窗口仅在桌面可用',
   click_to_keep_the_window_visible: '点击固定窗口，保持显示',
   hide_on_blur_click_to_keep_visible: '失焦后自动隐藏 · 点击固定窗口',
   window_fixed_click_to_hide_on_blur: '已固定窗口 · 点击取消，失焦后自动隐藏',
@@ -463,8 +472,8 @@ export const chinese: Record<keyof typeof english, string> = {
   save_shortcut: '保存快捷键',
   the_show_window_shortcut_is_unavailable: '唤起快捷键不可用。',
   show_window_shortcut_available_esc_hides_the_window: '唤起快捷键可用；Esc 可隐藏窗口。',
-  always_on_top_prevents_hiding_on_blur_menus_settings_and_previews_keep_the_window_open_on_linux_closing_quits_if_there_is_no_reliable_way_to_restore_the_window:
-    '置顶时不自动隐藏；菜单、设置和预览打开时保留窗口。Linux 无可靠恢复入口时关闭会退出。',
+  window_pin_behavior:
+    '窗口始终置顶；固定后失焦不自动隐藏。菜单、设置和预览打开时保留窗口。Linux 无可靠恢复入口时关闭会退出。',
   use_system_title_bar: '使用系统原生标题栏',
   turn_off_to_use_the_custom_title_bar_with_dragging_minimize_maximize_and_close_controls_applies_immediately_and_persists_after_restart:
     '关闭后使用自定义标题栏，可拖动、最小化、最大化和关闭窗口。立即生效，重启后保留。',
@@ -503,6 +512,13 @@ export const chinese: Record<keyof typeof english, string> = {
   more_content_actions: '更多内容操作',
   file_reference_sample: '文件引用示例',
   content_preview: '内容预览',
+  modified_time: '修改时间',
+  close_preview: '关闭预览',
+  preview_position_limited: '窗口位置由桌面环境决定，可手动移动到舒适的阅读位置。',
+  retry_preview: '重试',
+  preview_window_hint: '点击浮窗可持续阅读，支持移动和调整大小；Esc 关闭。',
+  latest_capture_or_save: '最近一次采集或保存',
+  content_preview_timed_out: '内容预览超时，请重试或重新打开。',
   history_list_arrow_keys_select_space_previews: '历史列表，方向键选择，空格预览',
   window_shortcuts: '窗口内快捷键',
   click_a_shortcut_and_press_new_keys_input_methods_menus_and_text_editing_take_priority_esc_always_provides_a_way_out:

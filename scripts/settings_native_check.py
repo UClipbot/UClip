@@ -64,10 +64,10 @@ def run(invoke, invoke_current, execute, execute_main, click, switch_window, wai
         click(selector)
         wait(lambda: execute('return document.documentElement.dataset.theme===arguments[0]', [theme]), 'footer theme applied')
     def pin(desired):
-        wait(lambda: execute('return !document.querySelector(".footer-tools [aria-label=窗口置顶]").disabled'), 'footer pin ready')
-        click('.footer-tools [aria-label="窗口置顶"]')
-        wait(lambda: invoke('desktop_status')['value']['preferences']['alwaysOnTop'] == desired, 'footer pin preference saved')
-        wait(lambda: execute('return document.querySelector(".footer-tools [aria-label=窗口置顶]").getAttribute("aria-pressed") === arguments[0]', [str(desired).lower()]), 'footer pin reflects committed state')
+        wait(lambda: execute('return !document.querySelector(".footer-tools [aria-label=固定窗口]").disabled'), 'footer pin ready')
+        click('.footer-tools [aria-label="固定窗口"]')
+        wait(lambda: invoke('desktop_status')['value']['preferences']['autoHide'] == (not desired), 'footer pin preference saved')
+        wait(lambda: execute('return document.querySelector(".footer-tools [aria-label=固定窗口]").getAttribute("aria-pressed") === arguments[0]', [str(desired).lower()]), 'footer pin reflects committed state')
 
     receiver = subprocess.Popen(['/usr/bin/python3', 'scripts/paste-receiver.py', str(Path(directory, 'footer-receiver.json'))], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -78,10 +78,11 @@ def run(invoke, invoke_current, execute, execute_main, click, switch_window, wai
         main_xid = subprocess.check_output(['xdotool', 'search', '--onlyvisible', '--name', '^UClip$'], env=env, text=True).splitlines()[-1]
         subprocess.run(['xdotool', 'windowactivate', '--sync', main_xid], env=env, check=True)
         wait(lambda: execute('return document.hasFocus()'), 'main ready for pin toggle')
-        # Start from the default autoHide=false; unpin must also enable hiding atomically.
+        # Pinning is the inverse of blur hiding; topmost must remain enabled in both states.
         assert not invoke('desktop_status')['value']['preferences']['autoHide']
         pin(False)
         assert invoke('desktop_status')['value']['preferences']['autoHide']
+        assert '_NET_WM_STATE_ABOVE' in subprocess.check_output(['xprop', '-id', main_xid, '_NET_WM_STATE'], env=env, text=True)
         subprocess.run(['xdotool', 'windowactivate', '--sync', receiver_xid], env=env, check=True)
         wait(lambda: not execute('return document.hasFocus()'), 'main actually loses focus')
         def visible():
@@ -105,11 +106,11 @@ def run(invoke, invoke_current, execute, execute_main, click, switch_window, wai
         with sqlite3.connect(database) as connection:
             connection.execute("CREATE TRIGGER fixture_footer_pin_failure BEFORE UPDATE ON desktop_preferences BEGIN SELECT RAISE(ABORT,'fixture'); END")
         try:
-            wait(lambda: execute('return !document.querySelector(".footer-tools [aria-label=窗口置顶]").disabled'), 'pin failure fixture ready')
-            click('.footer-tools [aria-label="窗口置顶"]')
+            wait(lambda: execute('return !document.querySelector(".footer-tools [aria-label=固定窗口]").disabled'), 'pin failure fixture ready')
+            click('.footer-tools [aria-label="固定窗口"]')
             wait(lambda: execute('return document.querySelector(".toast")?.textContent.includes("本地保存失败")'), 'unpin save failure feedback')
             assert invoke('desktop_status')['value']['preferences'] == before
-            wait(lambda: execute('const e=document.querySelector(".footer-tools [aria-label=窗口置顶]");return !e.disabled && e.getAttribute("aria-pressed")==="true"'), 'failed unpin remains highlighted')
+            wait(lambda: execute('const e=document.querySelector(".footer-tools [aria-label=固定窗口]");return !e.disabled && e.getAttribute("aria-pressed")==="true"'), 'failed unpin remains highlighted')
             assert '_NET_WM_STATE_ABOVE' in subprocess.check_output(['xprop', '-id', xid, '_NET_WM_STATE'], env=env, text=True)
         finally:
             with sqlite3.connect(database) as connection:
