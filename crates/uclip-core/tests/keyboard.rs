@@ -84,7 +84,7 @@ fn v3_keyboard_migration_is_atomic_and_corrupt_maps_fail_without_reset() {
     let path = dir.path().join("v3.sqlite3");
     drop(Storage::open(&path).unwrap());
     let c = Connection::open(&path).unwrap();
-    c.execute_batch("DROP TABLE keyboard_bindings; DROP TABLE collections; DROP TABLE collection_changes; DROP INDEX clips_collection_order; ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; PRAGMA user_version=3; CREATE TABLE keyboard_bindings(fixture TEXT);").unwrap();
+    c.execute_batch("DROP TABLE keyboard_bindings; DROP TABLE collections; DROP TABLE collection_changes; DROP INDEX clips_collection_order; ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=3; CREATE TABLE keyboard_bindings(fixture TEXT);").unwrap();
     drop(c);
     assert!(Storage::open(&path).is_err());
     let c = Connection::open(&path).unwrap();

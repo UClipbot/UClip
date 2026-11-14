@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
@@ -49,7 +50,7 @@ export function ActionMenu({
       className="action-menu"
       ref={panel}
       role="menu"
-      aria-label="操作菜单"
+      aria-label={t('actions_menu')}
       onKeyDown={(event) => {
         event.stopPropagation();
         const items = Array.from(

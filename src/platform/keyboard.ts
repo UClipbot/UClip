@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { KeyBindings, KeyChord } from '../generated/contracts';
 const plain = (code: string): KeyChord => ({ code, primary: false, alt: false, shift: false });
 export const DEFAULT_KEYS: KeyBindings = {
@@ -11,14 +12,14 @@ export const DEFAULT_KEYS: KeyBindings = {
   dismiss: plain('Escape'),
 };
 export const keyLabels: Record<keyof KeyBindings, string> = {
-  search: '聚焦搜索',
-  settings: '设置',
-  copy: '复制',
-  preview: '查看完整内容',
-  remove: '删除记录',
-  up: '上一条',
-  down: '下一条',
-  dismiss: '返回 / 清空 / 隐藏',
+  search: 'focus_search',
+  settings: 'settings',
+  copy: 'copy',
+  preview: 'view_full_content',
+  remove: 'delete_record',
+  up: 'previous_record',
+  down: 'next_record',
+  dismiss: 'back_clear_hide',
 };
 export function matchesKey(
   event: Pick<
@@ -66,9 +67,9 @@ export function bindingError(bindings: KeyBindings): string {
       !chord.primary &&
       !/^F([1-9]|1[0-2])$/.test(chord.code)
     )
-      return '聚焦搜索、设置和返回需要 Ctrl/Cmd 组合或功能键。';
+      return t('search_settings_and_back_require_ctrl_cmd_or_a_function_key');
     const key = JSON.stringify([chord.code, chord.primary, chord.alt, chord.shift]);
-    if (seen.has(key)) return `「${keyLabels[action]}」与其他操作重复。`;
+    if (seen.has(key)) return t('0_conflicts_with_another_action', { 0: t(keyLabels[action]) });
     seen.add(key);
     if (
       (chord.code === 'Escape' && action !== 'dismiss') ||
@@ -88,7 +89,9 @@ export function bindingError(bindings: KeyBindings): string {
         ].includes(chord.code)) ||
       (chord.alt && chord.code === 'F4')
     )
-      return '此组合用于系统文本编辑或窗口操作，请选择其他按键。';
+      return t(
+        'this_combination_is_used_for_system_text_editing_or_window_operations_choose_different_keys',
+      );
     if (
       !chord.primary &&
       !chord.alt &&
@@ -97,13 +100,13 @@ export function bindingError(bindings: KeyBindings): string {
       ) &&
       !/^F([1-9]|1[0-2])$/.test(chord.code)
     )
-      return '字母和数字需要搭配 Ctrl/Cmd 或 Alt，避免影响输入。';
+      return t('letters_and_numbers_require_ctrl_cmd_or_alt_to_avoid_interfering_with_typing');
     if (
       !/^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-2])|Enter|Space|Escape|Delete|Backspace|ArrowUp|ArrowDown|Comma|Period|Slash)$/.test(
         chord.code,
       )
     )
-      return '此按键暂不支持。';
+      return t('this_key_is_not_supported_yet');
   }
   return '';
 }

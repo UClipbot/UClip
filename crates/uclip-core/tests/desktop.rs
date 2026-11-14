@@ -96,7 +96,7 @@ fn v5_titlebar_migration_preserves_existing_preferences_and_content() {
     drop(s);
     let c = Connection::open(&path).unwrap();
     c.execute_batch(
-        "ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; PRAGMA user_version=5;",
+        "ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=5;",
     )
     .unwrap();
     let s = Storage::open(&path).unwrap();
@@ -165,7 +165,7 @@ fn v6_upgrade_preserves_disabled_preferences_and_never_requests_autostart() {
     let id = s.create_text("v6 fixture".into()).unwrap();
     drop(s);
     let c = Connection::open(&path).unwrap();
-    c.execute_batch("UPDATE desktop_preferences SET close_to_tray=0,always_on_top=0,native_titlebar=1; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; PRAGMA user_version=6;").unwrap();
+    c.execute_batch("UPDATE desktop_preferences SET close_to_tray=0,always_on_top=0,native_titlebar=1; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=6;").unwrap();
     let mut s = Storage::open(&path).unwrap();
     let p = s.desktop_preferences().unwrap();
     assert!(!p.close_to_tray && !p.always_on_top && p.native_titlebar);

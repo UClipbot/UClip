@@ -1,3 +1,4 @@
+import { t, formatHistoryTime } from './i18n';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Icon } from './components/Icon';
 import { Modal } from './components/Modal';
@@ -21,32 +22,32 @@ import { DEFAULT_KEYS, matchesKey, formatKey } from './platform/keyboard';
 import { useDesktop } from './platform/useDesktop';
 import { safeError } from './platform/client';
 import { useAppearance } from './platform/useAppearance';
-import type { Theme, CollectionItem, TransferMode } from './generated/contracts';
+import type { Theme, Language, CollectionItem, TransferMode } from './generated/contracts';
 
 type Toast = { message: string; undo?: () => void };
 type Menu = { anchor: HTMLElement; clipId?: string };
 type AppView = View | `collection:${string}`;
 type AppModal = 'settings' | 'new' | 'shortcuts' | 'deduplicate' | 'collection' | 'transfer';
 const viewTitles: Record<View, string> = {
-  all: '全部记录',
-  pinned: '已置顶',
-  trash: '回收站',
+  all: 'all_history',
+  pinned: 'pinned',
+  trash: 'trash',
   ...collectionNames,
 };
 const stateNames = {
-  available: '可用',
-  unverified: '待验证',
-  restricted: '受限',
-  permission_required: '需要权限',
-  not_implemented: '待接入',
+  available: 'available',
+  unverified: 'unverified',
+  restricted: 'restricted',
+  permission_required: 'permission_required',
+  not_implemented: 'not_implemented',
 };
 const capabilityNames: Record<string, string> = {
-  clipboard_capture: '剪贴板采集',
-  clipboard_write: '系统剪贴板写入',
-  global_shortcut: '全局快捷键',
-  paste_to_app: '原应用回粘',
-  tray: '系统托盘',
-  sync: '云同步',
+  clipboard_capture: 'clipboard_capture',
+  clipboard_write: 'system_clipboard_write',
+  global_shortcut: 'global_shortcut',
+  paste_to_app: 'paste_to_original_app',
+  tray: 'system_tray',
+  sync: 'cloud_sync',
 };
 
 export function App() {
@@ -140,7 +141,8 @@ export function App() {
     previewBase && appearance.native
       ? {
           ...previewBase,
-          content: live.detail?.id === previewBase.id ? live.detail.text : '正在读取完整内容…',
+          content:
+            live.detail?.id === previewBase.id ? live.detail.text : t('loading_full_content'),
           image:
             live.detail?.id === previewBase.id
               ? (live.detail.imageDataUrl ?? undefined)
@@ -169,14 +171,14 @@ export function App() {
           expectedRevision: clip.revision,
           pinned: !clip.pinned,
         });
-        setToast({ message: clip.pinned ? '已取消置顶' : '已置顶' });
+        setToast({ message: clip.pinned ? t('unpinned') : t('pinned') });
       } catch (error) {
         setToast({ message: safeError(error).message });
       }
       return;
     }
     changeClip(clip.id, { pinned: !clip.pinned });
-    setToast({ message: clip.pinned ? '已取消示例置顶' : '已置顶示例' });
+    setToast({ message: clip.pinned ? t('sample_unpinned') : t('sample_pinned') });
   }
   async function deduplicatePinned() {
     if (live.mutating) return;
@@ -186,8 +188,8 @@ export function App() {
       closeModal();
       setToast({
         message: result.removed
-          ? `去重完成，已删除 ${result.removed} 条非置顶重复记录`
-          : '没有需要删除的非置顶重复记录',
+          ? t('done_deleted_0_unpinned_duplicates', { 0: result.removed })
+          : t('no_unpinned_duplicates_to_delete'),
       });
     } catch (error) {
       setDedupError(safeError(error).message);
@@ -204,7 +206,7 @@ export function App() {
     if (preview) closePreview();
     else requestAnimationFrame(() => list.current?.focus({ preventScroll: true }));
     setToast({
-      message: clip.deleted ? '示例已恢复' : '示例已移入回收站',
+      message: clip.deleted ? t('sample_restored') : t('sample_moved_to_trash'),
       undo: () => changeClip(clip.id, { deleted: !!clip.deleted }),
     });
   }
@@ -222,7 +224,7 @@ export function App() {
       if (preview) closePreview();
       else requestAnimationFrame(() => list.current?.focus({ preventScroll: true }));
       setToast({
-        message: '已删除',
+        message: t('deleted'),
         undo: () => {
           void (async () => {
             try {
@@ -232,7 +234,7 @@ export function App() {
                 deleted: false,
               });
               setSelectedId(deleted.id);
-              setToast({ message: '已撤销删除' });
+              setToast({ message: t('deletion_undone') });
             } catch (error) {
               setToast({ message: safeError(error).message });
             }
@@ -256,10 +258,10 @@ export function App() {
         const outcome = await live.copy(clip.id, paste);
         setToast({
           message: outcome.warning
-            ? `${outcome.pasteRequested ? '已复制并请求原应用粘贴' : '已复制'}；${safeError(outcome.warning).message}`
+            ? `${outcome.pasteRequested ? t('copied_and_requested_paste_to_original_app') : t('copied')}；${t(safeError(outcome.warning).message)}`
             : outcome.pasteRequested
-              ? '已复制并请求原应用粘贴'
-              : '已复制',
+              ? t('copied_and_requested_paste_to_original_app')
+              : t('copied'),
         });
       } catch (error) {
         setToast({ message: safeError(error).message });
@@ -269,14 +271,16 @@ export function App() {
       return;
     }
     if (clip.type === 'image' || clip.type === 'file') {
-      setToast({ message: `${typeNames[clip.type]}复制尚未接入。` });
+      setToast({ message: t('copying_0_is_not_available_yet', { 0: t(typeNames[clip.type]) }) });
       return;
     }
     try {
       await navigator.clipboard.writeText(clip.content);
-      setToast({ message: '示例文本已复制' });
+      setToast({ message: t('sample_text_copied') });
     } catch {
-      setToast({ message: '浏览器未允许复制，可在完整内容中选择文本复制。' });
+      setToast({
+        message: t('the_browser_blocked_copying_select_and_copy_text_in_the_full_preview'),
+      });
     }
   }
   async function saveCapture(enabled: boolean, draft = false) {
@@ -289,7 +293,11 @@ export function App() {
         maxItems: draft ? policyMax : policy.maxItems,
         expectedRevision: policy.revision,
       });
-      setToast({ message: enabled ? '采集规则已生效；仅记录之后的新复制' : '采集已暂停' });
+      setToast({
+        message: enabled
+          ? t('capture_rules_applied_only_future_copies_will_be_recorded')
+          : t('capture_paused'),
+      });
     } catch (error) {
       setToast({ message: safeError(error).message });
     }
@@ -365,7 +373,7 @@ export function App() {
         setRegex(false);
       }
       closeModal();
-      setToast({ message: editingCollection ? '分类已重命名' : '分类已创建' });
+      setToast({ message: editingCollection ? t('collection_renamed') : t('collection_created') });
     } catch (error) {
       setCollectionError(safeError(error).message);
     }
@@ -397,10 +405,10 @@ export function App() {
       setToast({
         message:
           transfer.mode === 'copy'
-            ? '已复制到分类'
+            ? t('copied_to_collection')
             : transferTarget
-              ? '已移动到分类'
-              : '已移出分类',
+              ? t('moved_to_collection')
+              : t('removed_from_collection'),
       });
     } catch (error) {
       setTransferError(safeError(error).message);
@@ -528,7 +536,7 @@ export function App() {
           setRegex(false);
           setNewContent('');
           closeModal();
-          setToast({ message: '文本已保存' });
+          setToast({ message: t('text_saved') });
         } catch (error) {
           setToast({ message: safeError(error).message });
         }
@@ -540,13 +548,9 @@ export function App() {
       type: 'text',
       title: newTitle.trim(),
       content: newContent,
-      source: '手动创建',
-      time: new Date().toLocaleTimeString('zh-CN', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      }),
-      day: '今天',
+      source: t('manually_created'),
+      time: formatHistoryTime(Date.now()),
+      day: 'today',
       pinned: false,
       collection: ['work', 'inspiration', 'later'].includes(view) ? (view as Collection) : null,
     };
@@ -559,7 +563,7 @@ export function App() {
     setNewTitle('');
     setNewContent('');
     setModal(null);
-    setToast({ message: '已添加示例，刷新后还原' });
+    setToast({ message: t('sample_added_reloading_will_reset_it') });
     requestAnimationFrame(() => {
       if (list.current) {
         list.current.scrollTop = 0;
@@ -587,14 +591,19 @@ export function App() {
         expectedRevision: p.revision,
         ...update,
       });
-      setToast({ message: '桌面设置已保存' });
+      setToast({ message: t('desktop_settings_saved') });
     } catch (error) {
       setToast({ message: safeError(error).message });
     }
   }
   async function chooseTheme(theme: Theme) {
     if (await appearance.saveTheme(theme))
-      setToast({ message: appearance.native ? '外观已保存' : '预览外观已更新' });
+      setToast({
+        message: appearance.native ? t('appearance_saved') : t('preview_appearance_updated'),
+      });
+  }
+  async function chooseLanguage(language: Language) {
+    if (await appearance.saveLanguage(language)) setToast(null);
   }
   async function windowAction(action: () => Promise<unknown>) {
     try {
@@ -605,30 +614,30 @@ export function App() {
   }
 
   const captureLabel = !appearance.native
-    ? '浏览器示例 · 监听仅在桌面可用'
+    ? t('browser_demo_capture_requires_the_desktop_app')
     : !live.status
-      ? '正在连接监听服务'
+      ? t('connecting_to_capture_service')
       : live.mutating
-        ? '正在保存…'
+        ? t('saving')
         : !live.status.available
           ? live.status.policy.enabled
-            ? '监听不可用 · 点击暂停'
-            : '监听服务不可用'
+            ? t('capture_unavailable_click_to_pause')
+            : t('capture_service_unavailable')
           : live.status.policy.enabled
-            ? '监听中 · 点击暂停记录新复制'
-            : '已暂停 · 点击开始记录新复制';
+            ? t('capturing_click_to_pause')
+            : t('paused_click_to_capture_future_copies');
 
   const searchBox = (
     <div className={`search-box ${result.error ? 'has-error' : ''}`}>
       <Icon name="search" size={18} />
       <label className="sr-only" htmlFor="history-search">
-        搜索历史
+        {t('search_history')}
       </label>
       <input
         ref={search}
         id="history-search"
         value={query}
-        placeholder="搜索历史…"
+        placeholder={t('search_history_2')}
         onChange={(event) => setQuery(event.target.value)}
         autoComplete="off"
         spellCheck={false}
@@ -638,7 +647,7 @@ export function App() {
       {query && (
         <button
           className="icon-button"
-          aria-label="清空搜索"
+          aria-label={t('clear_search')}
           onClick={() => {
             setQuery('');
             search.current?.focus();
@@ -649,7 +658,7 @@ export function App() {
       )}
       <button
         className={`regex-toggle ${regex ? 'active' : ''}`}
-        aria-label="正则表达式搜索"
+        aria-label={t('regular_expression_search')}
         aria-pressed={regex}
         onClick={() => setRegex(!regex)}
       >
@@ -682,43 +691,43 @@ export function App() {
                 name={view === 'trash' ? 'trash' : view === 'pinned' ? 'pin' : 'history'}
                 size={15}
               />
-              <span className="sr-only">历史范围</span>
+              <span className="sr-only">{t('history_scope')}</span>
               <select
-                aria-label="历史范围"
+                aria-label={t('history_scope')}
                 value={view}
                 onChange={(event) => setView(event.target.value as AppView)}
               >
                 {Object.entries(
                   appearance.native
                     ? {
-                        all: '全部记录',
-                        pinned: '已置顶',
+                        all: t('all_history'),
+                        pinned: t('pinned'),
                         ...Object.fromEntries(
                           live.collections.map((item) => [`collection:${item.id}`, item.name]),
                         ),
-                        trash: '回收站',
+                        trash: t('trash'),
                       }
                     : viewTitles,
                 ).map(([key, label]) => (
                   <option key={key} value={key} disabled={appearance.native && key === 'trash'}>
-                    {label}
-                    {appearance.native && key === 'trash' ? '（待接入）' : ''}
+                    {appearance.native && key.startsWith('collection:') ? label : t(label)}
+                    {appearance.native && key === 'trash' ? t('not_implemented_2') : ''}
                   </option>
                 ))}
               </select>
               <Icon name="chevron" size={12} />
             </label>
             <label className="type-control">
-              <span className="sr-only">内容类型</span>
+              <span className="sr-only">{t('content_type')}</span>
               <select
-                aria-label="内容类型"
+                aria-label={t('content_type')}
                 value={type}
                 onChange={(event) => setType(event.target.value as ClipType | 'all')}
               >
-                <option value="all">所有类型</option>
+                <option value="all">{t('all_types')}</option>
                 {Object.entries(typeNames).map(([key, label]) => (
                   <option key={key} value={key} disabled={appearance.native && key === 'link'}>
-                    {label}
+                    {t(label)}
                   </option>
                 ))}
               </select>
@@ -726,7 +735,7 @@ export function App() {
             </label>
             {(view !== 'all' || type !== 'all' || regex) && (
               <button className="text-button clear-filters" onClick={clearFilters}>
-                重置
+                {t('reset')}
               </button>
             )}
           </div>
@@ -735,10 +744,12 @@ export function App() {
           <div className="service-error" role="alert" data-testid="service-error">
             <Icon name="info" size={16} />
             <span>
-              本地服务状态 ·{' '}
-              {appearance.error ||
-                live.statusError ||
-                (live.status?.error ? safeError(live.status.error).message : '')}
+              {t('local_service_status')}{' '}
+              {t(
+                appearance.error ||
+                  live.statusError ||
+                  (live.status?.error ? safeError(live.status.error).message : ''),
+              )}
             </span>
             <button
               className="text-button"
@@ -747,12 +758,16 @@ export function App() {
                 void live.refresh();
               }}
             >
-              刷新状态
+              {t('refresh_status')}
             </button>
           </div>
         )}
         <main className="content-workspace">
-          <section className="history-panel" hidden={!!previewClip} aria-label="剪贴板历史">
+          <section
+            className="history-panel"
+            hidden={!!previewClip}
+            aria-label={t('clipboard_history')}
+          >
             <HistoryViewport
               listRef={list}
               resetKey={JSON.stringify([query, regex, type, view, live.offset, oldest, grid])}
@@ -762,21 +777,21 @@ export function App() {
               {result.pending && !result.items.length ? (
                 <div className="empty-state" role="status">
                   <Icon name="search" size={24} />
-                  <strong>正在搜索…</strong>
+                  <strong>{t('searching')}</strong>
                 </div>
               ) : result.error ? (
                 <div className="empty-state" role="alert" id="search-error">
                   <Icon name="info" size={24} />
-                  <strong>搜索未完成</strong>
-                  <p>{result.error}</p>
+                  <strong>{t('search_incomplete')}</strong>
+                  <p>{t(result.error)}</p>
                   {regex && (
                     <button className="secondary-button" onClick={() => setRegex(false)}>
-                      使用普通搜索
+                      {t('use_plain_search')}
                     </button>
                   )}
                   {appearance.native && (
                     <button className="secondary-button" onClick={live.retryQuery}>
-                      重试搜索
+                      {t('retry_search')}
                     </button>
                   )}
                 </div>
@@ -785,14 +800,14 @@ export function App() {
                   <Icon name={view === 'trash' ? 'trash' : 'search'} size={26} />
                   <strong>
                     {view === 'trash' && !query && type === 'all'
-                      ? '回收站为空'
+                      ? t('trash_is_empty')
                       : query || type !== 'all'
-                        ? '没有匹配的记录'
-                        : '暂无记录'}
+                        ? t('no_matching_records')
+                        : t('no_history_yet')}
                   </strong>
                   {(query || view !== 'all' || type !== 'all') && (
                     <button className="text-button" onClick={clearFilters}>
-                      清除筛选
+                      {t('clear_filters')}
                     </button>
                   )}
                 </div>
@@ -813,7 +828,7 @@ export function App() {
                       className="row-main"
                       data-row-main
                       aria-pressed={selected?.id === clip.id}
-                      aria-label={`${typeNames[clip.type]}：${clip.type === 'text' ? clip.content.slice(0, 60) : clip.title}`}
+                      aria-label={`${t(typeNames[clip.type])}：${clip.type === 'text' ? clip.content.slice(0, 60) : clip.title}`}
                       onFocus={() => setSelectedId(clip.id)}
                       onClick={() => setSelectedId(clip.id)}
                       onDoubleClick={() => {
@@ -871,14 +886,14 @@ export function App() {
                               <span>·</span>
                               <span className="clip-collection">
                                 {live.collections.find((item) => item.id === clip.collectionId)
-                                  ?.name ?? '分类不可用'}
+                                  ?.name ?? t('collection_unavailable')}
                               </span>
                             </>
                           )}
                           {clip.pinned && (
                             <>
                               <Icon name="pin" size={12} />
-                              <span className="sr-only">已置顶</span>
+                              <span className="sr-only">{t('pinned')}</span>
                             </>
                           )}
                         </span>
@@ -887,14 +902,16 @@ export function App() {
                     <div className="row-actions">
                       <button
                         className="row-copy text-button"
-                        aria-label={`${clip.deleted ? '恢复' : '复制'}：${clip.title || clip.content.slice(0, 20)}`}
+                        aria-label={`${clip.deleted ? t('restore') : t('copy')}：${clip.title || clip.content.slice(0, 20)}`}
                         onClick={() => void copyClip(clip)}
                       >
-                        {clip.deleted ? '恢复' : '复制'}
+                        {clip.deleted ? t('restore') : t('copy')}
                       </button>
                       <button
                         className="icon-button row-more"
-                        aria-label={`更多操作：${clip.title || clip.content.slice(0, 20)}`}
+                        aria-label={t('more_actions_0', {
+                          0: clip.title || clip.content.slice(0, 20),
+                        })}
                         aria-haspopup="menu"
                         aria-expanded={menu?.clipId === clip.id}
                         onClick={(event) => openMenu(event.currentTarget, clip)}
@@ -917,15 +934,15 @@ export function App() {
               collectionName={
                 previewClip.collectionId
                   ? (live.collections.find((item) => item.id === previewClip.collectionId)?.name ??
-                    '分类不可用')
+                    t('collection_unavailable'))
                   : undefined
               }
-              error={appearance.native ? live.detailError : undefined}
+              error={appearance.native ? t(live.detailError) : undefined}
               onMore={(anchor) => openMenu(anchor, previewClip)}
             />
           )}
         </main>
-        <footer className="statusbar" aria-label="底部工具栏">
+        <footer className="statusbar" aria-label={t('bottom_toolbar')}>
           <button
             className={`capture-toggle ${live.status?.policy.enabled && live.status.available ? 'active' : ''} ${live.status && !live.status.available ? 'unavailable' : ''}`}
             disabled={
@@ -935,7 +952,7 @@ export function App() {
               (!live.status.available && !live.status.policy.enabled)
             }
             aria-pressed={appearance.native ? !!live.status?.policy.enabled : undefined}
-            aria-label={`${result.pending ? '搜索中' : `${appearance.native ? live.total : result.items.length} 条记录`} · ${captureLabel}`}
+            aria-label={`${result.pending ? t('searching_2') : t('0_records', { 0: appearance.native ? live.total : result.items.length })} · ${captureLabel}`}
             title={captureLabel}
             onClick={() => void saveCapture(!live.status?.policy.enabled)}
           >
@@ -951,7 +968,7 @@ export function App() {
                 disabled={live.pending || !live.offset}
                 onClick={() => live.setOffset(Math.max(0, live.offset - 25))}
               >
-                上一页
+                {t('previous_page')}
               </button>
               <span>{Math.floor(live.offset / 25) + 1}</span>
               <button
@@ -959,15 +976,15 @@ export function App() {
                 disabled={live.pending || live.offset + 25 >= live.total}
                 onClick={() => live.setOffset(live.offset + 25)}
               >
-                下一页
+                {t('next_page')}
               </button>
             </div>
           )}
           <div className="footer-tools">
             <button
               className="icon-button"
-              aria-label="设置"
-              title={`设置 ${formatKey(activeKeys.settings, modifier)}`}
+              aria-label={t('settings')}
+              title={t('settings_0', { 0: formatKey(activeKeys.settings, modifier) })}
               data-testid="footer-settings"
               onClick={() => openModal('settings')}
             >
@@ -975,8 +992,8 @@ export function App() {
             </button>
             <button
               className="icon-button"
-              aria-label={appearance.dark ? '切换为浅色主题' : '切换为深色主题'}
-              title={appearance.dark ? '切换为浅色主题' : '切换为深色主题'}
+              aria-label={appearance.dark ? t('switch_to_light_theme') : t('switch_to_dark_theme')}
+              title={appearance.dark ? t('switch_to_light_theme') : t('switch_to_dark_theme')}
               disabled={
                 appearance.loading ||
                 appearance.saving ||
@@ -988,15 +1005,15 @@ export function App() {
             </button>
             <button
               className="icon-button"
-              aria-label="窗口置顶"
+              aria-label={t('always_on_top')}
               title={
                 appearance.native
                   ? desktop.status?.preferences.alwaysOnTop
-                    ? '已固定窗口 · 点击取消，失焦后自动隐藏'
+                    ? t('window_fixed_click_to_hide_on_blur')
                     : desktop.status?.preferences.autoHide
-                      ? '失焦后自动隐藏 · 点击固定窗口'
-                      : '点击固定窗口，保持显示'
-                  : '窗口置顶仅在桌面可用'
+                      ? t('hide_on_blur_click_to_keep_visible')
+                      : t('click_to_keep_the_window_visible')
+                  : t('always_on_top_requires_the_desktop_app')
               }
               aria-pressed={!!desktop.status?.preferences.alwaysOnTop}
               disabled={!appearance.native || !desktop.status || desktop.busy}
@@ -1011,7 +1028,7 @@ export function App() {
             </button>
             <button
               className="icon-button app-more"
-              aria-label="更多选项"
+              aria-label={t('more_options')}
               aria-haspopup="menu"
               aria-expanded={!!menu && !menu.clipId}
               onClick={(event) => openMenu(event.currentTarget)}
@@ -1032,12 +1049,12 @@ export function App() {
                   onClick={() => menuAction(() => void copyClip(menuClip, true))}
                 >
                   <Icon name="arrow" size={15} />
-                  粘贴到原应用
+                  {t('paste_to_original_app_2')}
                 </button>
               )}
               <button role="menuitem" onClick={() => menuAction(() => openPreview(menuClip))}>
                 <Icon name="text" size={15} />
-                查看完整内容
+                {t('view_full_content')}
               </button>
               <button
                 role="menuitem"
@@ -1046,7 +1063,7 @@ export function App() {
                 onClick={() => menuAction(() => void togglePin(menuClip))}
               >
                 <Icon name="pin" size={15} />
-                {menuClip.pinned ? '取消置顶' : '置顶'}
+                {menuClip.pinned ? t('unpin') : t('pin')}
               </button>
               {appearance.native && (
                 <>
@@ -1057,7 +1074,7 @@ export function App() {
                     onClick={() => menuAction(() => openTransfer(menuClip, 'move'))}
                   >
                     <Icon name="folder" size={15} />
-                    移动到分类…
+                    {t('move_to_collection')}
                   </button>
                   <button
                     role="menuitem"
@@ -1066,14 +1083,14 @@ export function App() {
                     onClick={() => menuAction(() => openTransfer(menuClip, 'copy'))}
                   >
                     <Icon name="copy" size={15} />
-                    复制到分类…
+                    {t('copy_to_collection')}
                   </button>
                 </>
               )}
               {!appearance.native && !menuClip.deleted && (
                 <>
                   <div className="menu-separator" />
-                  <p className="menu-label">移入分类</p>
+                  <p className="menu-label">{t('move_to_collection_2')}</p>
                   {(Object.keys(collectionNames) as Collection[]).map((key) => (
                     <button
                       role="menuitem"
@@ -1081,12 +1098,14 @@ export function App() {
                       onClick={() =>
                         menuAction(() => {
                           changeClip(menuClip.id, { collection: key });
-                          setToast({ message: `示例已移入「${collectionNames[key]}」` });
+                          setToast({
+                            message: t('sample_moved_to_0', { 0: t(collectionNames[key]) }),
+                          });
                         })
                       }
                     >
                       <Icon name="folder" size={15} />
-                      {collectionNames[key]}
+                      {t(collectionNames[key])}
                       {menuClip.collection === key && <Icon name="check" size={14} />}
                     </button>
                   ))}
@@ -1100,7 +1119,11 @@ export function App() {
                 onClick={() => menuAction(() => removeClip(menuClip))}
               >
                 <Icon name={menuClip.deleted ? 'restore' : 'trash'} size={15} />
-                {menuClip.deleted ? '恢复' : appearance.native ? '删除' : '移入回收站'}
+                {menuClip.deleted
+                  ? t('restore')
+                  : appearance.native
+                    ? t('delete')
+                    : t('move_to_trash')}
               </button>
             </>
           ) : (
@@ -1111,7 +1134,7 @@ export function App() {
                 onClick={() => menuAction(() => openModal('new'))}
               >
                 <Icon name="plus" size={15} />
-                {appearance.native ? '新建文本' : '新建示例'}
+                {appearance.native ? t('new_text') : t('new_sample')}
               </button>
               {appearance.native && (
                 <>
@@ -1122,7 +1145,7 @@ export function App() {
                     onClick={() => menuAction(() => openCollectionEditor(null))}
                   >
                     <Icon name="folder" size={15} />
-                    新建分类
+                    {t('new_collection')}
                   </button>
                   {currentCollection && (
                     <button
@@ -1132,7 +1155,7 @@ export function App() {
                       onClick={() => menuAction(() => openCollectionEditor(currentCollection))}
                     >
                       <Icon name="folder" size={15} />
-                      重命名当前分类
+                      {t('rename_current_collection')}
                     </button>
                   )}
                 </>
@@ -1147,14 +1170,14 @@ export function App() {
                     setDedupError('');
                     openModal('deduplicate');
                   }}
-                  aria-label="置顶页去重"
+                  aria-label={t('deduplicate_pinned_history')}
                 >
-                  置顶页去重
+                  {t('deduplicate_pinned_history')}
                 </button>
               )}
               <button role="menuitem" onClick={() => menuAction(() => setGrid(!grid))}>
                 <Icon name={grid ? 'list' : 'grid'} size={15} />
-                {grid ? '切换列表视图' : '切换网格视图'}
+                {grid ? t('switch_to_list_view') : t('switch_to_grid_view')}
               </button>
               <button
                 role="menuitem"
@@ -1162,22 +1185,22 @@ export function App() {
                 onClick={() => menuAction(() => setOldest(!oldest))}
               >
                 <Icon name="sort" size={15} />
-                {oldest ? '改为最近优先' : '改为最早优先'}
+                {oldest ? t('show_newest_first') : t('show_oldest_first')}
               </button>
               <div className="menu-separator" />
               <button
                 role="menuitem"
                 data-testid="open-settings"
-                aria-label="设置"
+                aria-label={t('settings')}
                 onClick={() => menuAction(() => openModal('settings'))}
               >
                 <Icon name="settings" size={15} />
-                设置
+                {t('settings')}
                 <span className="menu-shortcut">{formatKey(activeKeys.settings, modifier)}</span>
               </button>
               <button role="menuitem" onClick={() => menuAction(() => openModal('shortcuts'))}>
                 <Icon name="keyboard" size={15} />
-                快捷键帮助
+                {t('keyboard_shortcuts')}
               </button>
               {appearance.native && (
                 <button
@@ -1189,7 +1212,7 @@ export function App() {
                   }
                 >
                   <Icon name="close" size={15} />
-                  退出应用
+                  {t('quit_app')}
                 </button>
               )}
             </>
@@ -1198,7 +1221,7 @@ export function App() {
       )}
       {toast && (
         <div className="toast" role="status">
-          <span>{toast.message}</span>
+          <span>{t(toast.message)}</span>
           {toast.undo && (
             <button
               className="text-button"
@@ -1207,24 +1230,28 @@ export function App() {
                 setToast(null);
               }}
             >
-              撤销
+              {t('undo')}
             </button>
           )}
-          <button className="icon-button" aria-label="关闭提示" onClick={() => setToast(null)}>
+          <button
+            className="icon-button"
+            aria-label={t('dismiss_notification')}
+            onClick={() => setToast(null)}
+          >
             <Icon name="close" size={14} />
           </button>
         </div>
       )}
       {modal === 'collection' && (
         <Modal
-          title={editingCollection ? '重命名分类' : '新建分类'}
+          title={editingCollection ? t('rename_collection') : t('new_collection')}
           onClose={() => {
             if (!live.mutating) closeModal();
           }}
-          description="名称最多 64 个字符，同名分类不可重复创建。"
+          description={t('names_can_contain_up_to_64_characters_collection_names_must_be_unique')}
         >
           <form className="new-form" onSubmit={saveCollection}>
-            <label htmlFor="collection-name">分类名称</label>
+            <label htmlFor="collection-name">{t('collection_name')}</label>
             <input
               id="collection-name"
               data-autofocus
@@ -1235,7 +1262,7 @@ export function App() {
             />
             {collectionError && (
               <p role="alert" className="settings-feedback">
-                {collectionError}
+                {t(collectionError)}
               </p>
             )}
             <div className="form-actions">
@@ -1245,7 +1272,7 @@ export function App() {
                 disabled={live.mutating}
                 onClick={closeModal}
               >
-                取消
+                {t('cancel')}
               </button>
               <button
                 className="primary-button"
@@ -1255,7 +1282,7 @@ export function App() {
                   collectionName.trim() === editingCollection?.name
                 }
               >
-                保存分类
+                {t('save_collection')}
               </button>
             </div>
           </form>
@@ -1263,28 +1290,30 @@ export function App() {
       )}
       {modal === 'transfer' && transfer && (
         <Modal
-          title={transfer.mode === 'copy' ? '复制到分类' : '移动到分类'}
+          title={transfer.mode === 'copy' ? t('copy_to_collection_2') : t('move_to_collection_3')}
           onClose={() => {
             if (!live.mutating) closeModal();
           }}
           description={
             transfer.mode === 'copy'
-              ? '保留原记录，在目标分类创建独立副本，副本默认不置顶。'
-              : '保留记录身份和置顶状态，更改所属分类。'
+              ? t(
+                  'keep_the_original_and_create_an_independent_unpinned_copy_in_the_target_collection',
+                )
+              : t('keep_the_record_identity_and_pin_status_and_change_its_collection')
           }
         >
           <form className="new-form" onSubmit={saveTransfer}>
-            <label htmlFor="transfer-collection">目标分类</label>
+            <label htmlFor="transfer-collection">{t('target_collection')}</label>
             <select
               id="transfer-collection"
               data-autofocus
               value={transferTarget}
               onChange={(event) => setTransferTarget(event.target.value)}
             >
-              {transfer.mode === 'move' && <option value="">未分类</option>}
+              {transfer.mode === 'move' && <option value="">{t('uncategorized')}</option>}
               {transfer.mode === 'copy' && !transferTarget && (
                 <option value="" disabled>
-                  选择分类
+                  {t('select_collection')}
                 </option>
               )}
               {live.collections.map((item) => (
@@ -1294,11 +1323,13 @@ export function App() {
               ))}
             </select>
             {!live.collections.length && (
-              <p className="settings-feedback">可在更多选项中先新建分类。</p>
+              <p className="settings-feedback">
+                {t('create_a_collection_first_using_more_options')}
+              </p>
             )}
             {transferError && (
               <p role="alert" className="settings-feedback">
-                {transferError}
+                {t(transferError)}
               </p>
             )}
             <div className="form-actions">
@@ -1308,7 +1339,7 @@ export function App() {
                 disabled={live.mutating}
                 onClick={closeModal}
               >
-                取消
+                {t('cancel')}
               </button>
               <button
                 className="primary-button"
@@ -1319,7 +1350,7 @@ export function App() {
                     : (transfer.clip.collectionId ?? '') === transferTarget)
                 }
               >
-                {transfer.mode === 'copy' ? '复制记录' : '移动记录'}
+                {transfer.mode === 'copy' ? t('copy_record') : t('move_record')}
               </button>
             </div>
           </form>
@@ -1327,15 +1358,18 @@ export function App() {
       )}
       {modal === 'deduplicate' && (
         <Modal
-          title="置顶页去重"
+          title={t('deduplicate_pinned_history')}
           onClose={() => {
             if (!live.mutating) closeModal();
           }}
-          description="以全部置顶记录为依据，删除全部历史中内容完全相同的非置顶记录。所有置顶记录都会保留；当前搜索、类型筛选和页码不限制去重范围。"
+          description={t(
+            'delete_unpinned_records_whose_content_exactly_matches_any_pinned_record_across_all_history_all_pinned_records_are_kept_search_type_filters_and_pagination_do_not_limit_the_scope',
+          )}
         >
           {dedupError && (
             <p role="alert" className="settings-feedback">
-              {dedupError} 请关闭此面板，刷新后重新检查范围。
+              {t(dedupError)}
+              {t('close_this_panel_refresh_and_check_the_scope_again')}
             </p>
           )}
           <div className="form-actions">
@@ -1345,25 +1379,27 @@ export function App() {
               disabled={live.mutating}
               onClick={closeModal}
             >
-              取消
+              {t('cancel')}
             </button>
             <button
               className="primary-button"
               disabled={live.mutating || !!dedupError}
               onClick={() => void deduplicatePinned()}
             >
-              {live.mutating ? '正在去重…' : '删除非置顶重复项'}
+              {live.mutating ? t('deduplicating') : t('delete_unpinned_duplicates')}
             </button>
           </div>
         </Modal>
       )}
       {(modal === 'settings' || settingsWindow) && (
-        <Modal title="设置" onClose={closeModal}>
+        <Modal title={t('settings')} onClose={closeModal}>
           {settingsWindow && (appearance.error || live.statusError || live.status?.error) && (
             <p className="settings-feedback" role="alert">
-              {appearance.error ||
-                live.statusError ||
-                (live.status?.error ? safeError(live.status.error).message : '')}
+              {t(
+                appearance.error ||
+                  live.statusError ||
+                  (live.status?.error ? safeError(live.status.error).message : ''),
+              )}
               <button
                 className="text-button"
                 onClick={() => {
@@ -1371,20 +1407,20 @@ export function App() {
                   void live.refresh();
                 }}
               >
-                刷新状态
+                {t('refresh_status')}
               </button>
             </p>
           )}
           <div className={settingsWindow ? 'settings-layout' : undefined}>
             {settingsWindow && (
-              <nav className="settings-nav" aria-label="设置分类">
+              <nav className="settings-nav" aria-label={t('settings_categories')}>
                 {(
                   [
-                    ['capture', '采集', 'history'],
-                    ['desktop', '桌面', 'monitor'],
-                    ['keyboard', '快捷键', 'keyboard'],
-                    ['appearance', '外观', 'sun'],
-                    ['about', '关于与状态', 'info'],
+                    ['capture', t('capture'), 'history'],
+                    ['desktop', t('desktop'), 'monitor'],
+                    ['keyboard', t('shortcuts'), 'keyboard'],
+                    ['appearance', t('appearance'), 'sun'],
+                    ['about', t('about_and_status'), 'info'],
                   ] as const
                 ).map(([id, label, icon]) => (
                   <button
@@ -1405,9 +1441,9 @@ export function App() {
                   className="capture-settings"
                   hidden={settingsWindow && settingsPage !== 'capture'}
                 >
-                  <h3>采集</h3>
+                  <h3>{t('capture')}</h3>
                   <label className="setting-row">
-                    记录新复制
+                    {t('record_future_copies')}
                     <input
                       type="checkbox"
                       checked={!!live.status?.policy.enabled}
@@ -1420,21 +1456,23 @@ export function App() {
                     />
                   </label>
                   <p className="settings-feedback">
-                    只记录开启后的新复制，不补采已有剪贴板。来源无法可靠获取时标为未知。
+                    {t(
+                      'only_copies_made_after_enabling_capture_are_recorded_existing_clipboard_content_is_not_imported_unreliable_sources_are_marked_unknown',
+                    )}
                   </p>
                   <label className="policy-field">
-                    排除正则（文本与文件路径）
+                    {t('exclude_regex_text_and_file_paths')}
                     <input
-                      aria-label="排除正则"
+                      aria-label={t('exclude_regex')}
                       value={policyPattern}
                       maxLength={4096}
                       onChange={(event) => setPolicyPattern(event.target.value)}
                     />
                   </label>
                   <label className="policy-field">
-                    最多保留条数
+                    {t('maximum_records')}
                     <input
-                      aria-label="最多保留条数"
+                      aria-label={t('maximum_records')}
                       type="number"
                       min={1}
                       max={1000}
@@ -1453,13 +1491,14 @@ export function App() {
                     }
                     onClick={() => void saveCapture(!!live.status?.policy.enabled, true)}
                   >
-                    保存采集规则
+                    {t('save_capture_rules')}
                   </button>
                   <p className="settings-feedback">
-                    文本上限 4MiB；图片上限 8M 像素；文件引用最多 256 项。总历史载荷最多
-                    128MiB，超限不截断。
+                    {t(
+                      'limits_4_mib_of_text_8_million_image_pixels_256_file_references_and_128_mib_of_total_history_payload_oversized_content_is_rejected_without_truncation',
+                    )}
                     {desktop.status?.shortcutAvailable
-                      ? ` ${desktop.status.preferences.shortcut} 唤起窗口。`
+                      ? t('0_to_show_the_window', { 0: desktop.status.preferences.shortcut })
                       : ''}
                   </p>
                 </section>
@@ -1469,9 +1508,9 @@ export function App() {
                   className="settings-section"
                   hidden={settingsWindow && settingsPage !== 'desktop'}
                 >
-                  <h3>桌面</h3>
+                  <h3>{t('desktop')}</h3>
                   <label className="setting-row">
-                    关闭窗口后常驻
+                    {t('keep_running_after_closing')}
                     <input
                       type="checkbox"
                       checked={!!desktop.status?.preferences.closeToTray}
@@ -1480,7 +1519,7 @@ export function App() {
                     />
                   </label>
                   <label className="setting-row">
-                    窗口置顶
+                    {t('always_on_top')}
                     <input
                       type="checkbox"
                       checked={!!desktop.status?.preferences.alwaysOnTop}
@@ -1489,7 +1528,7 @@ export function App() {
                     />
                   </label>
                   <label className="setting-row">
-                    失焦自动隐藏
+                    {t('hide_on_blur')}
                     <input
                       type="checkbox"
                       checked={!!desktop.status?.preferences.autoHide}
@@ -1498,7 +1537,7 @@ export function App() {
                     />
                   </label>
                   <label className="setting-row">
-                    登录时启动
+                    {t('launch_at_login')}
                     <input
                       type="checkbox"
                       checked={!!desktop.status?.autostartEnabled}
@@ -1508,15 +1547,15 @@ export function App() {
                       onChange={(event) => {
                         void desktop
                           .autostart(event.target.checked)
-                          .then(() => setToast({ message: '自启动设置已生效' }))
+                          .then(() => setToast({ message: t('autostart_setting_applied') }))
                           .catch((error) => setToast({ message: safeError(error).message }));
                       }}
                     />
                   </label>
                   <label className="policy-field">
-                    唤起快捷键
+                    {t('show_window_shortcut')}
                     <input
-                      aria-label="唤起快捷键"
+                      aria-label={t('show_window_shortcut')}
                       value={shortcut}
                       maxLength={100}
                       onChange={(event) => setShortcut(event.target.value)}
@@ -1527,15 +1566,18 @@ export function App() {
                     disabled={!desktop.status || desktop.busy}
                     onClick={() => void saveDesktop({ shortcut })}
                   >
-                    保存快捷键
+                    {t('save_shortcut')}
                   </button>
                   <p className="settings-feedback" role="status">
-                    {desktop.error ||
-                      (desktop.status?.shortcutAvailable
-                        ? '唤起快捷键可用；Esc 可隐藏窗口。'
-                        : '唤起快捷键不可用。')}{' '}
-                    置顶时不自动隐藏；菜单、设置和预览打开时保留窗口。Linux
-                    无可靠恢复入口时关闭会退出。
+                    {t(
+                      desktop.error ||
+                        (desktop.status?.shortcutAvailable
+                          ? t('show_window_shortcut_available_esc_hides_the_window')
+                          : t('the_show_window_shortcut_is_unavailable')),
+                    )}{' '}
+                    {t(
+                      'always_on_top_prevents_hiding_on_blur_menus_settings_and_previews_keep_the_window_open_on_linux_closing_quits_if_there_is_no_reliable_way_to_restore_the_window',
+                    )}
                   </p>
                 </section>
               )}
@@ -1554,14 +1596,14 @@ export function App() {
                 className="settings-section"
                 hidden={settingsWindow && settingsPage !== 'appearance'}
               >
-                <h3>外观</h3>
+                <h3>{t('appearance')}</h3>
                 {appearance.native && (
                   <>
                     <label className="setting-row">
-                      使用系统原生标题栏
+                      {t('use_system_title_bar')}
                       <input
                         type="checkbox"
-                        aria-label="使用系统原生标题栏"
+                        aria-label={t('use_system_title_bar')}
                         checked={desktop.status?.preferences.nativeTitlebar ?? false}
                         disabled={!desktop.status || desktop.busy}
                         onChange={(event) =>
@@ -1570,12 +1612,35 @@ export function App() {
                       />
                     </label>
                     <p className="settings-feedback">
-                      关闭后使用自定义标题栏，可拖动、最小化、最大化和关闭窗口。立即生效，重启后保留。
+                      {t(
+                        'turn_off_to_use_the_custom_title_bar_with_dragging_minimize_maximize_and_close_controls_applies_immediately_and_persists_after_restart',
+                      )}
                     </p>
                   </>
                 )}
+                <label className="setting-row" htmlFor="language">
+                  {t('language')}
+                  <select
+                    id="language"
+                    value={appearance.language}
+                    disabled={
+                      appearance.saving ||
+                      appearance.loading ||
+                      (appearance.native && !appearance.snapshot)
+                    }
+                    onChange={(event) => void chooseLanguage(event.target.value as Language)}
+                  >
+                    <option value="system">{t('follow_system')}</option>
+                    <option value="zh-CN" lang="zh-CN">
+                      {t('simplified_chinese')}
+                    </option>
+                    <option value="en" lang="en">
+                      English
+                    </option>
+                  </select>
+                </label>
                 <label className="setting-row" htmlFor="theme">
-                  主题
+                  {t('theme')}
                   <select
                     id="theme"
                     value={appearance.theme}
@@ -1586,16 +1651,18 @@ export function App() {
                     }
                     onChange={(event) => void chooseTheme(event.target.value as Theme)}
                   >
-                    <option value="system">跟随系统</option>
-                    <option value="light">浅色</option>
-                    <option value="dark">深色</option>
+                    <option value="system">{t('follow_system')}</option>
+                    <option value="light">{t('light')}</option>
+                    <option value="dark">{t('dark')}</option>
                   </select>
                 </label>
                 <p className="settings-feedback" role="status">
                   {appearance.saving
-                    ? '正在保存…'
-                    : appearance.error ||
-                      (appearance.native ? '外观保存在此设备。' : '浏览器只记住外观偏好。')}
+                    ? t('saving')
+                    : t(appearance.error) ||
+                      (appearance.native
+                        ? t('language_and_appearance_preferences_are_saved_on_this_device')
+                        : t('the_browser_remembers_language_and_appearance_preferences'))}
                 </p>
               </section>
               <details
@@ -1603,17 +1670,19 @@ export function App() {
                 open={settingsWindow || undefined}
                 hidden={settingsWindow && settingsPage !== 'about'}
               >
-                <summary>关于与状态</summary>
+                <summary>{t('about_and_status')}</summary>
                 <p>UClip · 0.1.0</p>
                 <p>
                   {appearance.native
-                    ? '历史保存在此设备。文件仅保存引用；云同步、CLI 和完整管理尚未接入。自动回粘与跨平台验证状态单独报告。'
-                    : '当前为浏览器界面预览，记录全部为内存示例。'}
+                    ? t(
+                        'history_stays_on_this_device_files_are_references_only_cloud_sync_cli_and_full_management_are_not_available_yet_automatic_paste_and_platform_verification_are_reported_separately',
+                      )
+                    : t('this_is_a_browser_preview_all_records_are_in_memory_samples')}
                 </p>
                 {appearance.snapshot?.platform.capabilities.map((item) => (
                   <div className="capability-row" key={item.id}>
-                    <span>{capabilityNames[item.id] ?? item.id}</span>
-                    <span>{stateNames[item.state]}</span>
+                    <span>{t(capabilityNames[item.id] ?? item.id)}</span>
+                    <span>{t(stateNames[item.state])}</span>
                   </div>
                 ))}
                 {appearance.native && (
@@ -1625,7 +1694,7 @@ export function App() {
                       void live.refresh();
                     }}
                   >
-                    刷新服务状态
+                    {t('refresh_service_status')}
                   </button>
                 )}
               </details>
@@ -1635,18 +1704,20 @@ export function App() {
       )}
       {modal === 'new' && (
         <Modal
-          title={appearance.native ? '新建文本' : '新建示例'}
+          title={appearance.native ? t('new_text') : t('new_sample')}
           description={
             appearance.native
-              ? '保存在此设备；采集暂停时也可手动添加，排除与容量规则仍生效。'
-              : '仅保存在此次预览，刷新后还原。'
+              ? t(
+                  'saved_on_this_device_even_while_capture_is_paused_exclusion_and_capacity_rules_still_apply',
+                )
+              : t('saved_only_for_this_preview_reloading_resets_it')
           }
           onClose={closeModal}
         >
           <form className="new-form" onSubmit={createClip}>
             {!appearance.native && (
               <>
-                <label htmlFor="clip-title">标题（可选）</label>
+                <label htmlFor="clip-title">{t('title_optional')}</label>
                 <input
                   id="clip-title"
                   data-autofocus
@@ -1656,7 +1727,7 @@ export function App() {
                 />
               </>
             )}
-            <label htmlFor="clip-content">内容</label>
+            <label htmlFor="clip-content">{t('content')}</label>
             <textarea
               id="clip-content"
               value={newContent}
@@ -1668,54 +1739,56 @@ export function App() {
             />
             <div className="form-actions">
               <button className="secondary-button" type="button" onClick={closeModal}>
-                取消
+                {t('cancel')}
               </button>
               <button className="primary-button" disabled={!newContent || live.mutating}>
-                {appearance.native ? '保存文本' : '添加示例'}
+                {appearance.native ? t('save_text') : t('add_sample')}
               </button>
             </div>
           </form>
         </Modal>
       )}
       {modal === 'shortcuts' && (
-        <Modal title="快捷键" onClose={closeModal}>
+        <Modal title={t('shortcuts')} onClose={closeModal}>
           <div className="shortcut-list">
             <div>
-              <span>聚焦搜索</span>
+              <span>{t('focus_search')}</span>
               <kbd>{formatKey(activeKeys.search, modifier)}</kbd>
             </div>
             <div>
-              <span>选择记录</span>
+              <span>{t('select_record')}</span>
               <kbd>
                 {formatKey(activeKeys.up, modifier)} / {formatKey(activeKeys.down, modifier)}
               </kbd>
             </div>
             <div>
-              <span>复制 / 在回收站恢复</span>
+              <span>{t('copy_restore_from_trash')}</span>
               <kbd>{formatKey(activeKeys.copy, modifier)}</kbd>
             </div>
             <div>
-              <span>查看完整内容（列表焦点）</span>
+              <span>{t('view_full_content_list_focus')}</span>
               <kbd>{formatKey(activeKeys.preview, modifier)}</kbd>
             </div>
             <div>
-              <span>删除记录（列表焦点）</span>
+              <span>{t('delete_record_list_focus')}</span>
               <kbd>{formatKey(activeKeys.remove, modifier)}</kbd>
             </div>
             <div>
-              <span>关闭当前面板 / 清空搜索</span>
+              <span>{t('close_panel_clear_search')}</span>
               <kbd>{formatKey(activeKeys.dismiss, modifier)}</kbd>
             </div>
             <div>
-              <span>设置</span>
+              <span>{t('settings')}</span>
               <kbd>{formatKey(activeKeys.settings, modifier)}</kbd>
             </div>
           </div>
           <p className="settings-feedback">
-            以上快捷键仅在当前窗口内生效；
+            {t('these_shortcuts_apply_only_in_the_current_window')}
             {appearance.native
-              ? '复制快捷键只复制；自动回粘需单独选择，失败不会向任意窗口粘贴。'
-              : '浏览器只支持示例文本复制。'}
+              ? t(
+                  'the_copy_shortcut_only_copies_select_automatic_paste_separately_failures_never_paste_into_an_arbitrary_window',
+                )
+              : t('the_browser_can_only_copy_sample_text')}
           </p>
         </Modal>
       )}

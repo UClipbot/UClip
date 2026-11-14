@@ -44,14 +44,15 @@ export function useClipQuery(
       try {
         worker = new Worker(new URL('./clip-query.worker.ts', import.meta.url), { type: 'module' });
         worker.onmessage = (event: MessageEvent<Omit<Result, 'pending'>>) => finish(event.data);
-        worker.onerror = () => finish({ items: [], error: '搜索暂不可用，请切换普通搜索。' });
+        worker.onerror = () =>
+          finish({ items: [], error: 'search_is_unavailable_switch_to_plain_search' });
         deadline = setTimeout(
-          () => finish({ items: [], error: '表达式耗时过长，请简化搜索条件。' }),
+          () => finish({ items: [], error: 'the_expression_took_too_long_simplify_your_search' }),
           350,
         );
         worker.postMessage(input);
       } catch {
-        finish({ items: [], error: '搜索暂不可用，请切换普通搜索。' });
+        finish({ items: [], error: 'search_is_unavailable_switch_to_plain_search' });
       }
     }, 80);
     return () => {

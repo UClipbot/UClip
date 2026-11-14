@@ -5,6 +5,7 @@ use uclip_core::{CoreService, ErrorCode, Storage, Theme, UpdateSettings};
 fn update(theme: Theme, revision: &str) -> UpdateSettings {
     UpdateSettings {
         theme,
+        language: None,
         expected_revision: revision.into(),
     }
 }
@@ -219,4 +220,75 @@ fn unknown_settings_fields_and_invalid_themes_are_rejected() {
         r#"{"theme":"invalid","expectedRevision":"0"}"#
     )
     .is_err());
+}
+
+#[test]
+fn language_is_durable_and_theme_only_updates_preserve_it() {
+    use uclip_core::Language;
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("language.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    assert_eq!(storage.settings().unwrap().language, Language::System);
+    let mut request = update(Theme::Dark, "0");
+    request.language = Some(Language::En);
+    let saved = storage.update_settings(request).unwrap();
+    assert_eq!(saved.language, Language::En);
+    let mut stale = update(Theme::Light, "0");
+    stale.language = Some(Language::ZhCn);
+    assert_eq!(
+        storage.update_settings(stale).unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    storage.update_settings(update(Theme::Light, "1")).unwrap();
+    drop(storage);
+    let mut reopened = Storage::open(&path).unwrap();
+    assert_eq!(reopened.settings().unwrap().language, Language::En);
+    assert_eq!(reopened.settings().unwrap().theme, Theme::Light);
+    for (revision, language) in [("2", Language::ZhCn), ("3", Language::System)] {
+        let mut request = update(Theme::Light, revision);
+        request.language = Some(language);
+        assert_eq!(
+            reopened.update_settings(request).unwrap().language,
+            language
+        );
+    }
+}
+
+#[test]
+fn v8_migration_preserves_settings_and_defaults_to_system_language() {
+    use uclip_core::{Language, SCHEMA_VERSION};
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("v8.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    storage.update_settings(update(Theme::Dark, "0")).unwrap();
+    drop(storage);
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch("ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=8;")
+        .unwrap();
+    drop(connection);
+    let storage = Storage::open(&path).unwrap();
+    assert_eq!(storage.settings().unwrap().language, Language::System);
+    assert_eq!(storage.settings().unwrap().theme, Theme::Dark);
+    assert_eq!(storage.settings().unwrap().revision, "1");
+    drop(storage);
+    let connection = Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))
+            .unwrap(),
+        SCHEMA_VERSION
+    );
+}
+
+#[test]
+fn language_validation_rejects_unknown_values_and_accepts_older_requests() {
+    let old: UpdateSettings =
+        serde_json::from_str(r#"{"theme":"dark","expectedRevision":"0"}"#).unwrap();
+    assert!(old.language.is_none());
+    for language in ["fr", "zh", "EN", "", "../secret"] {
+        let input =
+            serde_json::json!({"theme":"dark", "language":language, "expectedRevision":"0"});
+        assert!(serde_json::from_value::<UpdateSettings>(input).is_err());
+    }
 }

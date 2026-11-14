@@ -1,4 +1,4 @@
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 use uclip_core::{
     AppError, BootstrapSnapshot, SettingsSnapshot, UpdateSettings, CONTRACT_VERSION, SCHEMA_VERSION,
 };
@@ -415,7 +415,7 @@ pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), AppError>
         "settings",
         tauri::WebviewUrl::App("index.html?window=settings".into()),
     )
-    .title("UClip · 设置")
+    .title(crate::desktop::settings_title(&app))
     .inner_size(720.0, 640.0)
     .min_inner_size(560.0, 460.0)
     .parent(&parent)
@@ -510,4 +510,23 @@ pub async fn update_key_bindings(
         .await?;
     let _ = app.emit("settings-changed", ());
     Ok(saved)
+}
+
+/// A resolved presentation locale. This does not mutate persisted settings.
+#[tauri::command]
+pub fn set_ui_language(
+    app: tauri::AppHandle,
+    language: uclip_core::Language,
+) -> Result<(), AppError> {
+    let resolved = match language {
+        uclip_core::Language::ZhCn => 2,
+        uclip_core::Language::En => 1,
+        uclip_core::Language::System => {
+            return Err(AppError::new(uclip_core::ErrorCode::InvalidInput))
+        }
+    };
+    app.state::<crate::desktop::DesktopState>()
+        .ui_language
+        .store(resolved, std::sync::atomic::Ordering::SeqCst);
+    crate::desktop::update_ui_language(&app)
 }

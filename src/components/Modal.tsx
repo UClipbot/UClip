@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
@@ -78,7 +79,7 @@ export function Modal({
           <div>
             <h2 id="modal-title">{title}</h2>
           </div>
-          <button className="icon-button" aria-label="关闭面板" onClick={onClose}>
+          <button className="icon-button" aria-label={t('close_panel')} onClick={onClose}>
             <Icon name="close" />
           </button>
         </div>

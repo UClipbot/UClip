@@ -4,6 +4,7 @@ fn main() {
             "bootstrap",
             "get_settings",
             "update_settings",
+            "set_ui_language",
             "history_query",
             "create_text",
             "clip_detail",

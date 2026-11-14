@@ -1,6 +1,6 @@
 //! Desktop lifetime stays native. UI only supplies settings and transient interaction guards.
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
     Mutex,
 };
 use tauri::{Manager, WindowEvent};
@@ -9,6 +9,14 @@ use uclip_core::{AppError, DesktopPreferences, ErrorCode, WindowPlacement};
 
 #[derive(Default)]
 pub struct DesktopState {
+    /// 0 = not resolved yet, 1 = English, 2 = Simplified Chinese.
+    pub ui_language: AtomicU8,
+    pub tray_labels: Mutex<
+        Option<(
+            tauri::menu::MenuItem<tauri::Wry>,
+            tauri::menu::MenuItem<tauri::Wry>,
+        )>,
+    >,
     pub preferences: Mutex<Option<DesktopPreferences>>,
     pub autostart_error: Mutex<Option<AppError>>,
     pub updating: AtomicBool,
@@ -127,14 +135,66 @@ pub fn ensure_visible(window: &tauri::WebviewWindow) -> Result<(), AppError> {
     }
     Ok(())
 }
-pub fn install_tray(app: &tauri::AppHandle) -> Result<(), AppError> {
+fn tray_text(chinese: bool) -> (&'static str, &'static str) {
+    if chinese {
+        ("显示 UClip", "退出 UClip")
+    } else {
+        ("Show UClip", "Quit UClip")
+    }
+}
+pub fn settings_title(app: &tauri::AppHandle) -> &'static str {
+    if app
+        .state::<DesktopState>()
+        .ui_language
+        .load(Ordering::SeqCst)
+        == 2
+    {
+        "UClip · 设置"
+    } else {
+        "UClip · Settings"
+    }
+}
+pub fn update_ui_language(app: &tauri::AppHandle) -> Result<(), AppError> {
+    if let Some(window) = app.get_webview_window("settings") {
+        window
+            .set_title(settings_title(app))
+            .map_err(|_| unavailable())?;
+    }
+    let state = app.state::<DesktopState>();
+    let labels = state.tray_labels.lock().map_err(|_| unavailable())?.clone();
+    let (show, quit) = tray_text(state.ui_language.load(Ordering::SeqCst) == 2);
+    // Release the state lock before calling platform menu APIs.
+    if let Some((open, exit)) = labels {
+        open.set_text(show).map_err(|_| unavailable())?;
+        exit.set_text(quit).map_err(|_| unavailable())?;
+    }
+    Ok(())
+}
+pub async fn install_tray(app: &tauri::AppHandle) -> Result<(), AppError> {
     use tauri::{
         menu::{Menu, MenuItem},
         tray::TrayIconBuilder,
     };
-    let open = MenuItem::with_id(app, "show", "显示 UClip", true, None::<&str>)
+    let state = app.state::<DesktopState>();
+    if let Ok(core) = &app.state::<crate::AppState>().core {
+        if let Ok(settings) = core.settings().await {
+            let language = match settings.language {
+                uclip_core::Language::ZhCn => 2,
+                uclip_core::Language::En => 1,
+                uclip_core::Language::System => 0,
+            };
+            // A WebView can resolve the locale while this settings read is pending.
+            // A stale startup snapshot must not overwrite that newer presentation state.
+            let _ =
+                state
+                    .ui_language
+                    .compare_exchange(0, language, Ordering::SeqCst, Ordering::SeqCst);
+        }
+    }
+    let (show_label, quit_label) = tray_text(state.ui_language.load(Ordering::SeqCst) == 2);
+    let open = MenuItem::with_id(app, "show", show_label, true, None::<&str>)
         .map_err(|_| unavailable())?;
-    let quit = MenuItem::with_id(app, "quit", "退出 UClip", true, None::<&str>)
+    let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)
         .map_err(|_| unavailable())?;
     let menu = Menu::with_items(app, &[&open, &quit]).map_err(|_| unavailable())?;
     // Existing local icon system: a simple clipboard silhouette, no remote assets.
@@ -168,6 +228,10 @@ pub fn install_tray(app: &tauri::AppHandle) -> Result<(), AppError> {
         })
         .build(app)
         .map_err(|_| unavailable())?;
+    if let Ok(mut labels) = state.tray_labels.lock() {
+        *labels = Some((open, quit));
+    }
+    update_ui_language(app)?;
     app.state::<DesktopState>()
         .tray_available
         .store(true, Ordering::SeqCst);

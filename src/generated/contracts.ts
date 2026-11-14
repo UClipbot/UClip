@@ -68,13 +68,19 @@ export type CopyResult = { copied: boolean, usageSaved: boolean, pasteRequested:
 
 export type Theme = "system" | "light" | "dark";
 
-export type SettingsSnapshot = { theme: Theme,
+export type Language = "system" | "zh-CN" | "en";
+
+export type SettingsSnapshot = { theme: Theme, language: Language,
 /**
  * Decimal string: revisions must remain exact in JavaScript.
  */
 revision: string, };
 
-export type UpdateSettings = { theme: Theme, expectedRevision: string, };
+export type UpdateSettings = { theme: Theme,
+/**
+ * Omitted by older clients when changing only the theme.
+ */
+language: Language | null, expectedRevision: string, };
 
 export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout" | "excluded" | "duplicate_name";
 

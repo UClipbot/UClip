@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { Component, type ReactNode, type RefObject } from 'react';
 
 type Anchor = { top: boolean; rows: { id: string; offset: number }[] };
@@ -127,7 +128,7 @@ export class HistoryViewport extends Component<Props, object, Snapshot> {
         ref={this.setRef}
         className={this.props.className}
         tabIndex={0}
-        aria-label="历史列表，方向键选择，空格预览"
+        aria-label={t('history_list_arrow_keys_select_space_previews')}
         aria-busy={this.props.pending}
         onScroll={this.remember}
       >

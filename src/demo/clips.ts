@@ -23,15 +23,15 @@ export interface Clip {
   size?: string;
 }
 export const collectionNames: Record<Collection, string> = {
-  work: '工作',
-  inspiration: '灵感',
-  later: '稍后再看',
+  work: 'work',
+  inspiration: 'inspiration',
+  later: 'read_later',
 };
 export const typeNames: Record<ClipType, string> = {
-  text: '文本',
-  link: '链接',
-  image: '图片',
-  file: '文件',
+  text: 'text',
+  link: 'link',
+  image: 'image',
+  file: 'file',
 };
 export const initialClips: Clip[] = [
   {
@@ -40,7 +40,7 @@ export const initialClips: Clip[] = [
     title: '让灵感，随手可得。',
     source: '备忘录',
     time: '10:42',
-    day: '今天',
+    day: 'today',
     pinned: true,
     collection: 'work',
     content:
@@ -53,7 +53,7 @@ export const initialClips: Clip[] = [
     content: 'https://linear.app/features',
     source: '浏览器',
     time: '10:38',
-    day: '今天',
+    day: 'today',
     pinned: false,
     collection: 'inspiration',
   },
@@ -65,7 +65,7 @@ export const initialClips: Clip[] = [
     image: alpineStudy,
     source: '设计工具',
     time: '10:26',
-    day: '今天',
+    day: 'today',
     pinned: false,
     collection: 'inspiration',
     size: '1200 × 780',
@@ -78,7 +78,7 @@ export const initialClips: Clip[] = [
       'function debounce<T extends (...args: never[]) => void>(\n  callback: T,\n  delay = 200,\n) {\n  let timer: ReturnType<typeof setTimeout>;\n\n  return (...args: Parameters<T>) => {\n    clearTimeout(timer);\n    timer = setTimeout(() => callback(...args), delay);\n  };\n}',
     source: '代码编辑器',
     time: '10:12',
-    day: '今天',
+    day: 'today',
     pinned: true,
     collection: 'work',
     language: 'TypeScript',
@@ -91,7 +91,7 @@ export const initialClips: Clip[] = [
       '周五 14:30 · 产品与设计评审\n\n— 确认第一版交互流程\n— 走查深色与浅色主题\n— 验证搜索和键盘操作\n— 整理下一轮反馈',
     source: '团队文档',
     time: '09:56',
-    day: '今天',
+    day: 'today',
     pinned: false,
     collection: 'work',
   },
@@ -102,7 +102,7 @@ export const initialClips: Clip[] = [
     content: '/example/design/brand-assets.zip',
     source: '文件管理器',
     time: '09:41',
-    day: '今天',
+    day: 'today',
     pinned: false,
     collection: 'work',
     size: '4.8 MB',
@@ -115,7 +115,7 @@ export const initialClips: Clip[] = [
       '设计不是添加更多，而是留下恰好的东西。\n\n把信息放在触手可及的位置，把不需要的东西留在视线之外。',
     source: '阅读笔记',
     time: '09:24',
-    day: '今天',
+    day: 'today',
     pinned: false,
     collection: 'inspiration',
   },
@@ -126,7 +126,7 @@ export const initialClips: Clip[] = [
     content: 'https://github.com/collections/design-essentials',
     source: '浏览器',
     time: '18:32',
-    day: '昨天',
+    day: 'yesterday',
     pinned: true,
     collection: 'later',
   },
@@ -137,7 +137,7 @@ export const initialClips: Clip[] = [
     content: '#B5CDA3\n\nMoss / 苔序\n带一点温度的鼠尾草绿。',
     source: '设计工具',
     time: '17:45',
-    day: '昨天',
+    day: 'yesterday',
     pinned: false,
     collection: 'inspiration',
   },
@@ -148,7 +148,7 @@ export const initialClips: Clip[] = [
     content: '先做好一件小事，再开始下一件。\n\n关掉不需要的标签页，留一点时间给自己。',
     source: '备忘录',
     time: '16:08',
-    day: '昨天',
+    day: 'yesterday',
     pinned: false,
     collection: 'later',
   },
@@ -159,7 +159,7 @@ export const initialClips: Clip[] = [
     content: 'https://v2.tauri.app/',
     source: '浏览器',
     time: '15:20',
-    day: '昨天',
+    day: 'yesterday',
     pinned: false,
     collection: 'later',
   },
@@ -170,7 +170,7 @@ export const initialClips: Clip[] = [
     content: '/example/design/交互方案_v2.fig',
     source: '文件管理器',
     time: '14:02',
-    day: '昨天',
+    day: 'yesterday',
     pinned: false,
     collection: 'later',
     size: '12.4 MB',
@@ -194,7 +194,7 @@ export function queryClips(
       return expression ? expression.test(haystack) : haystack.toLocaleLowerCase().includes(needle);
     };
   } catch {
-    return { items: [], error: '正则表达式无效，请检查后重试。' };
+    return { items: [], error: 'invalid_regular_expression_check_it_and_try_again' };
   }
   const items = clips.filter((clip) => {
     if (view === 'trash' ? !clip.deleted : clip.deleted) return false;

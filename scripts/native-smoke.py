@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Linux native WebKit smoke test. Uses only disposable data and a private session bus.
-Requires tauri-driver, WebKitWebDriver and X11. Clipboard fixtures are opt-in and isolated.
+Requires tauri-driver, WebKitWebDriver, X11 and the zh_CN.UTF-8 locale. Clipboard fixtures are opt-in and isolated.
 Build first: npm run tauri:build -- --debug
 """
 import argparse
@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='target/debug/uclip-desktop')
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
+    parser.add_argument('--language-only', action='store_true', help='Native language forms, cross-window updates, errors and restart persistence.')
     parser.add_argument('--manual-only',action='store_true',help='Isolated real manual text creation.')
     parser.add_argument('--titlebar-only',action='store_true',help='Isolated native/custom titlebar and window controls.')
     parser.add_argument('--settings-only',action='store_true',help='Independent settings window, IPC grants and integrated main chrome.')
@@ -76,6 +77,9 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix='uclip-native-') as directory:
         env = os.environ.copy()
+        # Existing fixtures address Chinese labels explicitly; do not depend on host language.
+        env['LANGUAGE'] = 'zh_CN:zh'
+        env['LC_ALL'] = 'zh_CN.UTF-8'
         for name, suffix in [('XDG_DATA_HOME', 'data'), ('XDG_CONFIG_HOME', 'config'), ('XDG_CACHE_HOME', 'cache')]:
             env[name] = str(Path(directory, suffix))
         autostart_failure = args.desktop_defaults_only and env.get('UCLIP_FIXTURE_AUTOSTART_FAILURE') == '1'
@@ -164,7 +168,7 @@ def main():
                     if selector == '[data-testid="open-settings"]':
                         switch_window('main')
                         click('[aria-label="更多选项"]')
-                    closing = request('GET', f'/session/{session}/window') if selector == '[aria-label="关闭面板"]' and execute('return document.body.classList.contains("settings-window")') else None
+                    closing = request('GET', f'/session/{session}/window') if selector in ['[aria-label="关闭面板"]', '.modal-heading .icon-button'] and execute('return document.body.classList.contains("settings-window")') else None
                     request('POST', f'/session/{session}/element/{element(selector)}/click', {})
                     if selector in ['[data-testid="open-settings"]', '[data-testid="footer-settings"]']:
                         wait_for(lambda: len(request('GET', f'/session/{session}/window/handles')) == 2, 'settings window created')
@@ -189,6 +193,17 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.language_only:
+                    from language_native_check import run, verify_restart
+                    saved = run(invoke, invoke_current, execute, execute_main, click, wait_for, capture, directory, env)
+                    assert invoke('quit_app')['ok']
+                    wait_for(lambda: not owned_processes(), 'language test process exits')
+                    try: request('DELETE', f'/session/{session}')
+                    except (OSError, RuntimeError): pass
+                    session = start()
+                    wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'language restart UI')
+                    verify_restart(invoke, execute, wait_for, saved)
+                    return
                 if args.settings_only:
                     from settings_native_check import run
                     run(invoke, invoke_current, execute, execute_main, click, switch_window, wait_for, capture, env, directory)

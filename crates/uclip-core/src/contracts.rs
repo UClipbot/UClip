@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -11,10 +11,22 @@ pub enum Theme {
     Dark,
 }
 
+/// Presentation preference; unsupported system languages fall back to English.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub enum Language {
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+    #[serde(rename = "en")]
+    En,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsSnapshot {
     pub theme: Theme,
+    pub language: Language,
     /// Decimal string: revisions must remain exact in JavaScript.
     pub revision: String,
 }
@@ -23,6 +35,8 @@ pub struct SettingsSnapshot {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateSettings {
     pub theme: Theme,
+    /// Omitted by older clients when changing only the theme.
+    pub language: Option<Language>,
     pub expected_revision: String,
 }
 

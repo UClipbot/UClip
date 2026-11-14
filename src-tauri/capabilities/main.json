@@ -10,6 +10,7 @@
     "allow-bootstrap",
     "allow-get-settings",
     "allow-update-settings",
+    "allow-set-ui-language",
     "allow-history-query",
     "allow-clip-detail",
     "allow-clipboard-status",

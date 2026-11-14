@@ -34,6 +34,7 @@ fn main() {
         ClipboardStatus::decl(&config),
         CopyResult::decl(&config),
         Theme::decl(&config),
+        Language::decl(&config),
         SettingsSnapshot::decl(&config),
         UpdateSettings::decl(&config),
         ErrorCode::decl(&config),

@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { setLocale } from '../i18n';
+beforeEach(() => setLocale('zh-CN'));
 import { bindingError, DEFAULT_KEYS, matchesKey } from './keyboard';
 const event = {
   code: 'KeyK',
@@ -38,10 +40,10 @@ describe('window shortcut boundaries', () => {
   });
   it('rejects duplicate assignments, system editing keys and plain typing for global actions', () => {
     expect(bindingError(DEFAULT_KEYS)).toBe('');
-    expect(bindingError({ ...DEFAULT_KEYS, preview: DEFAULT_KEYS.copy })).toContain('重复');
+    expect(bindingError({ ...DEFAULT_KEYS, preview: DEFAULT_KEYS.copy })).toContain('\u91cd\u590d');
     expect(
       bindingError({ ...DEFAULT_KEYS, copy: { ...DEFAULT_KEYS.search, code: 'KeyC' } }),
-    ).toContain('系统文本编辑');
+    ).toContain('\u7cfb\u7edf\u6587\u672c\u7f16\u8f91');
     expect(
       bindingError({ ...DEFAULT_KEYS, search: { ...DEFAULT_KEYS.copy, code: 'Space' } }),
     ).toContain('Ctrl/Cmd');

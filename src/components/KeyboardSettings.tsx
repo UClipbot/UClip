@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { useEffect, useState } from 'react';
 import type { KeyBindings, KeyboardSnapshot, UpdateKeyBindings } from '../generated/contracts';
 import { DEFAULT_KEYS, bindingError, formatKey, keyLabels } from '../platform/keyboard';
@@ -25,18 +26,20 @@ export function KeyboardSettings({
   const error = bindingError(draft);
   return (
     <details className="about-section" open={expanded || undefined}>
-      <summary>窗口内快捷键</summary>
+      <summary>{t('window_shortcuts')}</summary>
       <p className="settings-feedback">
-        点击组合后按下新按键。输入法、菜单与输入框的编辑行为优先；Esc 始终保留退出路径。
+        {t(
+          'click_a_shortcut_and_press_new_keys_input_methods_menus_and_text_editing_take_priority_esc_always_provides_a_way_out',
+        )}
       </p>
       {(Object.keys(keyLabels) as (keyof KeyBindings)[]).map((action) => (
         <div className="setting-row" key={action}>
-          <span>{keyLabels[action]}</span>
+          <span>{t(keyLabels[action])}</span>
           <button
             className="secondary-button"
             type="button"
             disabled={!snapshot || busy}
-            aria-label={`修改${keyLabels[action]}快捷键`}
+            aria-label={t('change_shortcut_for_0', { 0: t(keyLabels[action]) })}
             aria-pressed={recording === action}
             onClick={() => {
               setRecording(action);
@@ -47,7 +50,7 @@ export function KeyboardSettings({
               event.preventDefault();
               event.stopPropagation();
               if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) {
-                setFeedback('请先结束输入法组合。');
+                setFeedback('finish_composing_text_first');
                 return;
               }
               if (event.code === 'Escape') {
@@ -57,7 +60,7 @@ export function KeyboardSettings({
               if (/^(Control|Shift|Alt|Meta)(Left|Right)$/.test(event.code)) return;
               const mac = primary === '⌘';
               if (mac ? event.ctrlKey : event.metaKey) {
-                setFeedback('请使用当前平台的 Ctrl/Cmd 修饰键。');
+                setFeedback('use_the_ctrl_cmd_modifier_for_this_platform');
                 return;
               }
               setDraft({
@@ -72,7 +75,7 @@ export function KeyboardSettings({
               setRecording(null);
             }}
           >
-            {recording === action ? '请按键…' : formatKey(draft[action], primary)}
+            {recording === action ? t('press_keys') : formatKey(draft[action], primary)}
           </button>
         </div>
       ))}
@@ -84,10 +87,10 @@ export function KeyboardSettings({
           onClick={() => {
             setDraft(DEFAULT_KEYS);
             setRecording(null);
-            setFeedback('默认组合尚未保存。');
+            setFeedback('default_shortcuts_have_not_been_saved_yet');
           }}
         >
-          恢复默认组合
+          {t('restore_default_shortcuts')}
         </button>
         <button
           className="primary-button"
@@ -97,15 +100,15 @@ export function KeyboardSettings({
           onClick={() => {
             if (snapshot)
               void save({ bindings: draft, expectedRevision: snapshot.revision })
-                .then(() => setFeedback('窗口内快捷键已保存。'))
+                .then(() => setFeedback('window_shortcuts_saved'))
                 .catch((error) => setFeedback(safeError(error).message));
           }}
         >
-          保存窗口快捷键
+          {t('save_window_shortcuts')}
         </button>
       </div>
       <p className="settings-feedback" role="status">
-        {error || feedback}
+        {t(error || feedback)}
       </p>
     </details>
   );

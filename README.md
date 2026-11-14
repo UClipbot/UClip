@@ -1,60 +1,63 @@
 # UClip
 
-UClip is a local-first clipboard manager for saving copied content, finding it quickly, and pasting it again. History stays on your computer.
+English | [Simplified Chinese](README.zh-CN.md)
+
+UClip is a local-first clipboard manager. Save what you copy, then quickly search, organize, and paste it again. Your history stays on your device.
 
 ## Features
 
-- **Clipboard history:** keep copied text, images, and file or folder references across restarts.
-- **Quick search:** find entries by content or type, with regular expression support.
-- **Copy and paste:** copy a saved entry again, or paste it into the previous application on Linux X11.
-- **Capture controls:** pause or resume capture, set exclusions, and choose a history limit.
-- **Manual entries:** save text snippets directly.
-- **Pins and deduplication:** keep frequently used entries and remove unpinned duplicates from pinned history.
-- **Collections:** create and rename collections, then move or copy entries between them.
-- **Custom shortcuts:** configure search, copy, preview, deletion, and navigation keys.
-- **Desktop integration:** use the tray or a shortcut to reopen the window, with pinning, hide-on-blur, and login startup options.
-- **Window appearance:** choose light or dark themes and native or custom title bars.
+- **Clipboard history**: Keep text, images, and file or folder references across restarts.
+- **Quick search**: Search by content and type, with regular expression support.
+- **Copy and paste**: Copy history back to the clipboard. Linux X11 also supports pasting into the original app.
+- **Capture controls**: Pause or resume capture, set exclusion rules, and limit history capacity.
+- **Manual entries**: Create text records for snippets you use often.
+- **Pins and deduplication**: Keep useful content pinned and remove its unpinned duplicates from the pinned view.
+- **Collections**: Create and rename collections, and move or copy records between them.
+- **Custom shortcuts**: Adjust search, copy, preview, delete, and navigation shortcuts.
+- **Desktop integration**: Show the window from the tray or a shortcut, keep it on top, hide on blur, and launch at login.
+- **Interface languages**: Simplified Chinese and English. The default follows your system language; change it in **Settings → Appearance → Language**. Your choice persists across restarts.
+- **Appearance**: Light and dark themes, with native or custom title bars.
 
-## Getting started
+## Usage
 
-1. Open the app and enable capture.
-2. Copy content in another application. New copies appear in the history list.
-3. Search for an entry and press Enter or click Copy, then paste it into your destination application.
-4. On Linux X11, press Ctrl+Shift+V to open the window and choose the action to paste into the previous application.
+1. Launch UClip and enable **Record future copies** in **Settings → Capture**.
+2. Copy content in other apps. New copies appear in your history.
+3. Search and select a record, then press Enter or click Copy. Paste it in the target app.
+4. On Linux X11, use Ctrl+Shift+V to show UClip, then choose **Paste to original app**.
 
-File entries store references, so the original files must still be available when used.
+File records store references. The original files must still exist when you use them.
 
-## Default shortcuts
+## Common shortcuts
 
-| Action | Shortcut |
+| Action | Default shortcut |
 | --- | --- |
 | Search | Ctrl/Cmd+K |
 | Settings | Ctrl/Cmd+, |
-| Copy the selected entry | Enter |
-| Preview full content | Space |
-| Delete the selected entry | Delete |
-| Go back, clear search, or hide the window | Esc |
+| Copy selected record | Enter |
+| View full content | Space |
+| Delete selected record | Delete |
+| Go back, clear search, or hide window | Esc |
 
 ## Platforms
 
-| Platform | Status |
+| Platform | Current status |
 | --- | --- |
-| Linux X11 | Native capture and automatic pasting verified on Linux Mint 22 |
-| Linux Wayland | Local UI and history queries verified; capture and automatic pasting are unavailable |
-| Windows / macOS | Platform adapters are in development; native acceptance testing is pending |
+| Linux X11 | Natively verified on Linux Mint 22; capture and automatic paste are supported |
+| Linux Wayland | Local UI and history queries verified; capture and automatic paste are not supported yet |
+| Windows / macOS | Platform adapters exist; native acceptance testing is pending |
 
-This is a development version. Cloud synchronization, a CLI, and migration from earlier products are not available yet.
+UClip is in development. Cloud sync, CLI, and migration from older data are not available yet.
 
 ## Run from source
 
-Install Node.js, Rust, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform, then run:
+Install Node.js, Rust, and the [Tauri build prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform, then run:
 
 ```bash
 npm ci
 npm run tauri:dev
 ```
 
-Use `npm run dev` to try the in-memory sample interface in a browser.
+Use `npm run dev` for the in-memory browser preview. The browser remembers only language and appearance preferences; reloading resets sample records.
 
 ## Build installers
 

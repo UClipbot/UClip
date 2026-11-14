@@ -9,6 +9,7 @@ mkdirSync('docs/previews', { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
   viewport: { width: 640, height: 650 },
+  locale: 'zh-CN',
   colorScheme: 'dark',
   reducedMotion: 'reduce',
   permissions: ['clipboard-read', 'clipboard-write'],

@@ -2,9 +2,9 @@ use std::{path::Path, time::Duration};
 
 use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
-use crate::{AppError, ErrorCode, SettingsSnapshot, Theme, UpdateSettings};
+use crate::{AppError, ErrorCode, Language, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 const APPLICATION_ID: i64 = 0x434c4e58; // Stable database format ID (CLNX), independent of the product name.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -126,6 +126,10 @@ impl Storage {
             tx.execute_batch("ALTER TABLE clips ADD COLUMN source_app TEXT CHECK(source_app IS NULL OR length(CAST(source_app AS BLOB)) BETWEEN 1 AND 256);")?;
             tx.pragma_update(None, "user_version", 8)?;
         }
+        if version < 9 {
+            tx.execute_batch("ALTER TABLE settings ADD COLUMN language TEXT NOT NULL DEFAULT 'system' CHECK(language IN ('system','zh-CN','en'));")?;
+            tx.pragma_update(None, "user_version", 9)?;
+        }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -163,10 +167,10 @@ impl Storage {
     }
 
     pub fn settings(&self) -> Result<SettingsSnapshot, AppError> {
-        let (theme, revision): (String, i64) = self.connection.query_row(
-            "SELECT theme, revision FROM settings WHERE singleton = 1",
+        let (theme, language, revision): (String, String, i64) = self.connection.query_row(
+            "SELECT theme, language, revision FROM settings WHERE singleton = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
         let theme = match theme.as_str() {
             "system" => Theme::System,
@@ -174,11 +178,18 @@ impl Storage {
             "dark" => Theme::Dark,
             _ => return Err(AppError::new(ErrorCode::Storage)),
         };
+        let language = match language.as_str() {
+            "system" => Language::System,
+            "zh-CN" => Language::ZhCn,
+            "en" => Language::En,
+            _ => return Err(AppError::new(ErrorCode::Storage)),
+        };
         if revision < 0 {
             return Err(AppError::new(ErrorCode::Storage));
         }
         Ok(SettingsSnapshot {
             theme,
+            language,
             revision: revision.to_string(),
         })
     }
@@ -200,12 +211,17 @@ impl Storage {
             Theme::Light => "light",
             Theme::Dark => "dark",
         };
+        let language = request.language.map(|value| match value {
+            Language::System => "system",
+            Language::ZhCn => "zh-CN",
+            Language::En => "en",
+        });
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = tx.execute(
-            "UPDATE settings SET theme = ?1, revision = revision + 1 WHERE singleton = 1 AND revision = ?2",
-            params![theme, revision],
+            "UPDATE settings SET theme = ?1, language = coalesce(?3, language), revision = revision + 1 WHERE singleton = 1 AND revision = ?2",
+            params![theme, revision, language],
         )?;
         if changed != 1 {
             return Err(AppError::new(ErrorCode::Conflict));

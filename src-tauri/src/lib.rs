@@ -58,6 +58,7 @@ pub fn run() {
             commands::bootstrap,
             commands::get_settings,
             commands::update_settings,
+            commands::set_ui_language,
             commands::history_query,
             commands::create_text,
             commands::clip_detail,
@@ -170,7 +171,7 @@ pub fn run() {
                 .build();
                 if result.is_ok() {
                     let _ = desktop::restore(&handle).await;
-                    let _ = desktop::install_tray(&handle);
+                    let _ = desktop::install_tray(&handle).await;
                 }
                 if result.is_err() {
                     eprintln!("desktop_window_creation_failed");

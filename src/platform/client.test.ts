@@ -8,13 +8,16 @@ test('unknown errors and server messages never expose arbitrary content', () => 
   expect(safeError({ code: 'invented', message: 'secret' }).code).toBe('unavailable');
 });
 
-test('version mismatch fails instead of accepting an incompatible snapshot', async () => {
-  vi.stubGlobal('window', {});
-  mockIPC(() => ({ contractVersion: 999 }));
-  try {
-    await expect(desktop.bootstrap()).rejects.toMatchObject({ code: 'unavailable' });
-  } finally {
-    clearMocks();
-    vi.unstubAllGlobals();
-  }
-});
+test.each([1, 999])(
+  'contract version %s fails instead of accepting an incompatible snapshot',
+  async (contractVersion) => {
+    vi.stubGlobal('window', {});
+    mockIPC(() => ({ contractVersion }));
+    try {
+      await expect(desktop.bootstrap()).rejects.toMatchObject({ code: 'unavailable' });
+    } finally {
+      clearMocks();
+      vi.unstubAllGlobals();
+    }
+  },
+);

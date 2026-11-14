@@ -1,3 +1,4 @@
+import { t, formatHistoryDate, formatHistoryTime } from '../i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { safeError } from './client';
@@ -289,16 +290,13 @@ export function useHistory(
     native: true,
     type: item.kind === 'files' ? 'file' : item.kind,
     title: item.kind === 'files' ? item.preview : '',
-    content: item.preview,
-    source: item.manual ? '手动创建' : (item.sourceApp ?? '来源未知'),
-    time: new Date(Number(item.capturedAt)).toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-    }),
-    day:
-      new Date(Number(item.capturedAt)).toDateString() === new Date().toDateString()
-        ? '今天'
-        : '昨天',
+    content:
+      item.kind === 'image'
+        ? t('image_0_1', { 0: item.width ?? 0, 1: item.height ?? 0 })
+        : item.preview,
+    source: item.manual ? t('manually_created') : (item.sourceApp ?? t('unknown_source')),
+    time: formatHistoryTime(Number(item.capturedAt)),
+    day: formatHistoryDate(Number(item.capturedAt)),
     pinned: item.pinned,
     collection: null,
     collectionId: item.collectionId ?? undefined,
@@ -306,7 +304,7 @@ export function useHistory(
       item.kind === 'image'
         ? `${item.width} × ${item.height}`
         : item.kind === 'files'
-          ? `${item.fileCount} 项`
+          ? t('0_items', { 0: item.fileCount })
           : undefined,
     image: thumbnails[item.id],
   }));

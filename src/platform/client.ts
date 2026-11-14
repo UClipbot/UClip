@@ -2,6 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import type {
   AppError,
   BootstrapSnapshot,
+  Language,
   ErrorCode,
   SettingsSnapshot,
   UpdateSettings,
@@ -37,29 +38,33 @@ export function safeError(error: unknown): AppError {
   ) {
     // Never display unknown renderer/plugin errors or stringify arbitrary objects.
     const messages: Record<ErrorCode, string> = {
-      storage: '本地保存失败，请检查磁盘空间和权限。',
-      unsupported_schema: '请使用较新版本打开这些数据。',
-      foreign_database: '目标文件不属于此应用。',
-      conflict: '数据已发生变化，请刷新后重试。',
-      invalid_input: '请求参数无效。',
-      busy: '本地服务繁忙，请稍后重试。',
-      limit_exceeded: '内容或历史容量超出限制，未截断保存。',
-      invalid_pattern: '表达式无效；不支持回溯引用和环视。',
-      not_found: '记录已不存在，请刷新。',
-      clipboard: '系统剪贴板暂不可用，请重试。',
-      missing_file: '部分文件或文件夹已失效，未写入剪贴板。',
-      restricted: '当前平台或权限不支持此操作。',
-      target_lost: '原应用目标已变化，未自动粘贴。',
-      shortcut_conflict: '快捷键重复、被占用或属于系统保留组合，原设置保持不变。',
-      excluded: '内容命中排除规则，未保存。',
-      duplicate_name: '分类名称已存在，请使用其他名称。',
-      query_timeout: '搜索超时，请缩小范围或简化表达式。',
-      unavailable: '本地服务不可用，请重启桌面应用。',
+      storage: 'could_not_save_locally_check_disk_space_and_permissions',
+      unsupported_schema: 'open_this_data_with_a_newer_version',
+      foreign_database: 'this_database_does_not_belong_to_uclip',
+      conflict: 'data_has_changed_refresh_and_try_again',
+      invalid_input: 'invalid_request_parameters',
+      busy: 'the_local_service_is_busy_try_again_later',
+      limit_exceeded: 'content_or_history_exceeds_the_limit_nothing_was_truncated_to_fit',
+      invalid_pattern: 'invalid_expression_backreferences_and_lookaround_are_not_supported',
+      not_found: 'this_record_no_longer_exists_refresh_the_list',
+      clipboard: 'the_system_clipboard_is_unavailable_try_again',
+      missing_file: 'some_files_or_folders_no_longer_exist_the_clipboard_was_not_changed',
+      restricted: 'this_platform_or_its_permissions_do_not_support_this_action',
+      target_lost: 'the_original_app_target_changed_automatic_paste_was_not_performed',
+      shortcut_conflict:
+        'the_shortcut_is_duplicated_occupied_or_reserved_by_the_system_previous_settings_were_kept',
+      excluded: 'content_matched_an_exclusion_rule_and_was_not_saved',
+      duplicate_name: 'a_collection_with_this_name_already_exists_choose_another_name',
+      query_timeout: 'search_timed_out_narrow_the_scope_or_simplify_the_expression',
+      unavailable: 'the_local_service_is_unavailable_restart_the_desktop_app',
     };
     const code = error.code as ErrorCode;
     return { code, message: messages[code] };
   }
-  return { code: 'unavailable', message: '无法连接桌面服务。请通过 Tauri 启动应用。' };
+  return {
+    code: 'unavailable',
+    message: 'cannot_connect_to_the_desktop_service_start_the_app_through_tauri',
+  };
 }
 
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -74,14 +79,16 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 export const desktop = {
   async bootstrap(): Promise<BootstrapSnapshot> {
     const snapshot = await call<BootstrapSnapshot>('bootstrap');
-    if (snapshot.contractVersion !== 1) {
+    if (snapshot.contractVersion !== 2) {
       throw {
         code: 'unavailable',
-        message: '界面与桌面服务版本不匹配，请重启或重新安装。',
+        message: 'the_interface_and_desktop_service_versions_do_not_match_restart_or_reinstall',
       } satisfies AppError;
     }
     return snapshot;
   },
+  setUiLanguage: (language: Exclude<Language, 'system'>) =>
+    call<void>('set_ui_language', { language }),
   settings: () => call<SettingsSnapshot>('get_settings'),
   updateSettings: (request: UpdateSettings) =>
     call<SettingsSnapshot>('update_settings', { request }),

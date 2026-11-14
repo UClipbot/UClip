@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { desktop, safeError } from './client';
 import { latestQuery } from './latest';
 import { useSettingsRefresh } from './useSettingsRefresh';
-import type { BootstrapSnapshot, Theme } from '../generated/contracts';
+import { getLocale, setLocale, subscribeLocale, resolveLanguage } from '../i18n';
+import type { BootstrapSnapshot, Language, Theme } from '../generated/contracts';
 
 const native = isTauri();
 function previewTheme(): Theme {
@@ -16,7 +17,20 @@ function previewTheme(): Theme {
   }
   return 'dark';
 }
+function previewLanguage(): Language {
+  if (!native) {
+    try {
+      const value = localStorage.getItem('uclip-preview-language');
+      if (value === 'system' || value === 'zh-CN' || value === 'en') return value;
+    } catch {
+      /* Storage is optional in the preview. */
+    }
+  }
+  return 'system';
+}
 export function useAppearance() {
+  const locale = useSyncExternalStore(subscribeLocale, getLocale);
+  const [language, setLanguage] = useState<Language>(previewLanguage);
   const [snapshot, setSnapshot] = useState<BootstrapSnapshot | null>(null);
   const [theme, setTheme] = useState<Theme>(previewTheme);
   const [error, setError] = useState('');
@@ -35,6 +49,7 @@ export function useAppearance() {
       (value) => {
         setSnapshot(value);
         setTheme(value.settings.theme);
+        setLanguage(value.settings.language);
         setError('');
         setLoading(false);
       },
@@ -65,12 +80,27 @@ export function useAppearance() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
-  async function saveTheme(value: Theme) {
+  useEffect(() => {
+    const update = () => setLocale(resolveLanguage(language, navigator.languages));
+    update();
+    window.addEventListener('languagechange', update);
+    return () => window.removeEventListener('languagechange', update);
+  }, [language]);
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    // Only the main window supplies the resolved system language to native menus.
+    if (native && snapshot && new URLSearchParams(location.search).get('window') !== 'settings') {
+      void desktop.setUiLanguage(resolveLanguage(language, navigator.languages)).catch(() => {});
+    }
+  }, [language, locale, !!snapshot]);
+  async function savePreferences(value: { theme?: Theme; language?: Language }) {
     if (mutationPending.current || (native && !snapshot)) return false;
     if (!native) {
-      setTheme(value);
+      if (value.theme) setTheme(value.theme);
+      if (value.language) setLanguage(value.language);
       try {
-        localStorage.setItem('uclip-preview-theme', value);
+        if (value.theme) localStorage.setItem('uclip-preview-theme', value.theme);
+        if (value.language) localStorage.setItem('uclip-preview-language', value.language);
       } catch {
         /* In-memory preview is sufficient. */
       }
@@ -79,13 +109,17 @@ export function useAppearance() {
     gate.invalidate();
     mutationPending.current = true;
     setSaving(true);
+    let committed = false;
     try {
       const settings = await desktop.updateSettings({
-        theme: value,
+        theme: value.theme ?? snapshot!.settings.theme,
+        language: value.language ?? null,
         expectedRevision: snapshot!.settings.revision,
       });
       setSnapshot((current) => current && { ...current, settings });
       setTheme(settings.theme);
+      setLanguage(settings.language);
+      committed = true;
       setError('');
       return true;
     } catch (failure) {
@@ -96,17 +130,22 @@ export function useAppearance() {
       mutationPending.current = false;
       setLoading(false);
       setSaving(false);
+      // A settings notification can arrive while a save is pending. Re-read after success.
+      if (committed) await refresh();
     }
   }
   return {
     native,
     theme,
+    language,
+    locale,
     dark: theme === 'dark' || (theme === 'system' && systemDark),
     snapshot,
     error,
     saving,
     loading,
-    saveTheme,
+    saveTheme: (theme: Theme) => savePreferences({ theme }),
+    saveLanguage: (language: Language) => savePreferences({ language }),
     refresh,
   };
 }
