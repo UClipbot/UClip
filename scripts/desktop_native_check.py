@@ -206,7 +206,9 @@ def run_keyboard(c):
     assert c.action('desktop_status')['keyboard']==snapshot
     c.click('[data-testid="open-settings"]')
     c.click('[data-settings-page="keyboard"]')
+    c.activate(c.window('^UClip · 设置$'))
     c.click('[aria-label="修改复制快捷键"]')
+    wait(lambda:c.execute('return document.hasFocus() && document.activeElement?.getAttribute("aria-label")==="修改复制快捷键" && document.activeElement.getAttribute("aria-pressed")==="true"'),'native settings recorder has keyboard focus')
     c.key('key','--clearmodifiers','ctrl+Return')
     c.click('[data-testid="save-window-keys"]')
     saved=wait(lambda:(p if (p:=c.action('desktop_status')['keyboard'])['bindings']['copy']['primary'] else None),'custom copy binding commits')

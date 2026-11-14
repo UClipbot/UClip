@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 use crate::{AppError, ErrorCode, SettingsSnapshot, Theme, UpdateSettings};
 
 pub const SCHEMA_VERSION: u32 = 8;
-const APPLICATION_ID: i64 = 0x434c4e58; // CLNX: never open the previous application's database.
+const APPLICATION_ID: i64 = 0x434c4e58; // Stable database format ID (CLNX), independent of the product name.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
 pub struct Storage {
