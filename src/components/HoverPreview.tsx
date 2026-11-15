@@ -65,7 +65,7 @@ export function HoverPreview({
       clearTimeout(openTimer);
       openTimer = undefined;
       clearTimeout(closeTimer);
-      closeTimer = setTimeout(() => dismiss(false), native ? 450 : 180);
+      closeTimer = setTimeout(() => dismiss(), native ? 450 : 180);
     };
     const enter = (event: PointerEvent) => {
       if (event.pointerType === 'touch') return;

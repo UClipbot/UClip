@@ -26,6 +26,7 @@ pub(super) struct Captured {
     pub(super) source_app: Option<String>,
 }
 use tokio::sync::oneshot;
+#[cfg(not(target_os = "macos"))]
 pub(super) const MARKER: &str = "application/x-uclip-internal";
 type Reply<T> = oneshot::Sender<Result<T, AppError>>;
 enum Request {
