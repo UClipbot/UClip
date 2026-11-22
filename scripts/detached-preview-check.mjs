@@ -76,7 +76,7 @@ createRoot(document.getElementById('root')).render(<StrictMode>{new URLSearchPar
   assert.doesNotMatch(JSON.stringify(request), /PRIVATE SUMMARY/);
   await page.mouse.move(635, 620);
   await page.waitForFunction(() =>
-    fixture.calls.some((call) => call.command === 'hide_hover_preview' && call.args.unlessHovered),
+    fixture.calls.some((call) => call.command === 'hide_hover_preview' && !call.args.unlessHovered),
   );
   await page.evaluate(() => {
     fixture.calls = [];

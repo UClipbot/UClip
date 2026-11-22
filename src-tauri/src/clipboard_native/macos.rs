@@ -3,6 +3,8 @@ use objc2::{rc::autoreleasepool, runtime::ProtocolObject};
 use objc2_app_kit::{NSPasteboard, NSPasteboardItem};
 use objc2_foundation::{NSArray, NSData, NSString};
 
+const MARKER: &str = "com.uclip.internal";
+
 #[path = "macos_source.rs"]
 mod source;
 
@@ -32,8 +34,8 @@ impl Context {
             if crate::clipboard::sensitive(&names, |name| buffer(&board, name, 16)) {
                 return Ok(None);
             }
-            if names.iter().any(|n| n == crate::clipboard::MARKER)
-                && buffer(&board, crate::clipboard::MARKER, 64).is_ok_and(|v| v == marker)
+            if names.iter().any(|n| n == MARKER)
+                && buffer(&board, MARKER, 64).is_ok_and(|v| v == marker)
             {
                 return Ok(None);
             }
@@ -92,10 +94,8 @@ impl Context {
             for (name, bytes) in representations {
                 let item = NSPasteboardItem::new();
                 if !item.setData_forType(&NSData::with_bytes(&bytes), &NSString::from_str(name))
-                    || !item.setData_forType(
-                        &NSData::with_bytes(marker),
-                        &NSString::from_str(crate::clipboard::MARKER),
-                    )
+                    || !item
+                        .setData_forType(&NSData::with_bytes(marker), &NSString::from_str(MARKER))
                 {
                     return Err(error());
                 }
