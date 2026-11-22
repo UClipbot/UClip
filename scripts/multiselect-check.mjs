@@ -69,6 +69,26 @@ try {
   await page.locator('.detail-panel').waitFor({ state: 'detached' });
   await rows.nth(0).click({ modifiers: ['Control'] });
   assert.equal(await page.locator('.clip-row.selected').count(), 0);
+  const search = page.locator('#history-search');
+  const toolbar = page.locator('#history-search-panel');
+  assert.equal(await toolbar.isVisible(), true);
+  await page.keyboard.press('Control+f');
+  await toolbar.waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('.filter-bar').count(), 0);
+  await page.keyboard.press('Control+f');
+  await search.waitFor();
+  await page.waitForFunction(() => document.activeElement?.id === 'history-search');
+  await search.fill('no-such-item-123');
+  await rows.first().waitFor({ state: 'detached' });
+  assert.equal(await page.getByRole('button', { name: /^(Reset|Clear search)$/ }).count(), 0);
+  await page.keyboard.press('Control+f');
+  await toolbar.waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('.filter-bar').count(), 0);
+  await page.waitForFunction(() => document.activeElement?.matches('.history-scroll'));
+  await rows.first().waitFor();
+  await page.keyboard.press('Control+f');
+  await search.waitFor();
+  assert.equal(await search.inputValue(), '');
   // Ctrl+C in the search field retains the browser's normal text-copy behavior.
   await page.locator('#history-search').fill('search text');
   await page.locator('#history-search').selectText();
@@ -98,6 +118,22 @@ try {
   await rows.nth(1).click({ modifiers: ['Control'] });
   await page.locator('#history-search').fill('no-such-item-123');
   await page.waitForFunction(() => !document.querySelector('.clip-row.selected'));
+  await page.getByTestId('footer-settings').click();
+  const showByDefault = page.getByRole('checkbox', { name: 'Show search and filters by default' });
+  assert.equal(await showByDefault.isChecked(), true);
+  await showByDefault.uncheck();
+  await page.reload();
+  await rows.first().waitFor();
+  assert.equal(await toolbar.isVisible(), false);
+  await page.locator('.search-toggle').click();
+  await toolbar.waitFor();
+  await page.reload();
+  await rows.first().waitFor();
+  assert.equal(await toolbar.isVisible(), false);
+  await page.getByTestId('footer-settings').click();
+  await showByDefault.check();
+  await page.reload();
+  await toolbar.waitFor();
   assert.deepEqual(errors, []);
   console.log(
     'PASS multi-selection: light/dark, toggle/range/arrows/select-all, Ctrl+C merged copy, Delete/undo, minimal context menu, blank deselection, native input copy, query reset',

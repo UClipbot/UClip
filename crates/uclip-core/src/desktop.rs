@@ -11,6 +11,61 @@ pub struct WindowPlacement {
     pub maximized: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuxiliaryWindow {
+    Settings,
+    QuickPaste,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AuxiliaryWindowSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl AuxiliaryWindow {
+    pub const MAXIMUM_DIMENSION: u32 = 4096;
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Settings => "settings",
+            Self::QuickPaste => "quick-paste",
+        }
+    }
+
+    pub fn default_size(self) -> AuxiliaryWindowSize {
+        match self {
+            Self::Settings => AuxiliaryWindowSize {
+                width: 720,
+                height: 640,
+            },
+            Self::QuickPaste => AuxiliaryWindowSize {
+                width: 520,
+                height: 360,
+            },
+        }
+    }
+
+    pub fn minimum_size(self) -> AuxiliaryWindowSize {
+        match self {
+            Self::Settings => AuxiliaryWindowSize {
+                width: 560,
+                height: 460,
+            },
+            Self::QuickPaste => AuxiliaryWindowSize {
+                width: 360,
+                height: 290,
+            },
+        }
+    }
+
+    pub fn accepts(self, size: AuxiliaryWindowSize) -> bool {
+        let minimum = self.minimum_size();
+        (minimum.width..=Self::MAXIMUM_DIMENSION).contains(&size.width)
+            && (minimum.height..=Self::MAXIMUM_DIMENSION).contains(&size.height)
+    }
+}
+
 impl Storage {
     /// Consume the fresh-install default before an OS side effect. Never re-enable a
     /// user's disabled login item on later launches, including after a failed attempt.
@@ -50,6 +105,79 @@ impl Storage {
         }
         tx.commit()?;
         self.desktop_preferences()
+    }
+
+    pub fn quick_paste_preferences(&self) -> Result<crate::QuickPastePreferences, AppError> {
+        Ok(self.connection.query_row(
+            "SELECT shortcut,include_pinned,revision FROM quick_paste_preferences WHERE singleton=1",
+            [],
+            |r| Ok(crate::QuickPastePreferences {
+                shortcut: r.get(0)?,
+                include_pinned: r.get(1)?,
+                revision: r.get::<_, i64>(2)?.to_string(),
+            }),
+        )?)
+    }
+
+    pub fn update_quick_paste_preferences(
+        &mut self,
+        request: crate::UpdateQuickPastePreferences,
+    ) -> Result<crate::QuickPastePreferences, AppError> {
+        let revision = crate::history::mutation_revision(&request.expected_revision)?;
+        if request.shortcut.as_ref().is_some_and(|value| {
+            value.trim().is_empty() || value.len() > 100 || value.chars().any(char::is_control)
+        }) {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        if self.connection.execute(
+            "UPDATE quick_paste_preferences SET shortcut=?1,include_pinned=?2,revision=revision+1
+             WHERE singleton=1 AND revision=?3",
+            params![request.shortcut, request.include_pinned, revision],
+        )? != 1
+        {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        self.quick_paste_preferences()
+    }
+
+    pub fn auxiliary_window_size(
+        &self,
+        window: AuxiliaryWindow,
+    ) -> Result<AuxiliaryWindowSize, AppError> {
+        let saved = self
+            .connection
+            .query_row(
+                "SELECT width,height FROM auxiliary_window_sizes WHERE window=?1",
+                [window.label()],
+                |row| {
+                    Ok(AuxiliaryWindowSize {
+                        width: row.get(0)?,
+                        height: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?;
+        let size = saved.unwrap_or_else(|| window.default_size());
+        if !window.accepts(size) {
+            return Err(AppError::new(ErrorCode::Storage));
+        }
+        Ok(size)
+    }
+
+    pub fn save_auxiliary_window_size(
+        &mut self,
+        window: AuxiliaryWindow,
+        size: AuxiliaryWindowSize,
+    ) -> Result<(), AppError> {
+        if !window.accepts(size) {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        self.connection.execute(
+            "INSERT INTO auxiliary_window_sizes (window,width,height) VALUES(?1,?2,?3)
+             ON CONFLICT(window) DO UPDATE SET width=excluded.width,height=excluded.height",
+            params![window.label(), size.width, size.height],
+        )?;
+        Ok(())
     }
 
     pub fn window_placement(&self) -> Result<Option<WindowPlacement>, AppError> {

@@ -5,8 +5,8 @@ import subprocess
 import time
 
 
-def run(invoke, invoke_current, execute, execute_main, click, switch_window, wait, capture, env, directory):
-    wait(lambda: execute('return !!document.querySelector(".topbar #history-search")'), 'search in filter row')
+def run(invoke, invoke_current, execute, execute_main, click, close_settings, switch_window, wait, capture, env, directory):
+    wait(lambda: execute('return !!document.querySelector(".topbar:not([hidden]) #history-search")'), 'search shown by default')
     assert execute('const search=document.querySelector(".search-box").getBoundingClientRect(), filters=document.querySelector(".filter-bar").getBoundingClientRect();return !document.querySelector(".window-titlebar input") && search.right <= filters.left && Math.abs(search.top-filters.top) <= 1 && !!document.querySelector(".statusbar .capture-toggle")')
     assert execute('return document.querySelector(".filter-bar").getBoundingClientRect().height <= 36')
 
@@ -20,6 +20,7 @@ def run(invoke, invoke_current, execute, execute_main, click, switch_window, wai
     assert execute('return !document.querySelector(".filter-bar .app-more") && !document.querySelector(".listening-dot")')
     click('[data-testid="footer-settings"]')
     assert execute('return document.body.classList.contains("settings-window") && document.querySelector(".app-shell").hidden && !document.querySelector(".window-titlebar")')
+    assert execute('return !document.querySelector(".modal-heading button")')
     capture('settings-window')
     assert invoke_current('clipboard_status')['ok']
     for page in ['desktop', 'keyboard', 'appearance', 'about', 'capture']:
@@ -39,6 +40,11 @@ def run(invoke, invoke_current, execute, execute_main, click, switch_window, wai
     for theme in ['light', 'dark']:
         click(f'#theme option[value="{theme}"]')
         wait(lambda: execute_main('return document.documentElement.dataset.theme === arguments[0]', [theme]), 'main theme refresh')
+    for shown in [False, True]:
+        wait(lambda: execute('return !document.querySelector("#show-search-by-default").disabled'), 'search setting ready')
+        click('#show-search-by-default')
+        wait(lambda: invoke('get_settings')['value']['showSearchByDefault'] == shown, 'saved search default')
+        wait(lambda: execute_main('return !document.querySelector("#history-search-panel").hidden') == shown, 'main search toolbar refresh')
     capture('settings-appearance-dark')
     for native in [True, False]:
         wait(lambda: execute('return !document.querySelector("[aria-label=使用系统原生标题栏]").disabled'), 'titlebar preference ready')
@@ -46,7 +52,7 @@ def run(invoke, invoke_current, execute, execute_main, click, switch_window, wai
         wait(lambda: invoke('desktop_status')['value']['preferences']['nativeTitlebar'] == native, 'saved decoration preference')
         wait(lambda: execute_main('return !!document.querySelector(".window-titlebar")') != native, 'main decoration refresh')
 
-    click('[aria-label="关闭面板"]')
+    close_settings()
     assert invoke('bootstrap')['ok'], 'closing settings must keep the core and main window alive'
 
     # Two simultaneous open requests must both succeed and use the same window.
@@ -55,7 +61,7 @@ def run(invoke, invoke_current, execute, execute_main, click, switch_window, wai
     assert results == ['fulfilled', 'fulfilled'], results
     switch_window('settings')
     wait(lambda: execute('return !!document.querySelector("#theme")'), 'recreated settings UI')
-    click('[aria-label="关闭面板"]')
+    close_settings()
     switch_window('main')
 
     for theme in ['light', 'dark']:

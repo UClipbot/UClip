@@ -33,6 +33,14 @@ export function useAppearance() {
   const [language, setLanguage] = useState<Language>(previewLanguage);
   const [snapshot, setSnapshot] = useState<BootstrapSnapshot | null>(null);
   const [theme, setTheme] = useState<Theme>(previewTheme);
+  const [previewShowSearch, setPreviewShowSearch] = useState(() => {
+    if (native) return false;
+    try {
+      return localStorage.getItem('uclip-preview-show-search') !== 'false';
+    } catch {
+      return true;
+    }
+  });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(native);
@@ -93,14 +101,21 @@ export function useAppearance() {
       void desktop.setUiLanguage(resolveLanguage(language, navigator.languages)).catch(() => {});
     }
   }, [language, locale, !!snapshot]);
-  async function savePreferences(value: { theme?: Theme; language?: Language }) {
+  async function savePreferences(value: {
+    theme?: Theme;
+    language?: Language;
+    showSearchByDefault?: boolean;
+  }) {
     if (mutationPending.current || (native && !snapshot)) return false;
     if (!native) {
       if (value.theme) setTheme(value.theme);
       if (value.language) setLanguage(value.language);
+      if (value.showSearchByDefault !== undefined) setPreviewShowSearch(value.showSearchByDefault);
       try {
         if (value.theme) localStorage.setItem('uclip-preview-theme', value.theme);
         if (value.language) localStorage.setItem('uclip-preview-language', value.language);
+        if (value.showSearchByDefault !== undefined)
+          localStorage.setItem('uclip-preview-show-search', String(value.showSearchByDefault));
       } catch {
         /* In-memory preview is sufficient. */
       }
@@ -114,6 +129,7 @@ export function useAppearance() {
       const settings = await desktop.updateSettings({
         theme: value.theme ?? snapshot!.settings.theme,
         language: value.language ?? null,
+        showSearchByDefault: value.showSearchByDefault ?? null,
         expectedRevision: snapshot!.settings.revision,
       });
       setSnapshot((current) => current && { ...current, settings });
@@ -137,6 +153,7 @@ export function useAppearance() {
   return {
     native,
     theme,
+    showSearchByDefault: snapshot?.settings.showSearchByDefault ?? previewShowSearch,
     language,
     locale,
     dark: theme === 'dark' || (theme === 'system' && systemDark),
@@ -146,6 +163,8 @@ export function useAppearance() {
     loading,
     saveTheme: (theme: Theme) => savePreferences({ theme }),
     saveLanguage: (language: Language) => savePreferences({ language }),
+    saveShowSearchByDefault: (showSearchByDefault: boolean) =>
+      savePreferences({ showSearchByDefault }),
     refresh,
   };
 }

@@ -236,6 +236,94 @@ impl Drop for DesktopMutation<'_> {
 }
 
 #[tauri::command]
+pub fn quick_paste_settings(
+    app: tauri::AppHandle,
+) -> Result<uclip_core::QuickPasteSettings, AppError> {
+    crate::quick_paste::settings(&app)
+}
+
+#[tauri::command]
+pub async fn update_quick_paste_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    request: uclip_core::UpdateQuickPastePreferences,
+) -> Result<uclip_core::QuickPasteSettings, AppError> {
+    use crate::{desktop, quick_paste};
+    use std::sync::atomic::Ordering;
+    use uclip_core::ErrorCode;
+
+    let desktop = app.state::<desktop::DesktopState>();
+    if desktop
+        .updating
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err(AppError::new(ErrorCode::Busy));
+    }
+    let _reservation = DesktopMutation(&desktop.updating);
+    let core = state.core.as_ref().map_err(Clone::clone)?;
+    let existing = quick_paste::settings(&app)?;
+    if existing.preferences.revision != request.expected_revision {
+        return Err(AppError::new(ErrorCode::Conflict));
+    }
+    let quick = app.state::<quick_paste::QuickPasteState>();
+    let include_pinned_only = request.shortcut == existing.preferences.shortcut
+        && request.include_pinned != existing.preferences.include_pinned;
+    if include_pinned_only {
+        let saved = core.update_quick_paste_preferences(request).await?;
+        quick.cache(saved, existing.available, existing.error);
+        let _ = app.emit("settings-changed", ());
+        return quick_paste::settings(&app);
+    }
+    let next = request
+        .shortcut
+        .as_deref()
+        .map(desktop::parse_shortcut)
+        .transpose()?;
+    if let Some(next) = next {
+        let main = desktop
+            .preferences()
+            .ok_or_else(|| AppError::new(ErrorCode::Unavailable))?
+            .shortcut;
+        if next == desktop::parse_shortcut(&main)? {
+            return Err(AppError::new(ErrorCode::ShortcutConflict));
+        }
+    }
+    let old = quick.binding();
+    let registered =
+        if let Some(next) = next.filter(|next| Some(*next) != old || !existing.available) {
+            if desktop::wayland() {
+                return Err(AppError::new(ErrorCode::Restricted));
+            }
+            quick_paste::prepare_window(&app)?;
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || quick_paste::register(&app, next))
+                .await
+                .map_err(|_| AppError::new(ErrorCode::Unavailable))??;
+            Some(next)
+        } else {
+            None
+        };
+    let result = core.update_quick_paste_preferences(request).await;
+    let unregister = match &result {
+        Ok(saved) => {
+            quick.cache(saved.clone(), next.is_some(), None);
+            old.filter(|_| existing.available && old != next)
+        }
+        Err(_) => registered,
+    };
+    if let Some(shortcut) = unregister {
+        let app = app.clone();
+        let _ =
+            tauri::async_runtime::spawn_blocking(move || quick_paste::unregister(&app, shortcut))
+                .await;
+    }
+    result?;
+    let _ = app.emit("settings-changed", ());
+    quick_paste::settings(&app)
+}
+
+#[tauri::command]
 pub async fn update_desktop_preferences(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
@@ -261,6 +349,9 @@ pub async fn update_desktop_preferences(
         return Err(AppError::new(ErrorCode::Conflict));
     }
     let next_shortcut = crate::desktop::parse_shortcut(&request.shortcut)?;
+    if app.state::<crate::quick_paste::QuickPasteState>().binding() == Some(next_shortcut) {
+        return Err(AppError::new(ErrorCode::ShortcutConflict));
+    }
     let old_shortcut = crate::desktop::parse_shortcut(&previous.shortcut)?;
     let was_registered = desktop.shortcut_available.load(Ordering::SeqCst);
     let change_shortcut = next_shortcut != old_shortcut || !was_registered;
@@ -422,20 +513,33 @@ pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), AppError>
     let parent = app
         .get_webview_window("main")
         .ok_or_else(|| AppError::new(uclip_core::ErrorCode::Unavailable))?;
-    tauri::WebviewWindowBuilder::new(
+    let kind = uclip_core::AuxiliaryWindow::Settings;
+    let monitor = parent.current_monitor().ok().flatten();
+    let size = app
+        .state::<crate::auxiliary_window::SizeState>()
+        .fit(kind, monitor.as_ref());
+    let minimum = kind.minimum_size();
+    let maximum = f64::from(uclip_core::AuxiliaryWindow::MAXIMUM_DIMENSION);
+    let window = tauri::WebviewWindowBuilder::new(
         &app,
         "settings",
         tauri::WebviewUrl::App("index.html?window=settings".into()),
     )
     .title(crate::desktop::settings_title(&app))
-    .inner_size(720.0, 640.0)
-    .min_inner_size(560.0, 460.0)
+    .inner_size(f64::from(size.width), f64::from(size.height))
+    .min_inner_size(f64::from(minimum.width), f64::from(minimum.height))
+    .max_inner_size(maximum, maximum)
+    .resizable(true)
     .parent(&parent)
     .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
     .on_navigation(crate::local_navigation)
     .build()
-    .map(|_| ())
-    .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
+    .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    crate::auxiliary_window::attach_resize_tracking(&window, kind)?;
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let _ = window;
+    Ok(())
 }
 #[tauri::command]
 pub async fn quit_app(app: tauri::AppHandle) {

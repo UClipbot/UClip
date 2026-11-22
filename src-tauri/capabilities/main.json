@@ -27,6 +27,8 @@
     "allow-transfer-clip",
     "allow-desktop-status",
     "allow-update-desktop-preferences",
+    "allow-quick-paste-settings",
+    "allow-update-quick-paste-settings",
     "allow-set-autostart",
     "allow-set-desktop-interaction",
     "allow-hide-main-window",

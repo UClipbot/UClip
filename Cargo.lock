@@ -1442,8 +1442,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 [[package]]
 name = "global-hotkey"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c386b0a4a70cb2d39fffd74480f985b6f0bfbcb934b6a6b6b7e630e448f242e"
+source = "git+https://github.com/tauri-apps/global-hotkey.git?rev=11b352c5b77d6cd03fddc97bb951586f4d8fd927#11b352c5b77d6cd03fddc97bb951586f4d8fd927"
 dependencies = [
  "crossbeam-channel",
  "keyboard-types 0.7.0",
@@ -4470,6 +4469,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "clipboard-rs",
+ "gtk",
  "image",
  "objc2",
  "objc2-app-kit",
@@ -4482,6 +4482,7 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
+ "tauri-runtime",
  "tokio",
  "uclip-core",
  "url",

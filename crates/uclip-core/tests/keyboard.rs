@@ -84,7 +84,7 @@ fn v3_keyboard_migration_is_atomic_and_corrupt_maps_fail_without_reset() {
     let path = dir.path().join("v3.sqlite3");
     drop(Storage::open(&path).unwrap());
     let c = Connection::open(&path).unwrap();
-    c.execute_batch("DROP TABLE keyboard_bindings; DROP TABLE collections; DROP TABLE collection_changes; DROP INDEX clips_collection_order; ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=3; CREATE TABLE keyboard_bindings(fixture TEXT);").unwrap();
+    c.execute_batch("DROP TABLE keyboard_bindings; DROP TABLE collections; DROP TABLE collection_changes; DROP INDEX clips_collection_order; ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=3; CREATE TABLE keyboard_bindings(fixture TEXT);").unwrap();
     drop(c);
     assert!(Storage::open(&path).is_err());
     let c = Connection::open(&path).unwrap();
@@ -112,4 +112,40 @@ fn v3_keyboard_migration_is_atomic_and_corrupt_maps_fail_without_reset() {
             ..
         })
     ));
+}
+
+#[test]
+fn v11_search_shortcut_migrates_only_the_untouched_default() {
+    let dir = tempfile::tempdir().unwrap();
+    for revision in [0, 3] {
+        let path = dir.path().join(format!("keys-{revision}.sqlite3"));
+        drop(Storage::open(&path).unwrap());
+        let mut legacy = KeyBindings::default();
+        legacy.search.code = "KeyK".into();
+        if revision > 0 {
+            legacy.copy = KeyBindings::default().search;
+        }
+        let c = Connection::open(&path).unwrap();
+        c.execute_batch(
+            "ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; PRAGMA user_version=11;",
+        )
+        .unwrap();
+        c.execute(
+            "UPDATE keyboard_bindings SET value=?1,revision=?2",
+            rusqlite::params![serde_json::to_string(&legacy).unwrap(), revision],
+        )
+        .unwrap();
+        drop(c);
+
+        let expected = if revision == 0 {
+            KeyBindings::default()
+        } else {
+            legacy
+        };
+        for _ in 0..2 {
+            let snapshot = Storage::open(&path).unwrap().keyboard_bindings().unwrap();
+            assert_eq!(snapshot.bindings, expected);
+            assert_eq!(snapshot.revision, revision.max(1).to_string());
+        }
+    }
 }

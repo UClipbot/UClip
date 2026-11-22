@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
     Mutex,
 };
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use uclip_core::{AppError, DesktopPreferences, ErrorCode, WindowPlacement};
 
@@ -22,10 +22,37 @@ pub struct DesktopState {
     pub updating: AtomicBool,
     pub tray_available: AtomicBool,
     pub shortcut_available: AtomicBool,
+    shortcut_recording: Mutex<Option<ShortcutRecording>>,
     pub protected: AtomicBool,
     pub geometry_epoch: AtomicU64,
     pub restoring: AtomicBool,
 }
+
+#[derive(Clone, Copy)]
+struct ShortcutRecording {
+    token: u32,
+    #[cfg(target_os = "linux")]
+    x11_window: Option<u32>,
+}
+
+impl ShortcutRecording {
+    fn notify(self, app: &tauri::AppHandle, binding: Option<String>) {
+        let _ = app.emit_to("settings", "global-shortcut-capture", (self.token, binding));
+    }
+
+    fn end(self, app: &tauri::AppHandle) {
+        let state = app.state::<DesktopState>();
+        let ended = state
+            .shortcut_recording
+            .lock()
+            .ok()
+            .and_then(|mut capture| capture.take_if(|active| active.token == self.token));
+        if ended.is_some() {
+            self.notify(app, None);
+        }
+    }
+}
+
 impl DesktopState {
     pub fn preferences(&self) -> Option<DesktopPreferences> {
         self.preferences.lock().ok().and_then(|p| p.clone())
@@ -39,6 +66,12 @@ impl DesktopState {
         // Linux tray construction does not prove there is a visible tray host.
         self.shortcut_available.load(Ordering::SeqCst)
             || (!cfg!(target_os = "linux") && self.tray_available.load(Ordering::SeqCst))
+    }
+    fn recording(&self) -> Option<ShortcutRecording> {
+        self.shortcut_recording
+            .lock()
+            .ok()
+            .and_then(|active| *active)
     }
 }
 fn unavailable() -> AppError {
@@ -111,6 +144,62 @@ pub fn parse_shortcut(value: &str) -> Result<Shortcut, AppError> {
     }
     Ok(shortcut)
 }
+
+#[tauri::command]
+pub fn set_global_shortcut_recording(
+    window: tauri::WebviewWindow,
+    token: u32,
+    recording: bool,
+) -> Result<(), AppError> {
+    if window.label() != "settings" {
+        return Err(AppError::new(ErrorCode::Restricted));
+    }
+    let state = window.state::<DesktopState>();
+    if recording {
+        if !window.is_focused().unwrap_or(false) {
+            return Err(unavailable());
+        }
+        let active = ShortcutRecording {
+            token,
+            #[cfg(target_os = "linux")]
+            x11_window: (!wayland())
+                .then(|| crate::window_activation::window_id(&window))
+                .transpose()?,
+        };
+        *state.shortcut_recording.lock().map_err(|_| unavailable())? = Some(active);
+    } else {
+        state
+            .shortcut_recording
+            .lock()
+            .map_err(|_| unavailable())?
+            .take_if(|active| active.token == token);
+    }
+    Ok(())
+}
+
+/// The OS may consume a registered combination before the settings WebView receives it.
+pub fn forward_shortcut_to_recorder(app: &tauri::AppHandle, shortcut: &Shortcut) -> bool {
+    let state = app.state::<DesktopState>();
+    let Some(active) = state.recording() else {
+        return false;
+    };
+    // On X11, the hotkey callback runs on the shortcut worker. A passive grab can
+    // temporarily change keyboard focus without changing the foreground window.
+    #[cfg(target_os = "linux")]
+    if active
+        .x11_window
+        .is_some_and(|window| !crate::window_activation::is_active_window(window))
+    {
+        active.end(app);
+        return false;
+    }
+    if state.recording().map(|recording| recording.token) != Some(active.token) {
+        return false;
+    }
+    active.notify(app, Some(shortcut.to_string()));
+    true
+}
+
 pub fn register_shortcut(app: &tauri::AppHandle, value: &str) -> Result<(), AppError> {
     if wayland() {
         return Err(AppError::new(ErrorCode::Restricted));
@@ -125,16 +214,13 @@ pub fn register_shortcut(app: &tauri::AppHandle, value: &str) -> Result<(), AppE
             if current != Some(*pressed) {
                 return;
             }
-            if event.state == ShortcutState::Pressed {
+            if event.state == ShortcutState::Pressed && !forward_shortcut_to_recorder(app, pressed)
+            {
                 let app = app.clone();
-                // X11 round-trips never run on the UI event loop.
-                tauri::async_runtime::spawn_blocking(move || {
-                    if let Some(state) = app.try_state::<crate::AppState>() {
-                        if let Ok(clipboard) = &state.clipboard {
-                            clipboard.capture_target();
-                        }
+                tauri::async_runtime::spawn(async move {
+                    if crate::quick_paste::show_main(app).await.is_err() {
+                        eprintln!("desktop_focus_failed");
                     }
-                    let _ = show(&app, true);
                 });
             }
         })
@@ -169,6 +255,34 @@ pub fn show(app: &tauri::AppHandle, toggle: bool) -> Result<(), AppError> {
     }
     Ok(())
 }
+// Public platform APIs avoid Tauri show(), which activates windows on macOS/Windows.
+pub fn show_without_focus(window: &tauri::WebviewWindow) -> Result<(), AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSWindow;
+        let pointer = window.ns_window().map_err(|_| unavailable())?;
+        // SAFETY: called only in the main-thread callback, for the live titled window.
+        let native = unsafe { pointer.cast::<NSWindow>().as_ref() }.ok_or_else(unavailable)?;
+        native.orderFront(None);
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::{
+            Foundation::HWND,
+            UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE},
+        };
+        let handle = window.hwnd().map_err(|_| unavailable())?;
+        // SAFETY: the live HWND is accessed on the UI thread, without activation.
+        let _ = unsafe { ShowWindow(HWND(handle.0), SW_SHOWNOACTIVATE) };
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        window.show().map_err(|_| unavailable())
+    }
+}
+
 pub fn ensure_visible(window: &tauri::WebviewWindow) -> Result<(), AppError> {
     let position = window.outer_position().map_err(|_| unavailable())?;
     let monitors = window.available_monitors().map_err(|_| unavailable())?;
@@ -363,11 +477,29 @@ pub async fn save_placement(app: &tauri::AppHandle) -> Result<(), AppError> {
 }
 pub fn window_event(window: &tauri::Window, event: &WindowEvent) {
     crate::hover_preview::window_event(window, event);
+    let app = window.app_handle();
+    let state = app.state::<DesktopState>();
+    if window.label() == "settings" {
+        if let (WindowEvent::Focused(false) | WindowEvent::Destroyed, Some(active)) =
+            (event, state.recording())
+        {
+            #[cfg(target_os = "linux")]
+            if let (WindowEvent::Focused(false), Some(window)) = (event, active.x11_window) {
+                let app = app.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if !crate::window_activation::is_active_window(window) {
+                        active.end(&app);
+                    }
+                });
+                return;
+            }
+            active.end(app);
+        }
+        return;
+    }
     if window.label() != "main" {
         return;
     }
-    let app = window.app_handle();
-    let state = app.state::<DesktopState>();
     match event {
         WindowEvent::CloseRequested { api, .. } => {
             let _ = crate::hover_preview::hide(app, None, false);

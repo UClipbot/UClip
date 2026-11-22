@@ -85,7 +85,8 @@ try {
   );
   assert.equal(await search.evaluate((e) => e === document.activeElement), true);
   assert.equal(await page.locator('.sidebar, .detail-panel').count(), 0);
-  // Keyboard and menu copy both work directly from the history list.
+  // Select a record before invoking the default action from search.
+  await rows.first().locator('[data-row-main]').click();
   await search.press('Enter');
   assert.match(await clipboard(), /好的工具/);
   await rowMenu('link-1', '复制');
@@ -121,7 +122,7 @@ try {
   await search.fill('设计');
   const previewRow = rows.first();
   const previewId = await previewRow.getAttribute('data-clip-id');
-  await previewRow.locator('[data-row-main]').focus();
+  await previewRow.locator('[data-row-main]').click();
   const position = await page.locator('.history-scroll').evaluate((e) => e.scrollTop);
   await page.keyboard.press('Space');
   await page.getByRole('button', { name: '返回历史列表' }).waitFor();
@@ -142,7 +143,7 @@ try {
   );
   await search.fill('');
   const lastId = await rows.last().getAttribute('data-clip-id');
-  await rows.last().locator('[data-row-main]').focus();
+  await rows.last().locator('[data-row-main]').click();
   const scrolled = await page.locator('.history-scroll').evaluate((e) => e.scrollTop);
   assert.ok(scrolled > 0, 'Preview restoration must also cover a scrolled list');
   await page.keyboard.press('Space');
@@ -162,12 +163,17 @@ try {
   assert.equal(await rows.first().getAttribute('data-clip-id'), 'image-1');
   await rowMenu('image-1', '复制');
   assert.match(await page.locator('.toast').textContent(), /图片复制尚未接入/);
-  await page.getByRole('button', { name: '重置', exact: true }).click();
+  await page.locator('[aria-label="历史范围"]').click();
+  await page.locator('.action-menu button[value="all"]').click();
+  await page.locator('[aria-label="内容类型"]').click();
+  await page.locator('.action-menu button[value="all"]').click();
   await search.fill('设计');
   await page.locator('[aria-label="历史范围"]').click();
   await page.locator('.action-menu button[value="work"]').click();
   assert.equal(await search.inputValue(), '设计');
-  await page.getByRole('button', { name: '重置', exact: true }).click();
+  await page.locator('[aria-label="历史范围"]').click();
+  await page.locator('.action-menu button[value="all"]').click();
+  await search.fill('');
   interactions.push(
     'Preview state/scroll/focus restoration, range/type composition, honest unsupported image copy',
   );
@@ -186,6 +192,8 @@ try {
   await appMenu('设置');
   await page.locator('#theme').focus();
   await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'show-search-by-default');
+  await page.keyboard.press('Tab');
   assert.equal(await page.evaluate(() => document.activeElement.tagName), 'SUMMARY');
   await page.keyboard.press('Enter');
   assert.equal(await page.locator('.about-section').evaluate((e) => e.open), true);
@@ -201,7 +209,8 @@ try {
   await page.locator('[aria-label="历史范围"]').click();
   await page.locator('.action-menu button[value="pinned"]').click();
   assert.equal(await rows.count(), 2);
-  await page.getByRole('button', { name: '重置', exact: true }).click();
+  await page.locator('[aria-label="历史范围"]').click();
+  await page.locator('.action-menu button[value="all"]').click();
   await rowMenu('note-1', '置顶');
   await appMenu('切换网格视图');
   assert.equal(await page.locator('.clip-grid').count(), 1);
@@ -215,7 +224,7 @@ try {
   const content = '  中文多行\n\n' + '长路径'.repeat(100) + '\n结尾空白  ';
   await page.locator('#clip-content').fill(content);
   await page.locator('.new-form .primary-button').click();
-  const createdId = await selected();
+  const createdId = await rows.first().getAttribute('data-clip-id');
   await rowMenu(createdId, '复制');
   assert.equal(await clipboard(), content);
   await rowMenu(createdId, '移入回收站');
@@ -224,6 +233,7 @@ try {
   await rowMenu(createdId, '移入回收站');
   await page.locator('[aria-label="历史范围"]').click();
   await page.locator('.action-menu button[value="trash"]').click();
+  await page.locator(`[data-clip-id="${createdId}"] [data-row-main]`).click();
   await search.focus();
   await search.press('Enter');
   assert.equal(await rows.count(), 0);
@@ -264,6 +274,8 @@ try {
   // Reload resets only demo records. Layout evidence covers compact, minimum and fallback sizes.
   await page.reload();
   await rows.first().waitFor();
+  assert.equal(await search.isVisible(), true);
+  await rows.first().locator('[data-row-main]').click();
   for (const theme of ['dark', 'light']) {
     await appMenu('设置');
     await page.locator('#theme').selectOption(theme);

@@ -1,6 +1,9 @@
 import { t, formatHistoryTime } from './i18n';
 import { selectRange } from './platform/selection';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { WindowResizeGrip } from './components/WindowResizeGrip';
+import { GlobalShortcutSettings } from './components/GlobalShortcutSettings';
+import { onQuickPasteUnavailable } from './platform/quickPaste';
 import { Icon } from './components/Icon';
 import { Modal } from './components/Modal';
 import { ActionMenu } from './components/ActionMenu';
@@ -21,8 +24,15 @@ import { KeyboardSettings } from './components/KeyboardSettings';
 import { WindowTitlebar } from './components/WindowTitlebar';
 import { HistoryViewport } from './components/HistoryViewport';
 import { HoverPreview } from './components/HoverPreview';
-import { DEFAULT_KEYS, matchesKey, formatKey } from './platform/keyboard';
+import {
+  DEFAULT_KEYS,
+  matchesKey,
+  formatKey,
+  type HistoryKeyAction,
+  type HistoryKeymap,
+} from './platform/keyboard';
 import { useDesktop } from './platform/useDesktop';
+import { useQuickPastePreferences } from './platform/useQuickPastePreferences';
 import { safeError } from './platform/client';
 import { useAppearance } from './platform/useAppearance';
 import type { Theme, Language, CollectionItem, TransferMode } from './generated/contracts';
@@ -53,12 +63,17 @@ const capabilityNames: Record<string, string> = {
   sync: 'cloud_sync',
 };
 
-export function App() {
+export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const appearance = useAppearance();
   const [clips, setClips] = useState<Clip[]>(() => initialClips.map((clip) => ({ ...clip })));
   const [view, setView] = useState<AppView>('all');
   const [type, setType] = useState<ClipType | 'all'>('all');
-  const [query, setQuery] = useState('');
+  const [searchQuery, setQuery] = useState('');
+  const [searchOverride, setSearchOverride] = useState<boolean | null>(null);
+  const searchVisible = searchOverride ?? appearance.showSearchByDefault;
+  const query = searchVisible ? searchQuery : '';
+  const filtersActive = view !== 'all' || type !== 'all';
+  const searchToggleLabel = t(filtersActive ? 'toggle_search_filtered' : 'toggle_search');
   const [regex, setRegex] = useState(false);
   const [oldest, setOldest] = useState(false);
   const [grid, setGrid] = useState(false);
@@ -86,17 +101,36 @@ export function App() {
   const settingsWindow =
     appearance.native && new URLSearchParams(window.location.search).get('window') === 'settings';
   const desktop = useDesktop(appearance.native, !!(modal || menu || preview), !settingsWindow);
+  const quickPaste = useQuickPastePreferences(settingsWindow);
   const customChrome =
     appearance.native && !settingsWindow && desktop.status?.preferences.nativeTitlebar === false;
   useEffect(() => {
     document.body.classList.toggle('settings-window', settingsWindow);
     return () => document.body.classList.remove('settings-window');
   }, [settingsWindow]);
-  const [shortcut, setShortcut] = useState('CommandOrControl+Shift+V');
-  const copying = useRef(false);
   useEffect(() => {
-    if (desktop.status) setShortcut(desktop.status.preferences.shortcut);
-  }, [desktop.status?.preferences.revision]);
+    if (!appearance.native) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void onQuickPasteUnavailable((error) =>
+      setToast({
+        message:
+          error.code === 'restricted' || error.code === 'unavailable'
+            ? t('quick_paste_unavailable')
+            : safeError(error).message,
+      }),
+    )
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [appearance.native]);
+  const copying = useRef(false);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
   const modalFocus = useRef<HTMLElement | null>(null);
@@ -489,7 +523,9 @@ export function App() {
     const previous = preview?.focus;
     setPreview(null);
     requestAnimationFrame(() => {
-      (previous?.isConnected ? previous : list.current)?.focus({ preventScroll: true });
+      (previous?.getClientRects().length ? previous : list.current)?.focus({
+        preventScroll: true,
+      });
     });
   }
   function openMenu(anchor: HTMLElement, clip?: Clip) {
@@ -513,7 +549,9 @@ export function App() {
     setModal(null);
     requestAnimationFrame(() => {
       const previous = modalFocus.current;
-      (previous?.isConnected ? previous : search.current)?.focus({ preventScroll: true });
+      (previous?.getClientRects().length ? previous : list.current)?.focus({
+        preventScroll: true,
+      });
     });
   }
   function openModal(next: AppModal) {
@@ -598,10 +636,20 @@ export function App() {
     setQuery('');
     setRegex(false);
   }
+  function toggleSearch() {
+    setPreview(null);
+    if (searchVisible) setQuery('');
+    setSearchOverride(!searchVisible);
+  }
 
   useEffect(() => {
-    search.current?.focus();
-  }, []);
+    setSearchOverride(null);
+  }, [appearance.showSearchByDefault]);
+  useEffect(() => {
+    if (!searchVisible) setQuery('');
+    if (!settingsWindow && !modal && !preview && !menu)
+      (searchVisible ? search.current : list.current)?.focus({ preventScroll: true });
+  }, [searchVisible, settingsWindow]);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(null), toast.undo ? 6000 : 4000);
@@ -641,7 +689,7 @@ export function App() {
             : event,
           keys[action],
           modifier === '⌘',
-          action === 'up' || action === 'down',
+          action === 'search' || action === 'up' || action === 'down',
         );
       if (is('settings') && !modal) {
         event.preventDefault();
@@ -656,24 +704,37 @@ export function App() {
         } else if (selectedClips.length > 1) {
           event.preventDefault();
           clearSelection();
-        } else if (query) {
+        } else if (searchVisible) {
           event.preventDefault();
-          setQuery('');
+          toggleSearch();
         } else if (appearance.native) {
           event.preventDefault();
           void desktop.hide().catch((error) => setToast({ message: safeError(error).message }));
         }
         return;
       }
-      if (is('search')) {
+      const target = event.target;
+      const inList =
+        target instanceof HTMLElement &&
+        (target === list.current || target.matches('[data-row-main]'));
+      const mappedAction =
+        historyKeymap &&
+        !preview &&
+        inList &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        window.getSelection()?.isCollapsed !== false
+          ? historyKeymap(event)
+          : undefined;
+      const isHistoryAction = (action: HistoryKeyAction) =>
+        mappedAction === undefined ? is(action) : mappedAction === action;
+      if (isHistoryAction('search')) {
         event.preventDefault();
-        if (preview) closePreview();
-        requestAnimationFrame(() => search.current?.focus());
+        if (!event.repeat) toggleSearch();
         return;
       }
-      if (preview) return;
-      const target = event.target as HTMLElement;
-      const inList = target === list.current || target.matches('[data-row-main]');
+      if (preview || !(target instanceof HTMLElement)) return;
       const withinList = target === list.current || !!list.current?.contains(target);
       if (
         withinList &&
@@ -690,9 +751,9 @@ export function App() {
         }
         return;
       }
-      if (withinList && is('remove')) {
+      if (withinList && isHistoryAction('remove')) {
         event.preventDefault();
-        void removeSelected();
+        if (!event.repeat) void removeSelected();
         return;
       }
       if (target !== search.current && !inList) return;
@@ -711,13 +772,16 @@ export function App() {
           setSelection({ scope: selectionScope, ids: result.items.map((clip) => clip.id) });
         return;
       }
-      if (is('down') || is('up')) {
+      if (isHistoryAction('down') || isHistoryAction('up')) {
         if (!ready || !result.items.length) return;
         event.preventDefault();
         const index = result.items.findIndex((clip) => clip.id === selected?.id);
         const next =
           result.items[
-            Math.max(0, Math.min(result.items.length - 1, index + (is('down') ? 1 : -1)))
+            Math.max(
+              0,
+              Math.min(result.items.length - 1, index + (isHistoryAction('down') ? 1 : -1)),
+            )
           ];
         if (next) {
           selectClip(next.id, event.shiftKey);
@@ -730,13 +794,13 @@ export function App() {
               ?.focus({ preventScroll: true });
         }
       }
-      if (is('copy')) {
+      if (isHistoryAction('copy')) {
         event.preventDefault();
-        if (ready && selected) void copySelected();
+        if (!event.repeat && ready && selected) void copySelected();
       }
-      if (is('preview') && inList) {
+      if (isHistoryAction('preview') && inList) {
         event.preventDefault();
-        if (ready && selectedClips.length === 1) openPreview(selectedClips[0]!);
+        if (!event.repeat && ready && selectedClips.length === 1) openPreview(selectedClips[0]!);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -814,7 +878,9 @@ export function App() {
       });
       setToast({ message: t('desktop_settings_saved') });
     } catch (error) {
-      setToast({ message: safeError(error).message });
+      const message = safeError(error).message;
+      setToast({ message });
+      return message;
     }
   }
   async function chooseTheme(theme: Theme) {
@@ -865,18 +931,6 @@ export function App() {
         aria-invalid={!!result.error}
         aria-describedby={result.error ? 'search-error' : undefined}
       />
-      {query && (
-        <button
-          className="icon-button"
-          aria-label={t('clear_search')}
-          onClick={() => {
-            setQuery('');
-            search.current?.focus();
-          }}
-        >
-          <Icon name="close" size={16} />
-        </button>
-      )}
       <button
         className={`regex-toggle ${regex ? 'active' : ''}`}
         aria-label={t('regular_expression_search')}
@@ -904,59 +958,56 @@ export function App() {
         inert={modal || settingsWindow ? true : undefined}
         data-testid="app-ready"
       >
-        <header className="topbar">
+        <header className="topbar" id="history-search-panel" hidden={!searchVisible}>
           {searchBox}
-          <div className="filter-bar">
-            <div className="scope-control">
-              <Icon
-                name={view === 'trash' ? 'trash' : view === 'pinned' ? 'pin' : 'history'}
-                size={15}
-              />
-              <FilterMenu
-                label={t('history_scope')}
-                value={view}
-                onChange={(value) => setView(value as AppView)}
-                options={Object.entries(
-                  appearance.native
-                    ? {
-                        all: t('all_history'),
-                        pinned: t('pinned'),
-                        ...Object.fromEntries(
-                          live.collections.map((item) => [`collection:${item.id}`, item.name]),
-                        ),
-                        trash: t('trash'),
-                      }
-                    : viewTitles,
-                ).map(([key, label]) => ({
-                  value: key,
-                  label: `${appearance.native && key.startsWith('collection:') ? label : t(label)}${appearance.native && key === 'trash' ? t('not_implemented_2') : ''}`,
-                  disabled: appearance.native && key === 'trash',
-                }))}
-              />
-              <Icon name="chevron" size={12} />
-            </div>
-            <div className="type-control">
-              <FilterMenu
-                label={t('content_type')}
-                value={type}
-                onChange={(value) => setType(value as ClipType | 'all')}
-                options={[
-                  { value: 'all', label: t('all_types') },
-                  ...Object.entries(typeNames).map(([key, label]) => ({
+          {searchVisible && (
+            <div className="filter-bar">
+              <div className="scope-control">
+                <Icon
+                  name={view === 'trash' ? 'trash' : view === 'pinned' ? 'pin' : 'history'}
+                  size={15}
+                />
+                <FilterMenu
+                  label={t('history_scope')}
+                  value={view}
+                  onChange={(value) => setView(value as AppView)}
+                  options={Object.entries(
+                    appearance.native
+                      ? {
+                          all: t('all_history'),
+                          pinned: t('pinned'),
+                          ...Object.fromEntries(
+                            live.collections.map((item) => [`collection:${item.id}`, item.name]),
+                          ),
+                          trash: t('trash'),
+                        }
+                      : viewTitles,
+                  ).map(([key, label]) => ({
                     value: key,
-                    label: t(label),
-                    disabled: appearance.native && key === 'link',
-                  })),
-                ]}
-              />
-              <Icon name="chevron" size={12} />
+                    label: `${appearance.native && key.startsWith('collection:') ? label : t(label)}${appearance.native && key === 'trash' ? t('not_implemented_2') : ''}`,
+                    disabled: appearance.native && key === 'trash',
+                  }))}
+                />
+                <Icon name="chevron" size={12} />
+              </div>
+              <div className="type-control">
+                <FilterMenu
+                  label={t('content_type')}
+                  value={type}
+                  onChange={(value) => setType(value as ClipType | 'all')}
+                  options={[
+                    { value: 'all', label: t('all_types') },
+                    ...Object.entries(typeNames).map(([key, label]) => ({
+                      value: key,
+                      label: t(label),
+                      disabled: appearance.native && key === 'link',
+                    })),
+                  ]}
+                />
+                <Icon name="chevron" size={12} />
+              </div>
             </div>
-            {(view !== 'all' || type !== 'all' || regex) && (
-              <button className="text-button clear-filters" onClick={clearFilters}>
-                {t('reset')}
-              </button>
-            )}
-          </div>
+          )}
         </header>
         {(appearance.error || live.statusError || live.status?.error) && (
           <div className="service-error" role="alert" data-testid="service-error">
@@ -1214,6 +1265,17 @@ export function App() {
             </div>
           )}
           <div className="footer-tools">
+            <button
+              type="button"
+              className={`icon-button search-toggle ${filtersActive ? 'has-filters' : ''}`}
+              aria-label={searchToggleLabel}
+              aria-controls="history-search-panel"
+              aria-expanded={searchVisible}
+              title={`${searchToggleLabel} (${formatKey(activeKeys.search, modifier)})`}
+              onClick={toggleSearch}
+            >
+              <Icon name="search" size={16} />
+            </button>
             <button
               className="icon-button"
               aria-label={t('settings')}
@@ -1653,7 +1715,13 @@ export function App() {
         </Modal>
       )}
       {(modal === 'settings' || settingsWindow) && (
-        <Modal title={t('settings')} onClose={closeModal}>
+        <Modal title={t('settings')} onClose={closeModal} showCloseButton={!settingsWindow}>
+          {settingsWindow && appearance.snapshot && appearance.snapshot.platform.os !== 'macos' && (
+            <WindowResizeGrip
+              os={appearance.snapshot.platform.os}
+              onError={(message) => setToast({ message })}
+            />
+          )}
           {settingsWindow && (appearance.error || live.statusError || live.status?.error) && (
             <p className="settings-feedback" role="alert">
               {t(
@@ -1804,39 +1872,36 @@ export function App() {
                       }}
                     />
                   </label>
-                  <label className="policy-field">
-                    {t('show_window_shortcut')}
+                  <p className="settings-feedback">{t('window_pin_behavior')}</p>
+                  <label className="setting-row">
+                    {t('quick_paste_include_pinned')}
                     <input
-                      aria-label={t('show_window_shortcut')}
-                      value={shortcut}
-                      maxLength={100}
-                      onChange={(event) => setShortcut(event.target.value)}
+                      id="quick-paste-include-pinned"
+                      type="checkbox"
+                      checked={quickPaste.snapshot?.preferences.includePinned ?? false}
+                      disabled={!quickPaste.snapshot || quickPaste.busy || desktop.busy}
+                      onChange={(event) => {
+                        const includePinned = event.target.checked;
+                        void windowAction(() => quickPaste.save({ includePinned }));
+                      }}
                     />
                   </label>
-                  <button
-                    className="secondary-button"
-                    disabled={!desktop.status || desktop.busy}
-                    onClick={() => void saveDesktop({ shortcut })}
-                  >
-                    {t('save_shortcut')}
-                  </button>
-                  <p className="settings-feedback" role="status">
-                    {t(
-                      desktop.error ||
-                        (desktop.status?.shortcutAvailable
-                          ? t('show_window_shortcut_available_esc_hides_the_window')
-                          : t('the_show_window_shortcut_is_unavailable')),
-                    )}{' '}
-                    {t('window_pin_behavior')}
-                  </p>
                 </section>
               )}
               {appearance.native && (
-                <div hidden={settingsWindow && settingsPage !== 'keyboard'}>
+                <div
+                  className="shortcut-settings"
+                  hidden={settingsWindow && settingsPage !== 'keyboard'}
+                >
+                  <GlobalShortcutSettings
+                    desktop={desktop}
+                    quickPaste={quickPaste}
+                    os={appearance.snapshot?.platform.os ?? ''}
+                    saveMainShortcut={(shortcut) => saveDesktop({ shortcut })}
+                  />
                   <KeyboardSettings
-                    expanded={settingsWindow}
                     snapshot={desktop.status?.keyboard}
-                    busy={desktop.busy}
+                    busy={desktop.busy || quickPaste.busy}
                     primary={modifier}
                     save={desktop.saveKeys}
                   />
@@ -1905,6 +1970,21 @@ export function App() {
                     <option value="light">{t('light')}</option>
                     <option value="dark">{t('dark')}</option>
                   </select>
+                </label>
+                <label className="setting-row">
+                  {t('show_search_by_default')}
+                  <input
+                    type="checkbox"
+                    id="show-search-by-default"
+                    checked={appearance.showSearchByDefault}
+                    disabled={
+                      appearance.saving ||
+                      (appearance.native && (appearance.loading || !appearance.snapshot))
+                    }
+                    onChange={(event) =>
+                      void appearance.saveShowSearchByDefault(event.target.checked)
+                    }
+                  />
                 </label>
                 <p className="settings-feedback" role="status">
                   {appearance.saving
@@ -2002,7 +2082,7 @@ export function App() {
         <Modal title={t('shortcuts')} onClose={closeModal}>
           <div className="shortcut-list">
             <div>
-              <span>{t('focus_search')}</span>
+              <span>{t('toggle_search')}</span>
               <kbd>{formatKey(activeKeys.search, modifier)}</kbd>
             </div>
             <div>
@@ -2024,7 +2104,7 @@ export function App() {
               <kbd>{formatKey(activeKeys.remove, modifier)}</kbd>
             </div>
             <div>
-              <span>{t('close_panel_clear_search')}</span>
+              <span>{t('close_panel_or_hide_search')}</span>
               <kbd>{formatKey(activeKeys.dismiss, modifier)}</kbd>
             </div>
             <div>

@@ -115,7 +115,7 @@ fn v7_migration_preserves_records_and_partial_migration_rolls_back() {
     drop(storage);
     let connection = Connection::open(&path).unwrap();
     connection
-        .execute_batch("ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=7;")
+        .execute_batch("ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=7;")
         .unwrap();
     let storage = Storage::open(&path).unwrap();
     assert_eq!(storage.desktop_preferences().unwrap(), preferences);

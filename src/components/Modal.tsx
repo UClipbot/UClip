@@ -9,12 +9,14 @@ export function Modal({
   onClose,
   children,
   wide = false,
+  showCloseButton = true,
 }: {
   title: string;
   description?: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  showCloseButton?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
@@ -79,9 +81,11 @@ export function Modal({
           <div>
             <h2 id="modal-title">{title}</h2>
           </div>
-          <button className="icon-button" aria-label={t('close_panel')} onClick={onClose}>
-            <Icon name="close" />
-          </button>
+          {showCloseButton && (
+            <button className="icon-button" aria-label={t('close_panel')} onClick={onClose}>
+              <Icon name="close" />
+            </button>
+          )}
         </div>
         {description && (
           <p className="modal-description" id="modal-description">

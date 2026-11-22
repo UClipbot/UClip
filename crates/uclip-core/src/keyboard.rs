@@ -42,7 +42,7 @@ pub struct KeyBindings {
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
-            search: KeyChord::primary("KeyK"),
+            search: KeyChord::primary("KeyF"),
             settings: KeyChord::primary("Comma"),
             copy: KeyChord::plain("Enter"),
             preview: KeyChord::plain("Space"),
@@ -54,6 +54,34 @@ impl Default for KeyBindings {
     }
 }
 impl KeyBindings {
+    pub(crate) fn migrate_search_default(tx: &rusqlite::Transaction<'_>) -> Result<(), AppError> {
+        let (value, revision): (String, i64) = tx.query_row(
+            "SELECT value,revision FROM keyboard_bindings WHERE singleton=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let bindings: Self =
+            serde_json::from_str(&value).map_err(|_| AppError::new(ErrorCode::Storage))?;
+        bindings
+            .validate()
+            .map_err(|_| AppError::new(ErrorCode::Storage))?;
+        let defaults = Self::default();
+        let legacy = Self {
+            search: KeyChord::primary("KeyK"),
+            ..defaults.clone()
+        };
+        // A saved map may deliberately retain Ctrl/Cmd+K or assign Ctrl/Cmd+F elsewhere.
+        if revision == 0 && bindings == legacy {
+            let value =
+                serde_json::to_string(&defaults).map_err(|_| AppError::new(ErrorCode::Storage))?;
+            tx.execute(
+                "UPDATE keyboard_bindings SET value=?1,revision=revision+1 WHERE singleton=1",
+                [value],
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<(), AppError> {
         let mut seen = std::collections::HashSet::new();
         for (action, binding) in [

@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, Language, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 15;
 const APPLICATION_ID: i64 = 0x434c4e58; // Stable database format ID (CLNX), independent of the product name.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -142,12 +142,45 @@ impl Storage {
             tx.execute_batch("UPDATE capture_policy SET enabled=1,revision=revision+1 WHERE singleton=1 AND enabled=0 AND revision=0;")?;
             tx.pragma_update(None, "user_version", 11)?;
         }
+        if version < 12 {
+            if version >= 4 {
+                crate::KeyBindings::migrate_search_default(&tx)?;
+            }
+            tx.pragma_update(None, "user_version", 12)?;
+        }
+        if version < 13 {
+            tx.execute_batch("ALTER TABLE settings ADD COLUMN show_search_by_default INTEGER NOT NULL DEFAULT 1 CHECK(show_search_by_default IN (0,1));")?;
+            tx.pragma_update(None, "user_version", 13)?;
+        }
+        if version < 14 {
+            tx.execute_batch(
+                "CREATE TABLE quick_paste_preferences (
+                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                shortcut TEXT CHECK(shortcut IS NULL OR length(shortcut) BETWEEN 1 AND 100),
+                include_pinned INTEGER NOT NULL CHECK(include_pinned IN (0,1)),
+                revision INTEGER NOT NULL CHECK(revision>=0)
+            ) STRICT; INSERT INTO quick_paste_preferences VALUES(1,NULL,0,0);",
+            )?;
+            tx.pragma_update(None, "user_version", 14)?;
+        }
+        if version < 15 {
+            tx.execute_batch(
+                "CREATE TABLE auxiliary_window_sizes (
+                    window TEXT PRIMARY KEY CHECK(window IN ('settings', 'quick-paste')),
+                    width INTEGER NOT NULL CHECK(width BETWEEN 1 AND 4096),
+                    height INTEGER NOT NULL CHECK(height BETWEEN 1 AND 4096)
+                ) STRICT;",
+            )?;
+            tx.pragma_update(None, "user_version", 15)?;
+        }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
         connection.pragma_update(None, "foreign_keys", true)?;
         let storage = Self { connection };
         storage.capture_policy()?;
+        storage.quick_paste_preferences()?;
+        storage.auxiliary_window_size(crate::AuxiliaryWindow::Settings)?;
         storage
             .connection
             .prepare("SELECT source_app FROM clips LIMIT 0")?;
@@ -179,11 +212,12 @@ impl Storage {
     }
 
     pub fn settings(&self) -> Result<SettingsSnapshot, AppError> {
-        let (theme, language, revision): (String, String, i64) = self.connection.query_row(
-            "SELECT theme, language, revision FROM settings WHERE singleton = 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
+        let (theme, language, revision, show_search): (String, String, i64, i64) =
+            self.connection.query_row(
+                "SELECT theme, language, revision, show_search_by_default FROM settings WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
         let theme = match theme.as_str() {
             "system" => Theme::System,
             "light" => Theme::Light,
@@ -196,12 +230,13 @@ impl Storage {
             "en" => Language::En,
             _ => return Err(AppError::new(ErrorCode::Storage)),
         };
-        if revision < 0 {
+        if revision < 0 || !matches!(show_search, 0 | 1) {
             return Err(AppError::new(ErrorCode::Storage));
         }
         Ok(SettingsSnapshot {
             theme,
             language,
+            show_search_by_default: show_search == 1,
             revision: revision.to_string(),
         })
     }
@@ -232,8 +267,8 @@ impl Storage {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = tx.execute(
-            "UPDATE settings SET theme = ?1, language = coalesce(?3, language), revision = revision + 1 WHERE singleton = 1 AND revision = ?2",
-            params![theme, revision, language],
+            "UPDATE settings SET theme = ?1, language = coalesce(?3, language), show_search_by_default = coalesce(?4, show_search_by_default), revision = revision + 1 WHERE singleton = 1 AND revision = ?2",
+            params![theme, revision, language, request.show_search_by_default],
         )?;
         if changed != 1 {
             return Err(AppError::new(ErrorCode::Conflict));

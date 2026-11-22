@@ -8,7 +8,17 @@ use std::sync::{
 };
 use uclip_core::{AppError, ErrorCode};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct InvocationTarget {
+    #[cfg(target_os = "linux")]
+    window: (u32, u32),
+    #[cfg(target_os = "windows")]
+    focus: windows::Focus,
+}
+
 pub struct PreparedPaste {
+    #[cfg(target_os = "linux")]
+    target: (u32, u32, std::time::Instant),
     #[cfg(target_os = "windows")]
     target: windows::Prepared,
 }
@@ -155,6 +165,72 @@ impl PasteService {
             }
         }
     }
+    pub fn invocation_target(&self) -> Option<InvocationTarget> {
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        {
+            let mut desktop = self.inner.as_ref()?.lock().ok()?;
+            #[cfg(target_os = "linux")]
+            {
+                desktop.capture_target().ok()?;
+                let (window, pid, _) = desktop.target?;
+                Some(InvocationTarget {
+                    window: (window, pid),
+                })
+            }
+            #[cfg(target_os = "windows")]
+            {
+                Some(InvocationTarget {
+                    focus: desktop.invocation_focus()?,
+                })
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        None
+    }
+
+    pub fn prepare_invocation(
+        &self,
+        original: InvocationTarget,
+        active: &AtomicBool,
+    ) -> Result<PreparedPaste, AppError> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(700);
+        loop {
+            if !active.load(Ordering::Acquire) {
+                return Err(AppError::new(ErrorCode::TargetLost));
+            }
+            let prepared = self.prepare()?;
+            if !prepared.matches(original) {
+                return Err(AppError::new(ErrorCode::TargetLost));
+            }
+            if self.modifiers_released()? {
+                return Ok(prepared);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(AppError::new(ErrorCode::TargetLost));
+            }
+            // Wait outside the clipboard target lock and X11 server guard.
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn modifiers_released(&self) -> Result<bool, AppError> {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner
+                .as_ref()
+                .ok_or_else(|| AppError::new(ErrorCode::Restricted))?
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Unavailable))?
+                .modifiers_released()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Ok(windows::modifiers_released())
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        Err(AppError::new(ErrorCode::Restricted))
+    }
+
     pub fn shortcut_available(&self) -> bool {
         #[cfg(target_os = "linux")]
         {
@@ -182,13 +258,18 @@ impl PasteService {
         }
         #[cfg(target_os = "linux")]
         {
-            self.inner
+            let desktop = self
+                .inner
                 .as_ref()
                 .ok_or_else(|| AppError::new(ErrorCode::Restricted))?
                 .lock()
-                .map_err(|_| AppError::new(ErrorCode::Unavailable))?
-                .validate()?;
-            Ok(PreparedPaste {})
+                .map_err(|_| AppError::new(ErrorCode::Unavailable))?;
+            desktop.validate()?;
+            Ok(PreparedPaste {
+                target: desktop
+                    .target
+                    .ok_or_else(|| AppError::new(ErrorCode::TargetLost))?,
+            })
         }
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
@@ -199,8 +280,9 @@ impl PasteService {
         &self,
         prepared: PreparedPaste,
         #[cfg(target_os = "windows")] publication: crate::clipboard_native::ClipboardWrite,
+        #[cfg(target_os = "linux")] selection_owner: Option<u32>,
     ) -> Result<(), AppError> {
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         let _ = prepared;
         #[cfg(target_os = "windows")]
         {
@@ -218,7 +300,7 @@ impl PasteService {
                 .ok_or_else(|| AppError::new(ErrorCode::Restricted))?
                 .lock()
                 .map_err(|_| AppError::new(ErrorCode::Unavailable))?
-                .paste()
+                .paste(prepared.target, selection_owner)
         }
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
@@ -238,6 +320,24 @@ impl PasteService {
 impl Drop for PasteService {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+impl PreparedPaste {
+    fn matches(&self, invocation: InvocationTarget) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            (self.target.0, self.target.1) == invocation.window
+        }
+        #[cfg(target_os = "windows")]
+        {
+            self.target.matches(invocation.focus)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        {
+            let _ = invocation;
+            false
+        }
     }
 }
 
@@ -281,6 +381,7 @@ mod x11 {
         root: Window,
         active_atom: Atom,
         pid_atom: Atom,
+        clipboard_atom: Atom,
         pub healthy: bool,
         pub shortcut: bool,
         pub target: Option<(Window, u32, Instant)>,
@@ -308,6 +409,12 @@ mod x11 {
                 .reply()
                 .map_err(|_| fail())?
                 .atom;
+            let clipboard_atom = conn
+                .intern_atom(false, b"CLIPBOARD")
+                .map_err(|_| fail())?
+                .reply()
+                .map_err(|_| fail())?
+                .atom;
             xtest::get_version(&conn, 2, 2)
                 .map_err(|_| fail())?
                 .reply()
@@ -318,6 +425,7 @@ mod x11 {
                 root,
                 active_atom,
                 pid_atom,
+                clipboard_atom,
                 healthy: true,
                 shortcut: false,
                 target: None,
@@ -423,10 +531,7 @@ mod x11 {
             }
             Ok(in_target)
         }
-        pub fn paste(&mut self) -> Result<(), AppError> {
-            self.validate()?;
-            let (target, _, _) = self.target.ok_or_else(fail)?;
-            let original = self.active()?;
+        pub fn modifiers_released(&self) -> Result<bool, AppError> {
             let modifiers = u16::from(
                 self.conn
                     .query_pointer(self.root)
@@ -435,15 +540,27 @@ mod x11 {
                     .map_err(|_| fail())?
                     .mask,
             );
-            if modifiers
+            Ok(modifiers
                 & (u16::from(KeyButMask::SHIFT)
                     | u16::from(KeyButMask::CONTROL)
                     | u16::from(KeyButMask::MOD1)
-                    | u16::from(KeyButMask::MOD4))
-                != 0
-            {
+                    | u16::from(KeyButMask::MOD3)
+                    | u16::from(KeyButMask::MOD4)
+                    | u16::from(KeyButMask::MOD5))
+                == 0)
+        }
+
+        pub fn paste(
+            &mut self,
+            expected: (Window, u32, Instant),
+            selection_owner: Option<Window>,
+        ) -> Result<(), AppError> {
+            self.validate()?;
+            if self.target != Some(expected) || !self.modifiers_released()? {
                 return Err(fail());
             }
+            let (target, _, _) = expected;
+            let original = self.active()?;
             let event = ClientMessageEvent::new(
                 32,
                 target,
@@ -527,6 +644,19 @@ mod x11 {
             // Never inject into an arbitrary active window; recheck immediately before dispatch.
             if self.active()? != target {
                 return Err(fail());
+            }
+            if let Some(owner) = selection_owner {
+                if self
+                    .conn
+                    .get_selection_owner(self.clipboard_atom)
+                    .map_err(|_| fail())?
+                    .reply()
+                    .map_err(|_| fail())?
+                    .owner
+                    != owner
+                {
+                    return Err(fail());
+                }
             }
             for (event, key) in [
                 (KEY_PRESS_EVENT, ctrl_key),

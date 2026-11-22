@@ -3,7 +3,7 @@ import { setLocale } from '../i18n';
 beforeEach(() => setLocale('zh-CN'));
 import { bindingError, DEFAULT_KEYS, matchesKey } from './keyboard';
 const event = {
-  code: 'KeyK',
+  code: 'KeyF',
   ctrlKey: true,
   metaKey: false,
   altKey: false,

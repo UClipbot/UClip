@@ -10,6 +10,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+pub struct QuickPasteSlot {
+    pub id: String,
+    pub revision: String,
+    pub item: crate::QuickPasteItem,
+}
+
 pub const MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_IMAGE_PIXELS: u64 = 8_388_608;
 pub const MAX_HISTORY_BYTES: i64 = 128 * 1024 * 1024;
@@ -358,14 +364,42 @@ impl Storage {
             revision,
         })
     }
+    pub fn quick_paste_slots(&self, include_pinned: bool) -> Result<Vec<QuickPasteSlot>, AppError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, revision, kind, CASE WHEN kind='text' THEN substr(text,1,300) ELSE '' END, file_count
+             FROM clips WHERE deleted=0 AND (?1 OR pinned=0) ORDER BY sequence DESC,id LIMIT 5",
+        )?;
+        let slots = statement.query_map([include_pinned], |row| {
+            Ok(QuickPasteSlot {
+                id: row.get(0)?,
+                revision: row.get::<_, i64>(1)?.to_string(),
+                item: crate::QuickPasteItem {
+                    kind: parse_kind(&row.get::<_, String>(2)?)?,
+                    text: row.get(3)?,
+                    file_count: row.get(4)?,
+                    thumbnail: None,
+                },
+            })
+        })?;
+        Ok(slots.collect::<Result<_, _>>()?)
+    }
+
+    pub fn read_quick_paste_slot(&self, id: &str, revision: &str) -> Result<ClipPayload, AppError> {
+        self.read_active_clip(id, Some(mutation_revision(revision)?))
+    }
+
     pub fn read_clip(&self, id: &str) -> Result<ClipPayload, AppError> {
+        self.read_active_clip(id, None)
+    }
+
+    fn read_active_clip(&self, id: &str, revision: Option<i64>) -> Result<ClipPayload, AppError> {
         if uuid::Uuid::parse_str(id).is_err() {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
         let row = self
             .connection
             .query_row(
-                "SELECT kind,text,data,width,height FROM clips WHERE id=?1 AND deleted=0",
+                "SELECT kind,text,data,width,height,revision FROM clips WHERE id=?1 AND deleted=0",
                 [id],
                 |r| {
                     Ok((
@@ -374,11 +408,15 @@ impl Storage {
                         r.get::<_, Vec<u8>>(2)?,
                         r.get::<_, Option<u32>>(3)?,
                         r.get::<_, Option<u32>>(4)?,
+                        r.get::<_, i64>(5)?,
                     ))
                 },
             )
             .optional()?
             .ok_or_else(|| AppError::new(ErrorCode::NotFound))?;
+        if revision.is_some_and(|revision| revision != row.5) {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
         let payload = match row.0.as_str() {
             "text" => ClipPayload::Text(row.1),
             "files" => ClipPayload::Files(

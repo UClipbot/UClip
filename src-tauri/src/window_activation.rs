@@ -14,6 +14,20 @@ pub struct Activation {
     previous: Window,
     previous_pid: u32,
 }
+
+pub fn window_id(window: &tauri::WebviewWindow) -> Result<Window, AppError> {
+    let handle = window.window_handle().map_err(|_| failure())?;
+    match handle.as_raw() {
+        RawWindowHandle::Xlib(h) => u32::try_from(h.window).map_err(|_| failure()),
+        RawWindowHandle::Xcb(h) => Ok(h.window.get()),
+        _ => Err(failure()),
+    }
+}
+
+pub fn is_active_window(window: Window) -> bool {
+    Activation::prepare().is_ok_and(|activation| activation.previous == window)
+}
+
 fn failure() -> AppError {
     AppError::new(ErrorCode::TargetLost)
 }
@@ -70,12 +84,7 @@ impl Activation {
             .unwrap_or(NONE))
     }
     pub fn request(self, window: &tauri::WebviewWindow) -> Result<(), AppError> {
-        let handle = window.window_handle().map_err(|_| failure())?;
-        let main = match handle.as_raw() {
-            RawWindowHandle::Xlib(h) => u32::try_from(h.window).map_err(|_| failure())?,
-            RawWindowHandle::Xcb(h) => h.window.get(),
-            _ => return Err(failure()),
-        };
+        let main = window_id(window)?;
         if property(&self.connection, main, self.pid_atom)? != std::process::id() {
             return Err(failure());
         }

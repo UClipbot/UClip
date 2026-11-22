@@ -94,7 +94,7 @@ fn v5_titlebar_migration_preserves_existing_preferences_and_content() {
     drop(s);
     let c = Connection::open(&path).unwrap();
     c.execute_batch(
-        "ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=5;",
+        "ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=5;",
     )
     .unwrap();
     let s = Storage::open(&path).unwrap();
@@ -163,7 +163,7 @@ fn v6_upgrade_preserves_disabled_preferences_and_never_requests_autostart() {
     let id = s.create_text("v6 fixture".into()).unwrap();
     drop(s);
     let c = Connection::open(&path).unwrap();
-    c.execute_batch("UPDATE desktop_preferences SET close_to_tray=0,always_on_top=0,native_titlebar=1; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=6;").unwrap();
+    c.execute_batch("UPDATE desktop_preferences SET close_to_tray=0,always_on_top=0,native_titlebar=1; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=6;").unwrap();
     let mut s = Storage::open(&path).unwrap();
     let p = s.desktop_preferences().unwrap();
     assert!(!p.close_to_tray && !p.auto_hide && p.native_titlebar);
@@ -203,7 +203,7 @@ fn v9_migration_preserves_blur_behavior_for_every_legacy_pin_combination() {
                     (legacy_topmost, legacy_auto_hide),
                 )
                 .unwrap();
-            connection.pragma_update(None, "user_version", 9).unwrap();
+            connection.execute_batch("ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; PRAGMA user_version=9;").unwrap();
             let storage = Storage::open(&path).unwrap();
             let preferences = storage.desktop_preferences().unwrap();
             assert_eq!(preferences.auto_hide, legacy_auto_hide && !legacy_topmost);
@@ -227,7 +227,7 @@ fn failed_pin_migration_preserves_schema_and_legacy_preferences() {
     let path = dir.path().join("failed-v9.sqlite3");
     drop(Storage::open(&path).unwrap());
     let connection = Connection::open(&path).unwrap();
-    connection.execute_batch("UPDATE desktop_preferences SET always_on_top=1,auto_hide=1; PRAGMA user_version=9; CREATE TRIGGER fail_pin_migration BEFORE UPDATE ON desktop_preferences BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+    connection.execute_batch("UPDATE desktop_preferences SET always_on_top=1,auto_hide=1; ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; PRAGMA user_version=9; CREATE TRIGGER fail_pin_migration BEFORE UPDATE ON desktop_preferences BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
     assert_eq!(Storage::open(&path).err().unwrap().code, ErrorCode::Storage);
     assert_eq!(
         connection

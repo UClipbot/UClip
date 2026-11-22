@@ -12,7 +12,7 @@ def assert_collection_label(execute):
         execute('document.querySelector(".scope-control button").click()')
 
 
-def run(invoke, invoke_current, execute, execute_main, click, wait, capture, directory, env):
+def run(invoke, invoke_current, execute, execute_main, click, close_settings, wait, capture, directory, env):
     print('Native system languages:', execute('return navigator.languages'), flush=True)
     initial = invoke('get_settings')['value']
     assert initial['language'] == 'system' and initial['revision'] == '0', initial
@@ -75,7 +75,7 @@ def run(invoke, invoke_current, execute, execute_main, click, wait, capture, dir
     assert invoke('set_ui_language', {'language': 'en'})['ok']
     saved = invoke('get_settings')['value']
     print('PASS language: native form, system Chinese, English/Chinese switching, main/settings synchronization without focus, preserved user text and collection names, safe failed-save rollback, resolved-locale ACL', flush=True)
-    click('.modal-heading .icon-button')
+    close_settings()
     return saved
 
 

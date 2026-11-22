@@ -6,6 +6,7 @@ fn update(theme: Theme, revision: &str) -> UpdateSettings {
     UpdateSettings {
         theme,
         language: None,
+        show_search_by_default: None,
         expected_revision: revision.into(),
     }
 }
@@ -264,7 +265,7 @@ fn v8_migration_preserves_settings_and_defaults_to_system_language() {
     drop(storage);
     let connection = Connection::open(&path).unwrap();
     connection
-        .execute_batch("ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=8;")
+        .execute_batch("ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=8;")
         .unwrap();
     drop(connection);
     let storage = Storage::open(&path).unwrap();
@@ -291,4 +292,48 @@ fn language_validation_rejects_unknown_values_and_accepts_older_requests() {
             serde_json::json!({"theme":"dark", "language":language, "expectedRevision":"0"});
         assert!(serde_json::from_value::<UpdateSettings>(input).is_err());
     }
+}
+
+#[test]
+fn search_toolbar_defaults_to_visible_and_keeps_a_saved_opt_out() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("v12.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    assert!(storage.settings().unwrap().show_search_by_default);
+    storage.update_settings(update(Theme::Dark, "0")).unwrap();
+    drop(storage);
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; PRAGMA user_version=12;",
+        )
+        .unwrap();
+    drop(connection);
+    let mut storage = Storage::open(&path).unwrap();
+    let migrated = storage.settings().unwrap();
+    assert!(migrated.show_search_by_default);
+    assert_eq!(migrated.theme, Theme::Dark);
+    assert_eq!(migrated.revision, "1");
+    let saved = storage
+        .update_settings(UpdateSettings {
+            show_search_by_default: Some(false),
+            ..update(Theme::Dark, &migrated.revision)
+        })
+        .unwrap();
+    assert!(!saved.show_search_by_default);
+    assert!(
+        !storage
+            .update_settings(update(Theme::Light, &saved.revision))
+            .unwrap()
+            .show_search_by_default
+    );
+    drop(storage);
+    assert!(
+        !Storage::open(&path)
+            .unwrap()
+            .settings()
+            .unwrap()
+            .show_search_by_default
+    );
 }

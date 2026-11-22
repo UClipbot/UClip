@@ -14,6 +14,16 @@ export type UpdateDesktopPreferences = { closeToTray: boolean, autoHide: boolean
 
 export type DesktopStatus = { keyboard: KeyboardSnapshot, preferences: DesktopPreferences, trayAvailable: boolean, shortcutAvailable: boolean, autostartEnabled: boolean | null, error: AppError | null, };
 
+export type QuickPastePreferences = { shortcut: string | null, includePinned: boolean, revision: string, };
+
+export type UpdateQuickPastePreferences = { shortcut: string | null, includePinned: boolean, expectedRevision: string, };
+
+export type QuickPasteSettings = { preferences: QuickPastePreferences, available: boolean, error: AppError | null, };
+
+export type QuickPasteItem = { kind: ClipKind, text: string, fileCount: number | null, thumbnail: string | null, };
+
+export type QuickPasteSnapshot = { token: string, items: Array<QuickPasteItem>, loading: boolean, copyOnly: boolean, feedbackOnly: boolean, finalKey: string | null, mainShortcut: string, mainCode: string, quickCode: string, mainModifiers: number, quickModifiers: number, error: AppError | null, result: CopyResult | null, };
+
 export type ChangeClipDeletion = { id: string, expectedRevision: string, deleted: boolean, };
 
 export type ClipDeletionSnapshot = { id: string, revision: string, deleted: boolean, };
@@ -74,7 +84,7 @@ export type Theme = "system" | "light" | "dark";
 
 export type Language = "system" | "zh-CN" | "en";
 
-export type SettingsSnapshot = { theme: Theme, language: Language,
+export type SettingsSnapshot = { theme: Theme, language: Language, showSearchByDefault: boolean,
 /**
  * Decimal string: revisions must remain exact in JavaScript.
  */
@@ -84,7 +94,7 @@ export type UpdateSettings = { theme: Theme,
 /**
  * Omitted by older clients when changing only the theme.
  */
-language: Language | null, expectedRevision: string, };
+language: Language | null, showSearchByDefault: boolean | null, expectedRevision: string, };
 
 export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout" | "excluded" | "duplicate_name";
 

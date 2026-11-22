@@ -10,7 +10,6 @@ import {
   onHoverPreviewChanged,
   readHoverPreview,
 } from '../platform/hoverPreview';
-import { Icon } from './Icon';
 
 export function HoverPreviewWindow() {
   const appearance = useAppearance();
@@ -91,18 +90,6 @@ export function HoverPreviewWindow() {
             ? t(request.kind === 'files' ? 'file_references' : request.kind)
             : t('content_preview')}
         </span>
-        <button
-          className="icon-button"
-          aria-label={t('close_preview')}
-          onClick={() => {
-            if (request)
-              void hideHoverPreview(request.token).catch((failure) =>
-                setError(safeError(failure).message),
-              );
-          }}
-        >
-          <Icon name="close" size={18} />
-        </button>
       </header>
       <div className="native-preview-scroll" aria-busy={loading}>
         {failure ? (

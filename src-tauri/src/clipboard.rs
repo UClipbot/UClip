@@ -10,6 +10,7 @@ use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
 use std::{
     path::{Path, PathBuf},
     sync::{
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, SyncSender},
         Arc, Mutex,
     },
@@ -30,13 +31,27 @@ pub(super) const MARKER: &str = "application/x-uclip-internal";
 type Reply<T> = oneshot::Sender<Result<T, AppError>>;
 enum Request {
     Policy(UpdateCapturePolicy, Reply<CapturePolicy>),
-    Copy(Vec<String>, bool, bool, Reply<CopyResult>),
+    Copy(CopyRequest, Reply<CopyResult>),
     Deletion(
         uclip_core::ChangeClipDeletion,
         Reply<uclip_core::ClipDeletionSnapshot>,
     ),
     Stop(Reply<()>),
 }
+enum CopyRequest {
+    History {
+        ids: Vec<String>,
+        paste: bool,
+        fallback: bool,
+    },
+    Quick {
+        id: String,
+        revision: String,
+        target: Option<crate::paste::InvocationTarget>,
+        active: Arc<AtomicBool>,
+    },
+}
+
 #[derive(Default)]
 struct State {
     available: bool,
@@ -123,48 +138,92 @@ impl ClipboardService {
                             }
                             let _ = reply.send(response);
                         }
-                        Ok(Request::Copy(ids, auto_paste, fallback_to_copy, reply)) => {
-                            let response =
-                                block(core.read_clips(ids.clone())).and_then(|payload| {
-                                    let prepared =
-                                        match auto_paste.then(|| paste.prepare()).transpose() {
-                                            Err(error)
-                                                if fallback_to_copy
-                                                    && matches!(
-                                                        error.code,
-                                                        ErrorCode::TargetLost
-                                                            | ErrorCode::Restricted
-                                                    ) =>
-                                            {
-                                                None
-                                            }
-                                            result => result?,
-                                        };
-                                    #[cfg(target_os = "windows")]
-                                    let publication = write(&context, payload, &marker)?;
-                                    #[cfg(not(target_os = "windows"))]
-                                    write(&context, payload, &marker)?;
-                                    let usage = ids
-                                        .into_iter()
-                                        .try_for_each(|id| block(core.mark_used(id)));
-                                    let mut result = CopyResult {
-                                        copied: true,
-                                        usage_saved: usage.is_ok(),
-                                        paste_requested: false,
-                                        warning: usage.err(),
-                                    };
-                                    if let Some(prepared) = prepared {
-                                        match paste.paste(
+                        Ok(Request::Copy(request, reply)) => {
+                            let response = (|| {
+                                let (ids, payload, prepared, active) = match request {
+                                    CopyRequest::History {
+                                        ids,
+                                        paste: auto_paste,
+                                        fallback,
+                                    } => {
+                                        let payload = block(core.read_clips(ids.clone()))?;
+                                        let prepared =
+                                            match auto_paste.then(|| paste.prepare()).transpose() {
+                                                Err(error)
+                                                    if fallback
+                                                        && matches!(
+                                                            error.code,
+                                                            ErrorCode::TargetLost
+                                                                | ErrorCode::Restricted
+                                                        ) =>
+                                                {
+                                                    None
+                                                }
+                                                result => result?,
+                                            };
+                                        (ids, payload, prepared, None)
+                                    }
+                                    CopyRequest::Quick {
+                                        id,
+                                        revision,
+                                        target,
+                                        active,
+                                    } => {
+                                        let payload = block(
+                                            core.read_quick_paste_slot(id.clone(), revision),
+                                        )?;
+                                        let prepared = target
+                                            .map(|target| paste.prepare_invocation(target, &active))
+                                            .transpose()?;
+                                        (vec![id], payload, prepared, Some(active))
+                                    }
+                                };
+                                let valid = || {
+                                    active
+                                        .as_ref()
+                                        .is_none_or(|active| active.load(Ordering::Acquire))
+                                };
+                                if !valid() {
+                                    return Err(AppError::new(ErrorCode::TargetLost));
+                                }
+                                #[cfg(target_os = "windows")]
+                                let publication = write(&context, payload, &marker)?;
+                                #[cfg(not(target_os = "windows"))]
+                                write(&context, payload, &marker)?;
+                                #[cfg(target_os = "linux")]
+                                let selection_owner = if active.is_some() && prepared.is_some() {
+                                    quick_selection_owner(&marker).map(Some)
+                                } else {
+                                    Ok(None)
+                                };
+                                let usage =
+                                    ids.into_iter().try_for_each(|id| block(core.mark_used(id)));
+                                let mut result = CopyResult {
+                                    copied: true,
+                                    usage_saved: usage.is_ok(),
+                                    paste_requested: false,
+                                    warning: usage.err(),
+                                };
+                                if let Some(prepared) = prepared {
+                                    let dispatched = (|| {
+                                        if !valid() {
+                                            return Err(AppError::new(ErrorCode::TargetLost));
+                                        }
+                                        paste.paste(
                                             prepared,
                                             #[cfg(target_os = "windows")]
                                             publication,
-                                        ) {
-                                            Ok(()) => result.paste_requested = true,
-                                            Err(e) => result.warning = Some(e),
-                                        }
+                                            #[cfg(target_os = "linux")]
+                                            selection_owner?,
+                                        )
+                                    })();
+                                    match dispatched {
+                                        Ok(()) => result.paste_requested = true,
+                                        Err(e) => result.warning = Some(e),
                                     }
-                                    Ok(result)
-                                });
+                                }
+                                Ok(result)
+                            })();
                             let _ = reply.send(response);
                         }
                         Ok(Request::Deletion(request, reply)) => {
@@ -313,9 +372,40 @@ impl ClipboardService {
         fallback_to_copy: bool,
     ) -> Result<CopyResult, AppError> {
         let (tx, rx) = oneshot::channel();
-        self.submit(Request::Copy(ids, paste, fallback_to_copy, tx))?;
+        self.submit(Request::Copy(
+            CopyRequest::History {
+                ids,
+                paste,
+                fallback: fallback_to_copy,
+            },
+            tx,
+        ))?;
         rx.await.map_err(|_| error())?
     }
+    pub fn invocation_target(&self) -> Option<crate::paste::InvocationTarget> {
+        self.paste.invocation_target()
+    }
+
+    pub async fn quick_paste(
+        &self,
+        id: String,
+        revision: String,
+        target: Option<crate::paste::InvocationTarget>,
+        active: Arc<AtomicBool>,
+    ) -> Result<CopyResult, AppError> {
+        let (tx, rx) = oneshot::channel();
+        self.submit(Request::Copy(
+            CopyRequest::Quick {
+                id,
+                revision,
+                target,
+                active,
+            },
+            tx,
+        ))?;
+        rx.await.map_err(|_| error())?
+    }
+
     pub async fn change_deletion(
         &self,
         request: uclip_core::ChangeClipDeletion,
@@ -414,6 +504,16 @@ pub fn normalize_files(files: Vec<String>) -> Result<Vec<String>, AppError> {
         })
         .collect()
 }
+#[cfg(target_os = "linux")]
+fn quick_selection_owner(marker: &[u8]) -> Result<u32, AppError> {
+    let reader = crate::clipboard_x11::Reader::new()?;
+    let owner = reader.owner()?;
+    if owner == 0 || reader.buffer(MARKER, 64)? != marker || reader.owner()? != owner {
+        return Err(AppError::new(ErrorCode::TargetLost));
+    }
+    Ok(owner)
+}
+
 #[cfg(target_os = "linux")]
 fn write(context: &ClipboardContext, payload: ClipPayload, marker: &[u8]) -> Result<(), AppError> {
     payload.validate()?;

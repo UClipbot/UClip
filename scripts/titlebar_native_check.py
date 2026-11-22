@@ -7,7 +7,7 @@ from pathlib import Path
 from clipboard_native_check import wait
 
 
-def run(invoke, execute, click, env, directory, capture, execute_main, capture_main):
+def run(invoke, execute, click, close_settings, env, directory, capture, execute_main, capture_main):
     if env.get('UCLIP_FIXTURE_DISPLAY') != '1' or env.get('DISPLAY') in (None, ':0', ':0.0'):
         raise RuntimeError('Titlebar checks require an isolated display.')
 
@@ -85,7 +85,7 @@ def run(invoke, execute, click, env, directory, capture, execute_main, capture_m
         with sqlite3.connect(database) as connection:
             connection.execute('DROP TRIGGER fixture_titlebar_failure')
 
-    click('[aria-label="关闭面板"]')
+    close_settings()
 
     # The independent settings window closes without changing the main window controls.
     wait(layout, 'custom window layout settled')
@@ -136,7 +136,7 @@ def run(invoke, execute, click, env, directory, capture, execute_main, capture_m
     wait(lambda: execute('return !document.querySelector(arguments[0]).disabled', ['[aria-label="使用系统原生标题栏"]']), 'native setting settled')
     click('[aria-label="使用系统原生标题栏"]')
     wait(lambda: execute_main('return !!document.querySelector(".window-titlebar")'), 'custom controls restored')
-    click('[aria-label="关闭面板"]')
+    close_settings()
     save(closeToTray=True)
     xid = window()
     click('[aria-label="关闭窗口"]')

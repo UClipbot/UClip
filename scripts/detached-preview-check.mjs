@@ -32,7 +32,7 @@ window.fixture = { calls: [], requests: [], mode: 'deferred', language: 'en', th
  current: { token: crypto.randomUUID(), id, kind: 'text', source: 'Fixture source', savedAt: '1794647289000', size: null, anchor: {x:0,y:20,width:600,height:56} } };
 mockIPC((command, args) => {
  fixture.calls.push({command, args});
- if(command === 'bootstrap') return { contractVersion:3, appVersion:'test', dataProfile:'test', schemaVersion:11, settings:{theme:fixture.theme,language:fixture.language,revision:'1'}, platform:{os:'macos',sessionHint:'native',capabilities:[]} };
+ if(command === 'bootstrap') return { contractVersion:3, appVersion:'test', dataProfile:'test', schemaVersion:13, settings:{theme:fixture.theme,language:fixture.language,showSearchByDefault:true,revision:'1'}, platform:{os:'macos',sessionHint:'native',capabilities:[]} };
  if(command === 'get_hover_preview') return fixture.current;
  if(command === 'clip_detail') {
    if(fixture.mode === 'error') return Promise.reject({code:'not_found', message:'secret'});
@@ -97,6 +97,7 @@ createRoot(document.getElementById('root')).render(<StrictMode>{new URLSearchPar
 
   await page.goto(`${url}/${base}.html?window=hover-preview`);
   await page.locator('.native-hover-preview').waitFor();
+  assert.equal(await page.locator('.native-preview-header button').count(), 0);
   await page.locator('.native-preview-footer time').waitFor();
   await page.waitForFunction(() => fixture.requests.length > 0);
   assert.match(await page.locator('.native-preview-scroll').innerText(), /Loading full content/);

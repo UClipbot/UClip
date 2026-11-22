@@ -6,6 +6,14 @@ const config = JSON.parse(read('src-tauri/tauri.conf.json'));
 const capability = JSON.parse(read('src-tauri/capabilities/main.json'));
 const settingsCapability = JSON.parse(read('src-tauri/capabilities/settings.json'));
 const previewCapability = JSON.parse(read('src-tauri/capabilities/hover-preview.json'));
+const quickCapability = JSON.parse(read('src-tauri/capabilities/quick-paste.json'));
+const auxiliaryResize = 'resize_auxiliary_corner';
+const quickSessionCommands = [
+  'quick_paste_snapshot',
+  'select_quick_paste',
+  'expand_quick_paste',
+  'cancel_quick_paste',
+];
 const registered = read('src-tauri/src/lib.rs').match(/generate_handler!\[([\s\S]*?)\]/)?.[1];
 const manifested = read('src-tauri/build.rs').match(/\.commands\(&\[([\s\S]*?)\]\)/)?.[1];
 assert(registered && manifested, 'Command registration must remain inspectable.');
@@ -27,13 +35,27 @@ assert.deepEqual(
   capability.permissions.toSorted(),
   [
     ...commands
-      .filter((name) => !['get_hover_preview', 'hover_preview_presence'].includes(name))
+      .filter(
+        (name) =>
+          ![
+            'get_hover_preview',
+            'hover_preview_presence',
+            'set_global_shortcut_recording',
+            auxiliaryResize,
+            ...quickSessionCommands,
+          ].includes(name),
+      )
       .map((name) => `allow-${name.replaceAll('_', '-')}`),
     'core:event:allow-listen',
     'core:event:allow-unlisten',
   ].sort(),
 );
-assert.deepEqual(config.app.security.capabilities, ['main', 'settings', 'hover-preview']);
+assert.deepEqual(config.app.security.capabilities, [
+  'main',
+  'settings',
+  'hover-preview',
+  'quick-paste',
+]);
 assert.deepEqual(settingsCapability.windows, ['settings']);
 assert.equal(settingsCapability.local, true);
 assert.equal(settingsCapability.remote, undefined);
@@ -43,11 +65,15 @@ assert.deepEqual(
     'core:event:allow-listen',
     'core:event:allow-unlisten',
     'allow-bootstrap',
+    'allow-resize-auxiliary-corner',
     'allow-update-settings',
     'allow-clipboard-status',
     'allow-update-capture-policy',
     'allow-desktop-status',
     'allow-update-desktop-preferences',
+    'allow-set-global-shortcut-recording',
+    'allow-quick-paste-settings',
+    'allow-update-quick-paste-settings',
     'allow-update-key-bindings',
     'allow-set-autostart',
     'allow-close-main-window',
@@ -66,6 +92,19 @@ assert.deepEqual(
     'allow-get-hover-preview',
     'allow-hover-preview-presence',
     'allow-hide-hover-preview',
+  ].toSorted(),
+);
+assert.deepEqual(quickCapability.windows, ['quick-paste']);
+assert.equal(quickCapability.local, true);
+assert.equal(quickCapability.remote, undefined);
+assert.deepEqual(
+  quickCapability.permissions.toSorted(),
+  [
+    'core:event:allow-listen',
+    'core:event:allow-unlisten',
+    'allow-bootstrap',
+    'allow-resize-auxiliary-corner',
+    ...quickSessionCommands.map((name) => `allow-${name.replaceAll('_', '-')}`),
   ].toSorted(),
 );
 assert.equal(config.app.withGlobalTauri, false);

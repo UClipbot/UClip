@@ -46,7 +46,7 @@ impl Window {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-struct Focus {
+pub(super) struct Focus {
     window: Window,
     control: Window,
 }
@@ -88,6 +88,12 @@ pub(super) struct Desktop {
 }
 
 impl Desktop {
+    pub(super) fn invocation_focus(&mut self) -> Option<Focus> {
+        let window = foreground().filter(|window| window.pid != std::process::id())?;
+        self.observe();
+        Focus::read(window)
+    }
+
     pub fn observe(&mut self) {
         let Some(window) = foreground() else {
             return;
@@ -186,6 +192,18 @@ impl Desktop {
         self.last_external = None;
         Ok(())
     }
+}
+
+impl Prepared {
+    pub(super) fn matches(&self, focus: Focus) -> bool {
+        self.target.focus == focus
+    }
+}
+
+pub(super) fn modifiers_released() -> bool {
+    [VK_CONTROL, VK_SHIFT, VK_MENU, VK_LWIN, VK_RWIN]
+        .into_iter()
+        .all(|key| unsafe { GetAsyncKeyState(i32::from(key.0)) } >= 0)
 }
 
 fn dispatch(focus: Focus, publication: ClipboardWrite) -> Result<(), AppError> {

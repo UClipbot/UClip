@@ -388,7 +388,7 @@ class ClipboardChecks:
         delete_visible()
         missing=self.invoke('copy_clip',{'id':removed['id'],'paste':False})
         assert not missing['ok'] and missing['error']['code']=='not_found'
-        self.click('[aria-label="清空搜索"]')
+        self.enter('#history-search', '')
         print('PASS: native row deletion/undo/re-deletion commits, deleted content cannot be copied',flush=True)
         self.total=self.query()['total']
         return self

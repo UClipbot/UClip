@@ -9,9 +9,7 @@ export function KeyboardSettings({
   busy,
   primary,
   save,
-  expanded = false,
 }: {
-  expanded?: boolean;
   snapshot?: KeyboardSnapshot;
   busy: boolean;
   primary: string;
@@ -25,8 +23,8 @@ export function KeyboardSettings({
   }, [snapshot?.revision]);
   const error = bindingError(draft);
   return (
-    <details className="about-section" open={expanded || undefined}>
-      <summary>{t('window_shortcuts')}</summary>
+    <section className="settings-section" aria-labelledby="window-shortcuts-heading">
+      <h3 id="window-shortcuts-heading">{t('window_shortcuts')}</h3>
       <p className="settings-feedback">
         {t(
           'click_a_shortcut_and_press_new_keys_input_methods_menus_and_text_editing_take_priority_esc_always_provides_a_way_out',
@@ -110,6 +108,6 @@ export function KeyboardSettings({
       <p className="settings-feedback" role="status">
         {t(error || feedback)}
       </p>
-    </details>
+    </section>
   );
 }

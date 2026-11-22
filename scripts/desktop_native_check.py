@@ -156,7 +156,7 @@ def run(checks):
     c.execute('delete window.__fixtureCompleted;return true')
     c.click('.empty-state .secondary-button')
     wait(lambda:c.execute('return !document.querySelector("#search-error") && document.querySelector(".history-scroll").getAttribute("aria-busy")==="false"'),'explicit read-only search retry')
-    c.click('[aria-label="清空搜索"]')
+    c.enter('#history-search', '')
     c.policy(enabled=previous_policy['enabled'])
     print('PASS P2: native query deadline, stale Enter guard, late response suppression and explicit retry',flush=True)
 
@@ -196,7 +196,7 @@ def run_manual(c):
     print('PASS P1: real manual-create UI while paused, distinct identities, exact copy, exclusion failure retains form and revision',flush=True)
 
 
-def run_keyboard(c):
+def run_keyboard(c, close_settings):
     import copy
     c.activate(c.window('^UClip$'))
     status=c.action('desktop_status');snapshot=status['keyboard'];default=copy.deepcopy(snapshot['bindings'])
@@ -212,8 +212,8 @@ def run_keyboard(c):
     c.key('key','--clearmodifiers','ctrl+Return')
     c.click('[data-testid="save-window-keys"]')
     saved=wait(lambda:(p if (p:=c.action('desktop_status')['keyboard'])['bindings']['copy']['primary'] else None),'custom copy binding commits')
-    wait(lambda:c.execute('return document.querySelector("[data-testid=save-window-keys]").closest("details").querySelector("[role=status]").textContent.includes("已保存")'),'saved binding reaches the active UI')
-    c.click('[aria-label="关闭面板"]')
+    wait(lambda:c.execute('return document.querySelector("[data-testid=save-window-keys]").closest("section").querySelector("[role=status]").textContent.includes("已保存")'),'saved binding reaches the active UI')
+    close_settings()
     original=c.action('clipboard_status')['policy'];c.policy(enabled=False)
     c.enter('#history-search','手工保存合成文本')
     wait(lambda:c.execute('return document.querySelectorAll(".clip-row").length===2 && document.querySelector(".history-scroll").getAttribute("aria-busy")==="false"'),'manual matches for key binding')
@@ -222,16 +222,16 @@ def run_keyboard(c):
     assert c.source.send({'op':'read','kind':'text'})['text']=='public custom-key sentinel'
     c.key('key','--clearmodifiers','ctrl+Return')
     wait(lambda:c.source.send({'op':'read','kind':'text'})['text']==c.manual_text,'custom shortcut copies the current effective selection')
-    c.click('[aria-label="清空搜索"]')
+    c.enter('#history-search', '')
     stale=c.invoke('update_key_bindings',{'request':{'bindings':default,'expectedRevision':snapshot['revision']}})
     assert not stale['ok'] and stale['error']['code']=='conflict',stale
     c.click('[data-testid="open-settings"]')
     c.click('[data-settings-page="keyboard"]')
     # The default action is a draft until the explicit save button succeeds.
-    c.click('.about-section:has([aria-label="修改复制快捷键"]) .form-actions .secondary-button')
+    c.click('[aria-labelledby="window-shortcuts-heading"] .form-actions .secondary-button')
     c.click('[data-testid="save-window-keys"]')
     wait(lambda:c.action('desktop_status')['keyboard']['bindings']==default,'restore default bindings')
-    wait(lambda:c.execute('return document.querySelector("[data-testid=save-window-keys]").closest("details").querySelector("[role=status]").textContent.includes("已保存")'),'default bindings reach the active UI')
-    c.click('[aria-label="关闭面板"]')
+    wait(lambda:c.execute('return document.querySelector("[data-testid=save-window-keys]").closest("section").querySelector("[role=status]").textContent.includes("已保存")'),'default bindings reach the active UI')
+    close_settings()
     c.policy(enabled=original['enabled']);c.total=c.query()['total']
     print('PASS P2: actual keyboard recorder/save, duplicate/stale rejection, customized copy obeys current selection and old Enter is inactive',flush=True)

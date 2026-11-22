@@ -9,7 +9,9 @@ def run(invoke, execute, click, wait, capture):
     execute('''
       const viewport=document.querySelector('.history-scroll'), row=viewport.querySelectorAll('[data-clip-id]')[10];
       viewport.scrollTop+=row.getBoundingClientRect().top-viewport.getBoundingClientRect().top-18;
-      row.querySelector('[data-row-main]').focus({preventScroll:true});
+      const entry=row.querySelector('[data-row-main]');
+      entry.click();
+      entry.focus({preventScroll:true});
       window.__scrollFixture={id:row.dataset.clipId,offset:row.getBoundingClientRect().top-viewport.getBoundingClientRect().top,ready:false};
       requestAnimationFrame(()=>requestAnimationFrame(()=>window.__scrollFixture.ready=true)); return true;
     ''')
@@ -32,7 +34,7 @@ def run(invoke, execute, click, wait, capture):
 
     selector = '[data-clip-id="' + execute('return window.__scrollFixture.id') + '"]'
     click(selector + ' .row-more')
-    click('.action-menu button:nth-child(2)')
+    click('.action-menu button:nth-child(3)')
     wait(lambda: execute('return document.querySelector(".history-panel").hidden'), 'preview opened')
     click('[aria-label="返回历史列表"]')
     wait(aligned, 'preview return preserves viewport')
@@ -49,10 +51,12 @@ def run(invoke, execute, click, wait, capture):
     click('[aria-label="返回历史列表"]')
     wait(aligned, 'pre-hide snapshot survives preview without a scroll event')
 
-    execute('const s=document.querySelector("[aria-label=内容类型]");s.value="image";s.dispatchEvent(new Event("change",{bubbles:true}));return true')
+    click('[aria-label="内容类型"]')
+    click('.action-menu button[value="image"]')
     wait(lambda: execute('return document.querySelectorAll(".clip-row").length===0 && document.querySelector(".history-scroll").getAttribute("aria-busy")==="false"'), 'explicit filter completed')
     assert execute('return document.querySelector(".history-scroll").scrollTop===0')
-    execute('const s=document.querySelector("[aria-label=内容类型]");s.value="all";s.dispatchEvent(new Event("change",{bubbles:true}));return true')
+    click('[aria-label="内容类型"]')
+    click('.action-menu button[value="all"]')
     wait(lambda: execute('return document.querySelectorAll(".clip-row").length===25 && document.querySelector(".history-scroll").getAttribute("aria-busy")==="false"'), 'filter cleared')
     assert execute('return document.querySelector(".history-scroll").scrollTop===0')
 

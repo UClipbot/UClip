@@ -26,13 +26,17 @@ UClip is a local-first clipboard manager. Save what you copy, then quickly searc
 3. Search and select a record, then press Enter or click Copy. Paste it in the target app.
 4. On Linux X11, use Ctrl+Shift+V to show UClip, then choose **Paste to original app**.
 
+In **Settings → Shortcuts**, configure the main window and Quick Paste panel under **Global shortcuts**. Edit search, copy and navigation in the **Window shortcuts** group on the same page. In Quick Paste, press **1–5** to select a recent item. Use the main-window shortcut to expand the panel. You can also press the panel shortcut's final key again if it is a letter or another non-digit key. To include pinned items, use **Settings → Desktop → Show pinned items in Quick Paste**.
+
 File records store references. The original files must still exist when you use them.
+
+Search and filters are shown by default. Change this in Settings → Appearance.
 
 ## Common shortcuts
 
 | Action | Default shortcut |
 | --- | --- |
-| Search | Ctrl/Cmd+K |
+| Show or hide search and filters | Ctrl/Cmd+F |
 | Settings | Ctrl/Cmd+, |
 | Copy selected record | Enter |
 | View full content | Space |
@@ -59,6 +63,10 @@ npm run tauri:dev
 ```
 
 Use `npm run dev` for the in-memory browser preview. The browser remembers only language and appearance preferences; reloading resets sample records.
+
+## Install locally on Linux
+
+With the build prerequisites above, run `./scripts/install.sh` from a terminal in your Linux desktop session. The script builds UClip, installs it for your user without `sudo`, adds **UClip** to the applications menu, and starts it. Run it again after updating the source. Once the build is ready, the script closes the running copy of this installation and starts the newly installed build.
 
 ## Build installers
 

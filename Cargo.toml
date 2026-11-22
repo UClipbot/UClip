@@ -16,6 +16,11 @@ thiserror = "=2.0.21"
 tokio = { version = "=1.54.1", features = ["sync", "rt", "macros"] }
 ts-rs = { version = "=12.0.1", features = ["serde-compat"] }
 
+[patch.crates-io]
+# Backport X11 ungrab flushing for the plugin's 0.8 dependency.
+# https://github.com/tauri-apps/global-hotkey/pull/197
+global-hotkey = { git = "https://github.com/tauri-apps/global-hotkey.git", rev = "11b352c5b77d6cd03fddc97bb951586f4d8fd927" }
+
 [profile.dev]
 debug = 0
 

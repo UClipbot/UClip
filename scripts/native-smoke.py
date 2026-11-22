@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='target/debug/uclip-desktop')
     parser.add_argument('--screenshots', help='Optional folder for actual native UI PNG captures.')
+    parser.add_argument('--quick-paste-only', action='store_true', help='Quick Paste panel, bindings and real X11 paste.')
     parser.add_argument('--multiselect-only', action='store_true', help='Multi-selection native copy, deletion and undo.')
     parser.add_argument('--filters-only', action='store_true', help='Filter popup focus, keyboard selection and external blur auto-hide.')
     parser.add_argument('--language-only', action='store_true', help='Native language forms, cross-window updates, errors and restart persistence.')
@@ -161,7 +162,7 @@ def main():
                         page = None
                         if selector.startswith('#theme') or '使用系统原生标题栏' in selector:
                             page = 'appearance'
-                        elif '修改' in selector or 'save-window-keys' in selector or '.about-section:has(' in selector:
+                        elif '修改' in selector or 'save-window-keys' in selector or 'window-shortcuts-heading' in selector:
                             page = 'keyboard'
                         if page:
                             request('POST', f'/session/{session}/element/{element("[data-settings-page=" + page + "]")}/click', {})
@@ -170,15 +171,23 @@ def main():
                     if selector == '[data-testid="open-settings"]':
                         switch_window('main')
                         click('[aria-label="更多选项"]')
-                    closing = request('GET', f'/session/{session}/window') if selector in ['[aria-label="关闭面板"]', '.modal-heading .icon-button'] and execute('return document.body.classList.contains("settings-window")') else None
                     request('POST', f'/session/{session}/element/{element(selector)}/click', {})
                     if selector in ['[data-testid="open-settings"]', '[data-testid="footer-settings"]']:
                         wait_for(lambda: len(request('GET', f'/session/{session}/window/handles')) == 2, 'settings window created')
                         switch_window('settings')
                         wait_for(lambda: execute('return !!document.querySelector("#theme") && !document.querySelector("#theme").disabled'), 'settings form ready')
-                    if closing:
-                        wait_for(lambda: closing not in request('GET', f'/session/{session}/window/handles'), 'settings window closed')
-                        switch_window('main')
+
+                def close_settings():
+                    closing = switch_window('settings')
+                    panel = element('.modal')
+                    try:
+                        request('POST', f'/session/{session}/element/{panel}/value', {'text': '\ue00c'})  # Escape
+                    except RuntimeError as error:
+                        # The window can close before WebDriver finishes sending Escape.
+                        if '"no such window"' not in str(error):
+                            raise
+                    wait_for(lambda: closing not in request('GET', f'/session/{session}/window/handles'), 'settings window closed')
+                    switch_window('main')
 
                 def enter(selector, text):
                     key = element(selector)
@@ -195,6 +204,17 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.quick_paste_only:
+                    from quick_paste_native_check import run, verify_restart
+                    saved = run(invoke, invoke_current, execute, click, close_settings, switch_window, wait_for, env, directory, log)
+                    assert invoke('quit_app')['ok']
+                    wait_for(lambda: not owned_processes(), 'quick paste test process exits')
+                    try: request('DELETE', f'/session/{session}')
+                    except (OSError, RuntimeError): pass
+                    session = start()
+                    wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'quick paste test process restarted')
+                    verify_restart(invoke, execute, click, close_settings, switch_window, wait_for, env, saved)
+                    return
                 if args.multiselect_only:
                     from multiselect_native_check import run
                     run(invoke, execute, click, wait_for, env)
@@ -205,7 +225,7 @@ def main():
                     return
                 if args.language_only:
                     from language_native_check import run, verify_restart
-                    saved = run(invoke, invoke_current, execute, execute_main, click, wait_for, capture, directory, env)
+                    saved = run(invoke, invoke_current, execute, execute_main, click, close_settings, wait_for, capture, directory, env)
                     assert invoke('quit_app')['ok']
                     wait_for(lambda: not owned_processes(), 'language test process exits')
                     try: request('DELETE', f'/session/{session}')
@@ -216,7 +236,7 @@ def main():
                     return
                 if args.settings_only:
                     from settings_native_check import run
-                    run(invoke, invoke_current, execute, execute_main, click, switch_window, wait_for, capture, env, directory)
+                    run(invoke, invoke_current, execute, execute_main, click, close_settings, switch_window, wait_for, capture, env, directory)
                     return
                 if args.source_only:
                     from source_native_check import run
@@ -235,7 +255,7 @@ def main():
                         click('[data-testid="open-settings"]')
                         click('[data-settings-page="desktop"]')
                         wait_for(lambda: execute('return document.querySelector(".settings-feedback[role=status]")?.textContent.includes("当前平台或权限不支持此操作")'), 'default OS registration failure visible')
-                        click('[aria-label="关闭面板"]')
+                        close_settings()
                         assert invoke('set_autostart', {'enabled': False}) == {'ok': True, 'value': False}
                         assert invoke('desktop_status')['value']['error'] is None
                     else:
@@ -259,7 +279,7 @@ def main():
                     return
                 if args.titlebar_only:
                     from titlebar_native_check import run, verify_restart
-                    run(invoke,execute,click,env,directory,capture,execute_main,lambda name:on_main(capture,name))
+                    run(invoke,execute,click,close_settings,env,directory,capture,execute_main,lambda name:on_main(capture,name))
                     for abrupt in [False,True]:
                         if abrupt:os.kill(owned_processes()[0][0],signal.SIGKILL)
                         else:click('[aria-label="关闭窗口"]')
@@ -379,21 +399,21 @@ def main():
                 assert saved['revision'] == '1', saved
                 print('PASS: native appearance form commits and renders saved state', flush=True)
 
-                click('[aria-label="关闭面板"]')
+                close_settings()
                 if args.screenshots:
                     execute('document.querySelector(".toast .icon-button")?.click(); return true')
                     capture('simple-dark')
                     click('[data-testid="open-settings"]')
                     click('#theme option[value="light"]')
                     wait_for(lambda: execute('return document.documentElement.dataset.theme === "light"'), 'light theme render')
-                    click('[aria-label="关闭面板"]')
+                    close_settings()
                     execute('document.querySelector(".toast .icon-button")?.click(); return true')
                     capture('simple-light')
                     click('[data-testid="open-settings"]')
                     click('#theme option[value="dark"]')
                     wait_for(lambda: execute('return document.documentElement.dataset.theme === "dark"'), 'dark theme restore')
                     capture('simple-settings')
-                    click('[aria-label="关闭面板"]')
+                    close_settings()
                     saved = invoke('get_settings')['value']
 
                 # Native mode never falls back to in-memory examples.
@@ -402,7 +422,7 @@ def main():
                 enter('#history-search', '[')
                 wait_for(lambda: execute('return !!document.querySelector("#search-error")'), 'native regex input validation')
                 click('[aria-label="正则表达式搜索"]')
-                click('[aria-label="清空搜索"]')
+                enter('#history-search', '')
                 print('PASS: real empty history never shows examples; native regex validation works', flush=True)
                 if args.wayland_restrictions:
                     assert env.get('GDK_BACKEND')=='wayland' and not env.get('DISPLAY')
@@ -414,6 +434,15 @@ def main():
                     assert not refused['ok'] and refused['error']['code']=='restricted',refused
                     desktop=invoke('desktop_status')['value']
                     assert not desktop['shortcutAvailable']
+                    quick = invoke('quick_paste_settings')['value']
+                    assert not quick['available'] and quick['preferences']['shortcut'] is None, quick
+                    refused = invoke('update_quick_paste_settings', {'request': {
+                        'shortcut': 'Control+Alt+V',
+                        'includePinned': True,
+                        'expectedRevision': quick['preferences']['revision'],
+                    }})
+                    assert not refused['ok'] and refused['error']['code'] == 'restricted', refused
+                    assert invoke('quick_paste_settings')['value'] == quick
                     preferences=desktop['preferences']
                     refused=invoke('update_desktop_preferences',{'request':{'closeToTray':True,'autoHide':False,'nativeTitlebar':preferences['nativeTitlebar'],'shortcut':preferences['shortcut'],'expectedRevision':preferences['revision']}})
                     assert not refused['ok'] and refused['error']['code']=='restricted',refused
@@ -421,8 +450,28 @@ def main():
                     history=invoke('history_query',{'request':{'query':'中文','regex':False,'kind':None,'offset':0,'expectedRevision':None}})
                     assert history['ok'] and history['value']['total']==0,history
                     print('PASS Wayland: native GDK Wayland WebKit, no DISPLAY/XWayland; local history/theme work; capture/global shortcut/hide-without-recovery explicitly restricted',flush=True)
-                    request('DELETE', f'/session/{session}')
-                    session=None
+                    assert invoke('quit_app')['ok']
+                    wait_for(lambda: not owned_processes(), 'Wayland process exits')
+                    try: request('DELETE', f'/session/{session}')
+                    except (OSError, RuntimeError): pass
+                    database_path, = Path(directory, 'data').rglob('foundation.sqlite3')
+                    # Simulate reopening a profile with a binding saved in X11.
+                    with sqlite3.connect(database_path) as database:
+                        database.execute("UPDATE quick_paste_preferences SET shortcut='Control+Alt+V', revision=1 WHERE singleton=1")
+                    session = start()
+                    quick = wait_for(lambda: (result := invoke('quick_paste_settings'))['ok'] and result['value'],
+                                     'existing Quick Paste preferences restored on Wayland')
+                    assert quick['preferences']['shortcut'] == 'Control+Alt+V', quick
+                    assert not quick['available'] and quick['error']['code'] == 'restricted', quick
+                    saved = invoke('update_quick_paste_settings', {'request': {
+                        'shortcut': quick['preferences']['shortcut'],
+                        'includePinned': True,
+                        'expectedRevision': quick['preferences']['revision'],
+                    }})
+                    assert saved['ok'] and saved['value']['preferences']['includePinned'], saved
+                    assert saved['value']['preferences']['shortcut'] == quick['preferences']['shortcut'], saved
+                    assert not saved['value']['available'] and saved['value']['error'] == quick['error'], saved
+                    print('PASS Wayland: pinned preference saved while the existing X11 binding stayed unavailable', flush=True)
                     return
                 if args.clipboard_fixtures:
                     from clipboard_native_check import ClipboardChecks
@@ -431,7 +480,7 @@ def main():
                     capture('local-history')
                     from desktop_native_check import run as desktop_checks,run_manual,run_keyboard
                     run_manual(clipboard_checks)
-                    run_keyboard(clipboard_checks)
+                    run_keyboard(clipboard_checks, close_settings)
                     desktop_checks(clipboard_checks)
                     from experience_native_check import run as experience_checks
                     experience_checks(clipboard_checks)
@@ -484,7 +533,7 @@ def main():
                     assert execute_main('return innerWidth===700 && innerHeight===600'), execute_main('return {width:innerWidth,height:innerHeight}')
                     print('PASS P2: restored native window size after process restart',flush=True)
                 assert execute('return document.documentElement.dataset.theme') == 'dark'
-                click('[aria-label="关闭面板"]')
+                close_settings()
                 if clipboard_checks:
                     clipboard_checks.replay()
                 print('PASS: normal window close drains storage; restart retains theme and revision', flush=True)

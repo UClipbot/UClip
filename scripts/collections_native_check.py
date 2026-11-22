@@ -145,7 +145,7 @@ def run(c,capture):
     scope(c,'all');settled(c,1)
     c.set('text',text='public wrong-selection sentinel');c.click('#history-search');c.key('key','--clearmodifiers','Return')
     wait(lambda:c.source.send({'op':'read','kind':'text'})['text']=='分页分类 fixture 00','global search Enter copies current valid result')
-    c.click('[aria-label="清空搜索"]');scope(c,'collection:'+a['id']);settled(c,3)
+    c.enter('#history-search', '');scope(c,'collection:'+a['id']);settled(c,3)
     c.key('windowsize',c.window('^UClip$'),'480','650')
     for theme in ['light','dark']:
         c.click('[data-testid="open-settings"]');c.click(f'#theme option[value="{theme}"]')

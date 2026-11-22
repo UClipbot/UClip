@@ -27,6 +27,7 @@ pub enum Language {
 pub struct SettingsSnapshot {
     pub theme: Theme,
     pub language: Language,
+    pub show_search_by_default: bool,
     /// Decimal string: revisions must remain exact in JavaScript.
     pub revision: String,
 }
@@ -37,6 +38,7 @@ pub struct UpdateSettings {
     pub theme: Theme,
     /// Omitted by older clients when changing only the theme.
     pub language: Option<Language>,
+    pub show_search_by_default: Option<bool>,
     pub expected_revision: String,
 }
 
@@ -380,6 +382,57 @@ pub struct DesktopStatus {
     pub shortcut_available: bool,
     pub autostart_enabled: Option<bool>,
     pub error: Option<AppError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickPastePreferences {
+    pub shortcut: Option<String>,
+    pub include_pinned: bool,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateQuickPastePreferences {
+    pub shortcut: Option<String>,
+    pub include_pinned: bool,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickPasteSettings {
+    pub preferences: QuickPastePreferences,
+    pub available: bool,
+    pub error: Option<AppError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickPasteItem {
+    pub kind: ClipKind,
+    pub text: String,
+    pub file_count: Option<u32>,
+    pub thumbnail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickPasteSnapshot {
+    pub token: String,
+    pub items: Vec<QuickPasteItem>,
+    pub loading: bool,
+    pub copy_only: bool,
+    pub feedback_only: bool,
+    pub final_key: Option<String>,
+    pub main_shortcut: String,
+    pub main_code: String,
+    pub quick_code: String,
+    pub main_modifiers: u8,
+    pub quick_modifiers: u8,
+    pub error: Option<AppError>,
+    pub result: Option<CopyResult>,
 }
 
 /// Logical coordinates relative to the local history WebView.

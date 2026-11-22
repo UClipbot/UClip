@@ -149,41 +149,13 @@ pub async fn show(app: tauri::AppHandle, request: HoverPreviewRequest) -> Result
             window
                 .emit("hover-preview-changed", ())
                 .map_err(|_| unavailable())?;
-            show_without_focus(&window)
+            crate::desktop::show_without_focus(&window)
         })();
         let _ = tx.send(result);
     })
     .map_err(|_| unavailable())?;
     rx.await.map_err(|_| unavailable())?
 }
-// Public platform APIs avoid Tauri show(), which activates windows on macOS/Windows.
-fn show_without_focus(window: &tauri::WebviewWindow) -> Result<(), AppError> {
-    #[cfg(target_os = "macos")]
-    {
-        use objc2_app_kit::NSWindow;
-        let pointer = window.ns_window().map_err(|_| unavailable())?;
-        // SAFETY: called only in the main-thread callback, for the live titled preview window.
-        let native = unsafe { pointer.cast::<NSWindow>().as_ref() }.ok_or_else(unavailable)?;
-        native.orderFront(None);
-        Ok(())
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use windows::Win32::{
-            Foundation::HWND,
-            UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE},
-        };
-        let handle = window.hwnd().map_err(|_| unavailable())?;
-        // SAFETY: the live preview HWND is accessed on the UI thread, without activation.
-        let _ = unsafe { ShowWindow(HWND(handle.0), SW_SHOWNOACTIVATE) };
-        Ok(())
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        window.show().map_err(|_| unavailable())
-    }
-}
-
 pub fn title(app: &tauri::AppHandle) -> &'static str {
     if app
         .state::<crate::desktop::DesktopState>()

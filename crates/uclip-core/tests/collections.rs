@@ -361,7 +361,7 @@ fn v4_migration_preserves_history_and_rolls_back_partial_schema_without_reset() 
     let before = s.history_revision().unwrap();
     drop(s);
     let c = Connection::open(&path).unwrap();
-    c.execute_batch("DROP TABLE collections; DROP TABLE collection_changes; DROP INDEX clips_collection_order; ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=4; CREATE TABLE collection_changes(fixture TEXT)").unwrap();
+    c.execute_batch("DROP TABLE collections; DROP TABLE collection_changes; DROP INDEX clips_collection_order; ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=4; CREATE TABLE collection_changes(fixture TEXT)").unwrap();
     assert!(Storage::open(&path).is_err());
     assert_eq!(
         c.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))

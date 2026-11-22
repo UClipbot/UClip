@@ -1,8 +1,15 @@
 import { t } from '../i18n';
 import type { KeyBindings, KeyChord } from '../generated/contracts';
+
+// Optional modal navigation for history. App retains focus, selection and action guards.
+export type HistoryKeyAction = 'search' | 'up' | 'down' | 'copy' | 'preview' | 'remove';
+export type HistoryKeymap = (
+  event: Pick<KeyboardEvent, 'key' | 'code' | 'shiftKey' | 'repeat'>,
+) => HistoryKeyAction | undefined;
+
 const plain = (code: string): KeyChord => ({ code, primary: false, alt: false, shift: false });
 export const DEFAULT_KEYS: KeyBindings = {
-  search: { ...plain('KeyK'), primary: true },
+  search: { ...plain('KeyF'), primary: true },
   settings: { ...plain('Comma'), primary: true },
   copy: plain('Enter'),
   preview: plain('Space'),
@@ -12,7 +19,7 @@ export const DEFAULT_KEYS: KeyBindings = {
   dismiss: plain('Escape'),
 };
 export const keyLabels: Record<keyof KeyBindings, string> = {
-  search: 'focus_search',
+  search: 'toggle_search',
   settings: 'settings',
   copy: 'copy',
   preview: 'view_full_content',

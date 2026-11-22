@@ -107,7 +107,7 @@ def run(c, capture):
     wait(lambda: c.execute('return !document.querySelector(".detail-panel") && document.activeElement===document.querySelector(".history-scroll")'), 'unpin exits preview with list focus')
     # This new non-pinned copy is removed by a second explicit dedup.
     dedup_ui(c, 1)
-    c.click('[aria-label="清空搜索"]')
+    c.enter('#history-search', '')
     settled(c, 1)
 
     # Verify both themes at the native minimum window width.
@@ -173,7 +173,7 @@ def run_capture_chain(c):
         c.received(kind, payload)
     assert all(Path(p).exists() for p in c.files)
     c.expected_active = history(c)['total']
-    c.click('[aria-label="清空搜索"]')
+    c.enter('#history-search', '')
     select_value(c, '[aria-label="内容类型"]', 'all')
     settled(c, 4)
     dedup_ui(c, 0)

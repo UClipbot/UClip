@@ -71,7 +71,7 @@ def run(invoke, execute, click, wait, env):
             subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+shift+v'], env=env, check=True)
             wait(lambda: action('clipboard_status')['pasteTarget'] and execute('return document.hasFocus()'), 'batch paste target')
             execute('document.querySelector("[data-clip-id]").dispatchEvent(new MouseEvent("contextmenu", {bubbles:true,cancelable:true}))')
-            wait(lambda: execute('return !!document.querySelector(".action-menu")'), 'batch paste context menu')
+            wait(lambda: execute('return document.querySelector(".action-menu button:first-child")?.disabled === false'), 'batch paste enabled in the menu')
             click('.action-menu button:first-child')
             def received():
                 try: return json.loads(result.read_text())

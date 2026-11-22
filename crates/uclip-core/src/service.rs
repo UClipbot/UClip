@@ -181,6 +181,46 @@ impl CoreService {
     ) -> Result<crate::HistoryPage, AppError> {
         self.operation(move |s| s.history(request)).await
     }
+    pub async fn quick_paste_slots(
+        &self,
+        include_pinned: bool,
+    ) -> Result<Vec<crate::QuickPasteSlot>, AppError> {
+        self.operation(move |s| s.quick_paste_slots(include_pinned))
+            .await
+    }
+    pub async fn read_quick_paste_slot(
+        &self,
+        id: String,
+        revision: String,
+    ) -> Result<crate::ClipPayload, AppError> {
+        self.operation(move |s| s.read_quick_paste_slot(&id, &revision))
+            .await
+    }
+    pub async fn auxiliary_window_size(
+        &self,
+        window: crate::AuxiliaryWindow,
+    ) -> Result<crate::AuxiliaryWindowSize, AppError> {
+        self.operation(move |s| s.auxiliary_window_size(window))
+            .await
+    }
+    pub async fn save_auxiliary_window_size(
+        &self,
+        window: crate::AuxiliaryWindow,
+        size: crate::AuxiliaryWindowSize,
+    ) -> Result<(), AppError> {
+        self.operation(move |s| s.save_auxiliary_window_size(window, size))
+            .await
+    }
+    pub async fn quick_paste_preferences(&self) -> Result<crate::QuickPastePreferences, AppError> {
+        self.operation(|s| s.quick_paste_preferences()).await
+    }
+    pub async fn update_quick_paste_preferences(
+        &self,
+        request: crate::UpdateQuickPastePreferences,
+    ) -> Result<crate::QuickPastePreferences, AppError> {
+        self.operation(move |s| s.update_quick_paste_preferences(request))
+            .await
+    }
     pub async fn read_clip(&self, id: String) -> Result<crate::ClipPayload, AppError> {
         self.operation(move |s| s.read_clip(&id)).await
     }

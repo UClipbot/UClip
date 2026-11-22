@@ -235,7 +235,11 @@ fn capture_default_upgrade_only_enables_untouched_policies_once() {
             .join(format!("capture-{enabled}-{revision}.sqlite3"));
         drop(Storage::open(&path).unwrap());
         let connection = Connection::open(&path).unwrap();
-        connection.execute_batch("PRAGMA user_version=10;").unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; PRAGMA user_version=10;",
+            )
+            .unwrap();
         connection
             .execute(
                 "UPDATE capture_policy SET enabled=?1,revision=?2",
@@ -599,7 +603,7 @@ fn v2_migration_seeds_current_identities_and_rolls_back_on_failure() {
         .unwrap();
     drop(storage);
     let conn = Connection::open(&path).unwrap();
-    conn.execute_batch("DROP TRIGGER clips_change_insert; DROP TRIGGER clips_change_update; DROP TRIGGER clips_change_delete; DROP TABLE clip_changes; DROP TABLE desktop_preferences; DROP TABLE window_placement; DROP TABLE keyboard_bindings; DROP TABLE collections; DROP TABLE collection_changes; DROP INDEX clips_collection_order; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=2; CREATE TABLE desktop_preferences(fixture TEXT);").unwrap();
+    conn.execute_batch("DROP TRIGGER clips_change_insert; DROP TRIGGER clips_change_update; DROP TRIGGER clips_change_delete; DROP TABLE clip_changes; DROP TABLE desktop_preferences; DROP TABLE window_placement; DROP TABLE keyboard_bindings; DROP TABLE collections; DROP TABLE collection_changes; DROP INDEX clips_collection_order; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=2; CREATE TABLE desktop_preferences(fixture TEXT);").unwrap();
     drop(conn);
     assert!(Storage::open(&path).is_err());
     let conn = Connection::open(&path).unwrap();

@@ -1,4 +1,5 @@
 mod autostart;
+mod auxiliary_window;
 pub mod clipboard;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod clipboard_native;
@@ -13,6 +14,7 @@ mod hover_preview;
 mod paste;
 mod paths;
 mod platform;
+mod quick_paste;
 #[cfg(target_os = "linux")]
 mod window_activation;
 
@@ -55,7 +57,13 @@ pub fn run() {
         }))
         .manage(desktop::DesktopState::default())
         .manage(hover_preview::PreviewState::default())
-        .on_window_event(desktop::window_event)
+        .manage(quick_paste::QuickPasteState::default())
+        .manage(auxiliary_window::SizeState::default())
+        .on_window_event(|window, event| {
+            desktop::window_event(window, event);
+            auxiliary_window::window_event(window, event);
+            quick_paste::window_event(window, event);
+        })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::get_settings,
@@ -76,6 +84,14 @@ pub fn run() {
             commands::transfer_clip,
             commands::desktop_status,
             commands::update_desktop_preferences,
+            desktop::set_global_shortcut_recording,
+            commands::quick_paste_settings,
+            commands::update_quick_paste_settings,
+            quick_paste::quick_paste_snapshot,
+            quick_paste::select_quick_paste,
+            quick_paste::expand_quick_paste,
+            quick_paste::cancel_quick_paste,
+            auxiliary_window::resize_auxiliary_corner,
             commands::update_key_bindings,
             commands::set_autostart,
             commands::set_desktop_interaction,
@@ -125,6 +141,10 @@ pub fn run() {
                     Err(error) => Err(error.clone()),
                 };
                 if let Ok(core) = &startup {
+                    handle
+                        .state::<auxiliary_window::SizeState>()
+                        .restore(core)
+                        .await;
                     if let Err(error) = autostart::initialize(&handle, core).await {
                         eprintln!(
                             "autostart_default_failed: {:?}: {}",
@@ -191,6 +211,41 @@ pub fn run() {
                     desktop::set_titlebar(&window, native_titlebar).await?;
                     let _ = desktop::restore(&handle).await;
                     let _ = desktop::install_tray(&handle).await;
+                    if let Ok(core) = &handle.state::<AppState>().core {
+                        if let Ok(prefs) = core.quick_paste_preferences().await {
+                            let result = match prefs.shortcut.as_deref() {
+                                Some(_) if desktop::wayland() => {
+                                    Err(AppError::new(uclip_core::ErrorCode::Restricted))
+                                }
+                                Some(value) => {
+                                    let app = handle.clone();
+                                    let binding = desktop::parse_shortcut(value);
+                                    match (binding, quick_paste::prepare_window(&handle)) {
+                                        (Ok(binding), Ok(_)) => {
+                                            tauri::async_runtime::spawn_blocking(move || {
+                                                quick_paste::register(&app, binding)
+                                            })
+                                            .await
+                                            .unwrap_or_else(|_| {
+                                                Err(AppError::new(
+                                                    uclip_core::ErrorCode::Unavailable,
+                                                ))
+                                            })
+                                        }
+                                        (Err(e), _) | (_, Err(e)) => Err(e),
+                                    }
+                                }
+                                None => Ok(()),
+                            };
+                            let available = prefs.shortcut.is_some() && result.is_ok();
+                            handle.state::<quick_paste::QuickPasteState>().cache(
+                                prefs,
+                                available,
+                                result.err(),
+                            );
+                            let _ = tauri::Emitter::emit(&handle, "settings-changed", ());
+                        }
+                    }
                     #[cfg(target_os = "macos")]
                     window
                         .show()
@@ -245,6 +300,7 @@ pub(crate) fn shutdown(app: tauri::AppHandle) {
     }
     tauri::async_runtime::spawn(async move {
         let _ = desktop::save_placement(&app).await;
+        auxiliary_window::save_pending(&app).await;
         let clipboard = app
             .try_state::<AppState>()
             .and_then(|s| s.clipboard.as_ref().ok().cloned());
