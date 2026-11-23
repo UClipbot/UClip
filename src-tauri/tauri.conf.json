@@ -11,7 +11,10 @@
     "additionalWatchFolders": [
       "../crates/uclip-core",
       "../crates/uclip-runtime"
-    ]
+    ],
+    "windows": {
+      "staticVCRuntime": true
+    }
   },
   "app": {
     "windows": [],
@@ -41,6 +44,11 @@
     ],
     "macOS": {
       "minimumSystemVersion": "12.0"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      }
     }
   }
 }

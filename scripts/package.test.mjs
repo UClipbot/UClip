@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { buildArguments, checkVersions, packageOptions } from './package.mjs';
+import { buildArguments, checkVersions, cliTargets, packageOptions } from './package.mjs';
 
 test('native hosts select supported installer defaults and lock Cargo dependencies', () => {
   for (const [platform, bundles] of [
@@ -15,7 +16,11 @@ test('native hosts select supported installer defaults and lock Cargo dependenci
     assert.deepEqual(options.bundles, bundles);
     const args = buildArguments(options);
     assert.deepEqual(args.slice(-2), ['--', '--locked']);
-    assert.ok(args.includes('{"bundle":{"active":true}}'));
+    const config = JSON.parse(args[args.indexOf('--config') + 1]);
+    assert.deepEqual(config.bundle, {
+      active: true,
+      externalBin: ['../target/uclip-package/uclip'],
+    });
     assert.ok(!args.includes('--debug'));
     assert.ok(!args.includes('src-tauri/tauri.dev.conf.json'));
   }
@@ -28,6 +33,19 @@ test('debug installers isolate their identifier, and same-OS targets reach Tauri
   assert.ok(args.includes('--debug'));
   assert.ok(args.includes('src-tauri/tauri.dev.conf.json'));
   assert.equal(args[args.indexOf('--target') + 1], 'universal-apple-darwin');
+  assert.deepEqual(cliTargets('universal-apple-darwin'), [
+    'x86_64-apple-darwin',
+    'aarch64-apple-darwin',
+  ]);
+  assert.deepEqual(cliTargets('x86_64-pc-windows-msvc'), ['x86_64-pc-windows-msvc']);
+});
+
+test('Windows installers embed WebView2 and statically link the MSVC runtime', () => {
+  const config = JSON.parse(
+    readFileSync(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'),
+  );
+  assert.equal(config.bundle.windows.webviewInstallMode.type, 'offlineInstaller');
+  assert.equal(config.build.windows.staticVCRuntime, true);
 });
 
 test('invalid input fails before compiling or silently changing the requested format', () => {

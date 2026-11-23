@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -12,7 +13,7 @@ const platforms = {
 
 const help = `Usage: npm run package -- [options]
 
-Build installers on the current operating system (release by default).
+Build desktop installers that include the uclip CLI (release by default).
   --bundles <list>  Comma-separated formats; Linux: deb,appimage,rpm;
                     Windows: nsis,msi; macOS: app,dmg
   --target <triple> Rust target on the same OS (or universal-apple-darwin)
@@ -21,6 +22,7 @@ Build installers on the current operating system (release by default).
   --help            Show this help
 
 Defaults: Linux deb,appimage; Windows nsis; macOS app,dmg.
+Windows installers include the offline WebView2 Evergreen installer.
 Install dependencies with npm ci first. Cargo always uses --locked.
 Outputs: target/[<target>/]<release|debug>/bundle/ (unless Cargo overrides it).
 `;
@@ -81,14 +83,59 @@ export function packageOptions(argv, platform = process.platform, arch = process
   return options;
 }
 
-export function buildArguments(options) {
+export function buildArguments(options, cliPath = '../target/uclip-package/uclip') {
   const args = ['build', '--ci'];
   if (options.debug) args.push('--debug', '--config', 'src-tauri/tauri.dev.conf.json');
-  args.push('--config', JSON.stringify({ bundle: { active: true } }));
+  args.push('--config', JSON.stringify({ bundle: { active: true, externalBin: [cliPath] } }));
   args.push('--bundles', options.bundles.join(','));
   if (options.target) args.push('--target', options.target);
   args.push('--', '--locked');
   return args;
+}
+
+export function cliTargets(target) {
+  return target === 'universal-apple-darwin'
+    ? ['x86_64-apple-darwin', 'aarch64-apple-darwin']
+    : [target];
+}
+
+function run(executable, args, options = {}) {
+  const result = spawnSync(executable, args, { cwd: root, stdio: 'inherit', ...options });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`${executable} exited with status ${result.status}`);
+  return result.stdout;
+}
+
+function stageCli(options, targetDirectory, stage, minimumMacVersion) {
+  const host = /^host: (\S+)$/m.exec(
+    run('rustc', ['-vV'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }),
+  )?.[1];
+  if (!host) throw new Error('Could not determine the Rust host target.');
+  const target = options.target ?? host;
+  const profile = options.debug ? 'debug' : 'release';
+  const extension = process.platform === 'win32' ? '.exe' : '';
+  const env = { ...process.env };
+  if (process.platform === 'darwin') {
+    env.MACOSX_DEPLOYMENT_TARGET = minimumMacVersion;
+  }
+  const binaries = cliTargets(target).map((architecture) => {
+    const args = ['build', '--locked', '-p', 'uclip-cli', '--bin', 'uclip'];
+    if (!options.debug) args.push('--release');
+    if (options.target) args.push('--target', architecture);
+    run('cargo', args, { env });
+    const built = join(
+      targetDirectory,
+      options.target ? architecture : '',
+      profile,
+      `uclip${extension}`,
+    );
+    const staged = join(stage, `uclip-${architecture}${extension}`);
+    copyFileSync(built, staged);
+    return staged;
+  });
+  if (binaries.length > 1) {
+    run('lipo', ['-create', ...binaries, '-output', join(stage, `uclip-${target}`)]);
+  }
 }
 
 export function checkVersions(npmVersion, lockVersion, appVersion, rustVersion) {
@@ -105,10 +152,9 @@ function main() {
     return 0;
   }
   const options = packageOptions(process.argv.slice(2));
-  const args = buildArguments(options);
   if (options.dryRun) {
     // JSON preserves spaces and quotes on every host; this is a preview, not shell code.
-    console.log(JSON.stringify([process.execPath, cli, ...args], null, 2));
+    console.log(JSON.stringify([process.execPath, cli, ...buildArguments(options)], null, 2));
     return 0;
   }
   if (!existsSync(cli)) throw new Error('Local Tauri CLI is missing. Run npm ci first.');
@@ -126,22 +172,30 @@ function main() {
     return metadata.status ?? 1;
   }
   const json = (path) => JSON.parse(readFileSync(new URL(path, pathToFileURL(root)), 'utf8'));
-  const rustPackage = JSON.parse(metadata.stdout).packages.find(
-    (pkg) => pkg.name === 'uclip-desktop',
-  );
+  const workspace = JSON.parse(metadata.stdout);
+  const rustPackage = workspace.packages.find((pkg) => pkg.name === 'uclip-desktop');
+  const config = json('src-tauri/tauri.conf.json');
   checkVersions(
     json('package.json').version,
     json('package-lock.json').packages[''].version,
-    json('src-tauri/tauri.conf.json').version,
+    config.version,
     rustPackage?.version,
   );
   console.log(
     `Packaging ${options.bundles.join(', ')} (${options.debug ? 'debug/dev' : 'release'})…`,
   );
-  // Invoke the local JS entry point directly: no shell quoting or Windows npm.cmd required.
-  const result = spawnSync(process.execPath, [cli, ...args], { cwd: root, stdio: 'inherit' });
-  if (result.error) throw result.error;
-  return result.status ?? 1;
+  // Each package build gets its own staging paths, including for universal macOS builds.
+  const stageRoot = join(root, 'target');
+  mkdirSync(stageRoot, { recursive: true });
+  const stage = mkdtempSync(join(stageRoot, 'uclip-package-'));
+  try {
+    stageCli(options, workspace.target_directory, stage, config.bundle.macOS.minimumSystemVersion);
+    const cliPath = relative(join(root, 'src-tauri'), join(stage, 'uclip')).split(sep).join('/');
+    run(process.execPath, [cli, ...buildArguments(options, cliPath)]);
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
+  }
+  return 0;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

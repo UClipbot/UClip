@@ -69,7 +69,7 @@ UClip is in development. Migration from older data is pending.
 
 ## Command line and headless synchronization
 
-Install the standalone `uclip` command with Rust and a C build toolchain. It can run without a desktop installation or display server.
+The desktop installers include the `uclip` command. A Linux deb installs it on the system path. On Windows, run `uclip.exe` from the UClip installation directory. On macOS, use `/Applications/UClip.app/Contents/MacOS/uclip`. To install it without the desktop app, use the Rust and C build toolchain below. History and headless sync commands can run without a display server.
 
 ```bash
 cargo install --locked --path crates/uclip-cli
@@ -83,6 +83,8 @@ uclip copy --file ./notes.txt
 `get` accepts a UUID, `latest`, `--position` (one-based), or `--index` (zero-based). Text displayed in a terminal escapes control characters except newlines and tabs. Use `--raw` for the original text bytes with no added newline. Images are read as PNG, and file references are read as a JSON array of paths. `list` and `search` accept `--collection` (name or UUID) and `--limit`. `--full` produces JSON Lines with complete content from one history snapshot. Use `--image` to read an image, `--file` to read text, or repeat `--reference` to save paths. `completion bash` and `completion zsh` generate shell completion scripts. Diagnostics go to stderr. Exit codes are `0` for success, `1` for other errors, `2` for invalid input, `3` for missing data, and `4` for conflicts or a busy library. An empty query result succeeds with zero rows.
 
 The default library follows the desktop installation for the same build profile. `--dev` selects the `tauri:dev` library, `--portable` selects a profile under `uclip-data` beside the executable, and `--data-dir` or `UCLIP_DATA_DIR` selects an absolute library directory. On Unix, use a directory private to the account running UClip. History access works without a GUI. Clipboard writes require a supported desktop session, and copying a remote file reference still requires the desktop's LAN retrieval path. On X11, content that exceeds the server's request size limit returns `limit_exceeded`.
+
+CLI help and diagnostics follow the terminal locale (`LC_ALL`, `LC_MESSAGES`, then `LANG`) or the system display language on Windows and macOS. Chinese locales use Simplified Chinese, and other locales use English. Set `UCLIP_LANG` to `zh-CN` or `en` to choose a language, or to `system` for automatic selection. History output and exit codes are language-independent.
 
 To keep an encrypted sync peer online, initialize a new private library and start the service in the foreground:
 
@@ -117,3 +119,7 @@ npm run package
 ```
 
 Build on the target operating system: Linux produces deb and AppImage packages, Windows produces an NSIS installer, and macOS produces app and dmg bundles.
+
+The Windows setup executable includes the WebView2 Evergreen Standalone Installer. It can install the runtime without internet access when WebView2 is missing. The MSVC C runtime is statically linked into UClip. Run the setup executable from the `bundle/nsis` directory to install UClip and its prerequisites. Building the Windows installer may download the WebView2 payload.
+
+Linux deb packages declare the GTK, WebKitGTK, and tray dependencies for the package manager. AppImage includes those libraries and still uses the host's glibc. Build Linux distribution packages on the oldest target distribution you support, using the packaging workflow's Ubuntu 22.04 build environment as a baseline. macOS app bundles use the system's WKWebView.

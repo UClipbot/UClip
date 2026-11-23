@@ -69,7 +69,7 @@ UClip 是一款本地优先的剪贴板管理器，帮你保存复制过的内�
 
 ## 命令行与无桌面同步
 
-用 Rust 和 C 编译工具链安装独立的 `uclip` 命令。服务器上无需安装桌面版或启动显示服务。
+桌面安装包内含 `uclip` 命令。Linux deb 会将它装到系统命令路径。Windows 可从 UClip 安装目录运行 `uclip.exe`。macOS 可使用 `/Applications/UClip.app/Contents/MacOS/uclip`。也可以用下方命令单独从源码安装。历史与无桌面同步命令可在没有显示服务的环境运行。
 
 ```bash
 cargo install --locked --path crates/uclip-cli
@@ -83,6 +83,8 @@ uclip copy --file ./notes.txt
 `get` 支持 UUID、`latest`、从 1 开始的 `--position` 和从 0 开始的 `--index`。在终端中显示文本时会转义换行和制表符以外的控制字符。`--raw` 输出原文本字节且不额外追加换行。图片以 PNG 输出，文件引用以 JSON 路径数组输出。`list` 和 `search` 可按分类名或 UUID 筛选，并用 `--limit` 限制条数。`--full` 从同一历史快照逐行输出包含完整内容的 JSON。`--image` 读取图片，`--file` 读取文本，重复使用 `--reference` 可保存多个路径。`completion bash` 和 `completion zsh` 生成补全脚本。诊断走 stderr。退出码 `0` 表示成功，`1` 表示其他错误，`2` 表示输入无效，`3` 表示数据不存在，`4` 表示冲突或库忙。搜索无匹配时成功并返回零条。
 
 默认使用相同构建配置的桌面库。`--dev` 指向 `tauri:dev` 的库，`--portable` 使用可执行文件旁 `uclip-data` 下的对应配置，`--data-dir` 或 `UCLIP_DATA_DIR` 可指定绝对目录。Unix 上请使用仅当前账户可访问的目录。无桌面也可读写历史。写入系统剪贴板需要受支持的桌面会话，远端文件引用的实际复制继续走桌面端的局域网取回流程。X11 上，超过服务器单次请求大小的内容会返回 `limit_exceeded`。
+
+命令行帮助和诊断优先跟随终端语言（依次读取 `LC_ALL`、`LC_MESSAGES`、`LANG`），Windows 和 macOS 也可使用系统显示语言。中文地区使用简体中文，其他地区使用英文。设置 `UCLIP_LANG` 为 `zh-CN` 或 `en` 可指定语言，设为 `system` 可自动选择。历史输出和退出码与语言无关。
 
 要让一个加密同步节点常驻，可以用独立目录初始化并启动：
 
@@ -117,3 +119,7 @@ npm run package
 ```
 
 在对应操作系统构建：Linux 生成 deb 和 AppImage，Windows 生成 NSIS 安装程序，macOS 生成 app 和 dmg。
+
+Windows 安装包内含 WebView2 Evergreen 离线安装程序。系统缺少 WebView2 时，安装包可在断网环境安装它。UClip 的 MSVC C 运行库采用静态链接。运行 `bundle/nsis` 下的安装程序即可安装 UClip 和必要依赖。打包时可能需要联网下载 WebView2。
+
+Linux 的 deb 包声明 GTK、WebKitGTK 和托盘库依赖，由包管理器安装。AppImage 随带这些库，仍使用宿主系统的 glibc。请在计划支持的最旧 Linux 发行版上构建分发包，以打包工作流的 Ubuntu 22.04 环境为基线。macOS 应用包使用系统自带的 WKWebView。

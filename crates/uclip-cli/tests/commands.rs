@@ -12,6 +12,7 @@ fn cli(directory: &Path, args: &[&str]) -> Command {
         .args(["--data-dir"])
         .arg(directory)
         .args(args)
+        .env("UCLIP_LANG", "en")
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY")
         .env_remove("XDG_SESSION_TYPE");
@@ -38,6 +39,80 @@ fn successful(output: Output) -> Vec<u8> {
         String::from_utf8_lossy(&output.stderr)
     );
     output.stdout
+}
+
+#[test]
+fn help_follows_locale_and_supports_explicit_overrides_without_opening_the_library() {
+    let temp = tempfile::tempdir().unwrap();
+    let library = temp.path().join("unused");
+    for (override_locale, all, messages, lang, expected) in [
+        (None, "", "zh_TW.UTF-8", "en_US", "\u{7528}\u{6cd5}"),
+        (Some("system"), "en_US", "zh_CN", "zh_CN", "Usage:"),
+        (Some("en"), "zh_CN", "", "", "Usage:"),
+        (Some("zh-CN"), "C", "", "", "\u{7528}\u{6cd5}"),
+        (None, "", "", "fr_FR", "Usage:"),
+    ] {
+        let mut command = cli(&library, &["--help"]);
+        command
+            .env_remove("UCLIP_LANG")
+            .env("LC_ALL", all)
+            .env("LC_MESSAGES", messages)
+            .env("LANG", lang);
+        if let Some(locale) = override_locale {
+            command.env("UCLIP_LANG", locale);
+        }
+        let output = successful(command.output().unwrap());
+        assert!(String::from_utf8(output).unwrap().contains(expected));
+    }
+
+    let output = successful(
+        cli(&library, &["help", "sync", "remote"])
+            .env("UCLIP_LANG", "zh-CN")
+            .output()
+            .unwrap(),
+    );
+    let help = String::from_utf8(output).unwrap();
+    assert!(help.contains("WebDAV \u{5b57}\u{6bb5}"));
+    assert!(help.contains("hostKey"));
+    assert!(!help.contains("Print help") && !help.contains("Options:"));
+    assert!(!library.exists());
+}
+
+#[test]
+fn localized_diagnostics_keep_exit_codes_and_history_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let library = temp.path().join("profile");
+    let chinese = |args: &[&str]| {
+        cli(&library, args)
+            .env("UCLIP_LANG", "zh-CN")
+            .output()
+            .unwrap()
+    };
+    let missing = chinese(&["list"]);
+    assert_eq!(missing.status.code(), Some(3));
+    assert!(missing.stdout.is_empty());
+    let diagnostic = String::from_utf8(missing.stderr).unwrap();
+    assert!(diagnostic.starts_with("uclip: not_found: "));
+    assert!(diagnostic.contains("\u{8bb0}\u{5f55}"));
+
+    let invalid = chinese(&["list", "--json", "--full"]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(invalid.stdout.is_empty());
+    let diagnostic = String::from_utf8(invalid.stderr).unwrap();
+    assert!(diagnostic.starts_with("\u{9519}\u{8bef}"));
+    assert!(diagnostic.contains("--json") && diagnostic.contains("--full"));
+
+    let text = "original \u{7b14}\u{8bb0}";
+    successful(run(&library, &["save"], text.as_bytes()));
+    assert_eq!(
+        successful(chinese(&["get", "latest", "--raw"])),
+        text.as_bytes()
+    );
+    let arguments = ["list", "--json"];
+    assert_eq!(
+        successful(chinese(&arguments)),
+        successful(run(&library, &arguments, b""))
+    );
 }
 
 #[test]
