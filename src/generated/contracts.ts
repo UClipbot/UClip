@@ -28,6 +28,12 @@ export type ChangeClipDeletion = { id: string, expectedRevision: string, deleted
 
 export type ClipDeletionSnapshot = { id: string, revision: string, deleted: boolean, };
 
+export type PurgeSelectedTrash = { expectedRevision: string, ids: Array<string>, };
+
+export type EmptyTrash = { expectedRevision: string, };
+
+export type PurgeTrash = { "scope": "selected" } & PurgeSelectedTrash | { "scope": "all" } & EmptyTrash;
+
 export type ChangeClipPin = { id: string, expectedRevision: string, pinned: boolean, };
 
 export type ClipPinSnapshot = { id: string, revision: string, pinned: boolean, };
@@ -114,9 +120,9 @@ export type SyncRemoteInput = { "kind": "webdav", url: string, username: string,
 
 export type SyncRemoteSettings = { "kind": "webdav", url: string, username: string, } | { "kind": "sftp", host: string, port: number, directory: string, username: string, hostKey: string, };
 
-export type SyncStatus = { paired: boolean, lanEnabled: boolean, role: SyncRole, peers: number, lanLastSync: string | null, lanError: AppError | null, remote: SyncRemoteSettings | null, remoteLastSync: string | null, remoteError: AppError | null, };
+export type SyncStatus = { paired: boolean, lanEnabled: boolean, role: SyncRole, peers: number, lanLastSync: string | null, lanError: AppError | null, remote: SyncRemoteSettings | null, remoteSyncing: boolean, remoteLastSync: string | null, remoteError: AppError | null, };
 
-export type UpdateSync = { "action": "create" } | { "action": "join", code: string, } | { "action": "lan", enabled: boolean, } | { "action": "remote", remote: SyncRemoteInput | null, };
+export type UpdateSync = { "action": "create" } | { "action": "join", code: string, } | { "action": "lan", enabled: boolean, } | { "action": "remote", remote: SyncRemoteInput | null, } | { "action": "sync_remote_now" };
 
 export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout" | "excluded" | "duplicate_name" | "sync_connection" | "sync_authentication" | "sync_data" | "file_peer_offline";
 

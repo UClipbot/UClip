@@ -1,6 +1,6 @@
 use crate::{
-    AppError, CapturePolicy, ClipKind, ErrorCode, HistoryItem, HistoryPage, HistoryQuery, Storage,
-    UpdateCapturePolicy,
+    AppError, CapturePolicy, ClipKind, ClipVersion, ErrorCode, HistoryItem, HistoryPage,
+    HistoryQuery, Storage, UpdateCapturePolicy,
 };
 use regex::{Regex, RegexBuilder};
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
@@ -197,6 +197,7 @@ impl Storage {
         source_app: Option<String>,
     ) -> Result<Option<String>, AppError> {
         self.save_payload(payload, true, None, source_app)
+            .map(|clip| clip.map(|clip| clip.id))
     }
     pub fn create_text(&mut self, text: String) -> Result<String, AppError> {
         self.create_text_in_collection(text, None)
@@ -214,6 +215,15 @@ impl Storage {
         payload: ClipPayload,
         collection_id: Option<String>,
     ) -> Result<String, AppError> {
+        self.create_clip_version(payload, collection_id)
+            .map(|clip| clip.id)
+    }
+
+    pub fn create_clip_version(
+        &mut self,
+        payload: ClipPayload,
+        collection_id: Option<String>,
+    ) -> Result<ClipVersion, AppError> {
         self.save_payload(payload, false, collection_id, None)?
             .ok_or_else(|| AppError::new(ErrorCode::Excluded))
     }
@@ -223,7 +233,7 @@ impl Storage {
         captured: bool,
         collection_id: Option<String>,
         source_app: Option<String>,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ClipVersion>, AppError> {
         if source_app.as_ref().is_some_and(|name| {
             name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control)
         }) {
@@ -276,7 +286,14 @@ impl Storage {
             |r| r.get(0),
         )?;
         let id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,captured_at,sequence,origin,collection,revision,source_app) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13) ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,sequence=excluded.sequence,revision=clips.revision+1,source_app=excluded.source_app", params![id,kind_name(kind),text,data,width,height,count,fingerprint,now(),sequence,if captured {"capture"} else {"manual"},collection_id,source_app])?;
+        let revision: i64 = tx.query_row(
+            "INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,captured_at,sequence,origin,collection,revision,source_app)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13)
+             ON CONFLICT(id) DO UPDATE SET captured_at=excluded.captured_at,sequence=excluded.sequence,revision=clips.revision+1,source_app=excluded.source_app
+             RETURNING revision",
+            params![id, kind_name(kind), text, data, width, height, count, fingerprint, now(), sequence, if captured {"capture"} else {"manual"}, collection_id, source_app],
+            |row| row.get(0),
+        )?;
         prune(&tx, policy.max_items, Some(&id))?;
         check_change_budget(&tx)?;
         tx.execute(
@@ -284,7 +301,10 @@ impl Storage {
             [],
         )?;
         tx.commit()?;
-        Ok(Some(id))
+        Ok(Some(ClipVersion {
+            id,
+            expected_revision: revision.to_string(),
+        }))
     }
     pub fn history(&self, query: HistoryQuery) -> Result<HistoryPage, AppError> {
         self.history_window(query, false, None)
@@ -296,13 +316,40 @@ impl Storage {
         trash: bool,
         count: Option<u32>,
     ) -> Result<HistoryPage, AppError> {
-        if count
-            .is_some_and(|count| !(1..=1000).contains(&count) || query.expected_revision.is_none())
+        if count.is_some() && query.expected_revision.is_none() {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let _snapshot = self.connection.unchecked_transaction()?;
+        self.history_in_snapshot(query, trash, count)
+    }
+
+    pub(crate) fn history_content(
+        &self,
+        query: HistoryQuery,
+        count: u32,
+    ) -> Result<Vec<(HistoryItem, ClipPayload)>, AppError> {
+        let snapshot = self.connection.unchecked_transaction()?;
+        let page = self.history_in_snapshot(query, false, Some(count))?;
+        page.items
+            .into_iter()
+            .map(|item| {
+                let payload = Self::read_active_clip(&snapshot, &item.id, None)?;
+                Ok((item, payload))
+            })
+            .collect()
+    }
+
+    fn history_in_snapshot(
+        &self,
+        query: HistoryQuery,
+        trash: bool,
+        count: Option<u32>,
+    ) -> Result<HistoryPage, AppError> {
+        if count.is_some_and(|count| !(1..=1000).contains(&count))
             || (trash && (query.pinned_only || query.collection_id.is_some()))
         {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
-        let _snapshot = self.connection.unchecked_transaction()?;
         let limit = count.map_or(PAGE_SIZE, |count| count as usize);
         let started = std::time::Instant::now();
         let revision = self.history_revision()?;
@@ -731,6 +778,55 @@ impl Storage {
         })
     }
 
+    pub fn purge_trash(&mut self, request: crate::PurgeTrash) -> Result<u32, AppError> {
+        use crate::PurgeTrash::{All, Selected};
+        let (revision, ids) = match request {
+            Selected(request) => (request.expected_revision, Some(request.ids)),
+            All(request) => (request.expected_revision, None),
+        };
+        let revision = mutation_revision(&revision)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current: i64 = tx.query_row(
+            "SELECT revision FROM history_meta WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        if current != revision {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        let removed = if let Some(ids) = ids {
+            if ids.is_empty()
+                || ids.len() > 1000
+                || ids.iter().any(|id| uuid::Uuid::parse_str(id).is_err())
+            {
+                return Err(AppError::new(ErrorCode::InvalidInput));
+            }
+            let ids_json =
+                serde_json::to_string(&ids).map_err(|_| AppError::new(ErrorCode::InvalidInput))?;
+            let removed = tx.execute(
+                "DELETE FROM clips WHERE deleted=1 AND id IN (SELECT value FROM json_each(?1))",
+                [ids_json],
+            )?;
+            if removed != ids.len() {
+                return Err(AppError::new(ErrorCode::Conflict));
+            }
+            removed
+        } else {
+            tx.execute("DELETE FROM clips WHERE deleted=1", [])?
+        };
+        if removed > 0 {
+            check_change_budget(&tx)?;
+            tx.execute(
+                "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(removed as u32)
+    }
+
     pub fn change_clip_pin(
         &mut self,
         request: crate::ChangeClipPin,
@@ -935,6 +1031,40 @@ mod disk_tests {
     use super::*;
 
     #[test]
+    fn saved_version_rejects_a_concurrent_edit_before_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("version.sqlite3");
+        let mut storage = Storage::open(&path).unwrap();
+        let original = ClipPayload::Text("original".into());
+        let saved = storage.create_clip_version(original.clone(), None).unwrap();
+        assert_eq!(
+            storage
+                .clipboard_payload(
+                    std::slice::from_ref(&saved.id),
+                    None,
+                    Some(&saved.expected_revision),
+                    vec![]
+                )
+                .unwrap(),
+            original
+        );
+        let mut editor = Storage::open(&path).unwrap();
+        editor
+            .edit_clip(crate::EditClip {
+                clip: saved.clone(),
+                content: crate::EditableContent::Text("concurrent edit".into()),
+            })
+            .unwrap();
+        assert_eq!(
+            storage
+                .clipboard_payload(&[saved.id], None, Some(&saved.expected_revision), vec![])
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
+        );
+    }
+
+    #[test]
     fn batch_read_preserves_order_and_rejects_invalid_or_incompatible_selection() {
         let directory = tempfile::tempdir().unwrap();
         let mut storage = Storage::open(&directory.path().join("batch.sqlite3")).unwrap();
@@ -1014,6 +1144,119 @@ mod disk_tests {
         assert_eq!(
             storage.read_clips(&[a]).unwrap_err().code,
             ErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn trash_purge_is_atomic_revision_checked_and_replicated() {
+        use crate::{ChangeClipDeletion, EmptyTrash, PurgeSelectedTrash, PurgeTrash};
+
+        assert!(serde_json::from_str::<PurgeTrash>(r#"{"expectedRevision":"0"}"#).is_err());
+        assert!(serde_json::from_str::<PurgeTrash>(
+            r#"{"scope":"all","expectedRevision":"0","ids":[]}"#
+        )
+        .is_err());
+        let dir = tempfile::tempdir().unwrap();
+        let mut source = Storage::open(&dir.path().join("source.sqlite3")).unwrap();
+        let mut peer = Storage::open(&dir.path().join("peer.sqlite3")).unwrap();
+        source.enroll_replica().unwrap();
+        peer.enroll_replica().unwrap();
+        let active = source.create_text("active".into()).unwrap();
+        let first = source.create_text("first".into()).unwrap();
+        let second = source.create_text("second".into()).unwrap();
+        for id in [&first, &second] {
+            source
+                .change_clip_deletion(ChangeClipDeletion {
+                    id: id.clone(),
+                    expected_revision: "0".into(),
+                    deleted: true,
+                })
+                .unwrap();
+        }
+        let first_stamp = source
+            .replica_inventory()
+            .unwrap()
+            .into_iter()
+            .find(|stamp| stamp.id.id == first)
+            .unwrap();
+        let previous = source.replica_entry(&first_stamp).unwrap().unwrap();
+        assert!(peer
+            .apply_replica_entry(source.replica_entry(&first_stamp).unwrap().unwrap())
+            .unwrap());
+        let revision = source.history_revision().unwrap();
+        assert_eq!(
+            source
+                .purge_trash(PurgeTrash::Selected(PurgeSelectedTrash {
+                    expected_revision: revision.clone(),
+                    ids: vec![first.clone(), active.clone()],
+                }))
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
+        );
+        assert_eq!(source.history_revision().unwrap(), revision);
+        assert!(source.replica_entry(&first_stamp).unwrap().is_some());
+        assert_eq!(
+            source
+                .purge_trash(PurgeTrash::Selected(PurgeSelectedTrash {
+                    expected_revision: revision.clone(),
+                    ids: vec![first.clone()],
+                }))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            source
+                .purge_trash(PurgeTrash::All(EmptyTrash {
+                    expected_revision: revision
+                }))
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
+        );
+        let tombstone = source
+            .replica_inventory()
+            .unwrap()
+            .into_iter()
+            .find(|stamp| stamp.id.id == first)
+            .unwrap();
+        assert!(tombstone.removed);
+        assert!(source.replica_entry(&first_stamp).unwrap().is_none());
+        let tombstone = source.replica_entry(&tombstone).unwrap().unwrap();
+        assert!(tombstone.body.is_none());
+        assert!(peer.apply_replica_entry(tombstone).unwrap());
+        assert!(!peer.apply_replica_entry(previous).unwrap());
+        assert_eq!(
+            peer.change_clip_deletion(ChangeClipDeletion {
+                id: first,
+                expected_revision: "0".into(),
+                deleted: false,
+            })
+            .unwrap_err()
+            .code,
+            ErrorCode::NotFound
+        );
+        assert_eq!(
+            source
+                .purge_trash(PurgeTrash::All(EmptyTrash {
+                    expected_revision: source.history_revision().unwrap(),
+                }))
+                .unwrap(),
+            1
+        );
+        let revision = source.history_revision().unwrap();
+        assert_eq!(
+            source
+                .purge_trash(PurgeTrash::All(EmptyTrash {
+                    expected_revision: revision.clone()
+                }))
+                .unwrap(),
+            0
+        );
+        assert_eq!(source.history_revision().unwrap(), revision);
+        assert_eq!(
+            source.read_clip(&active).unwrap(),
+            ClipPayload::Text("active".into())
         );
     }
 

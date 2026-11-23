@@ -305,6 +305,26 @@ pub struct ClipDeletionSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum PurgeTrash {
+    Selected(PurgeSelectedTrash),
+    All(EmptyTrash),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PurgeSelectedTrash {
+    pub expected_revision: String,
+    pub ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmptyTrash {
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChangeClipPin {
     pub id: String,
@@ -576,6 +596,7 @@ pub struct SyncStatus {
     pub lan_last_sync: Option<String>,
     pub lan_error: Option<AppError>,
     pub remote: Option<SyncRemoteSettings>,
+    pub remote_syncing: bool,
     pub remote_last_sync: Option<String>,
     pub remote_error: Option<AppError>,
 }
@@ -591,4 +612,5 @@ pub enum UpdateSync {
     Join { code: String },
     Lan { enabled: bool },
     Remote { remote: Option<SyncRemoteInput> },
+    SyncRemoteNow,
 }

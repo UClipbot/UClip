@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, Read, Write},
+    io::{self, IsTerminal, Read, Write},
     path::PathBuf,
 };
 
@@ -8,8 +8,8 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::Args;
 use serde::Serialize;
 use uclip_core::{
-    AppError, ClipKind, ClipPayload, CoreService, ErrorCode, HistoryItem, HistoryPage,
-    HistoryQuery, MAX_TEXT_BYTES,
+    AppError, ClipKind, ClipPayload, CoreService, ErrorCode, HistoryItem, HistoryQuery,
+    MAX_TEXT_BYTES,
 };
 use uclip_runtime::clipboard_native::{decode_image, png, MAX_ENCODED_IMAGE};
 
@@ -30,7 +30,7 @@ pub struct Get {
     /// Also write the record to the system clipboard.
     #[arg(short, long)]
     copy: bool,
-    /// Output the original bytes without a trailing newline.
+    /// Output original bytes without terminal escaping or an added newline.
     #[arg(short, long)]
     raw: bool,
 }
@@ -171,38 +171,16 @@ async fn collection_id(
     core: &CoreService,
     selection: Option<String>,
 ) -> Result<Option<String>, AppError> {
-    match selection {
-        Some(selection) => core
-            .collections()
-            .await?
-            .items
-            .into_iter()
-            .find(|collection| collection.id == selection || collection.name == selection)
-            .map(|collection| Some(collection.id))
-            .ok_or_else(|| AppError::new(ErrorCode::NotFound)),
-        None => Ok(None),
-    }
-}
-
-async fn page(
-    core: &CoreService,
-    collection: Option<String>,
-    offset: u32,
-    count: u32,
-    query: String,
-    regex: bool,
-    kind: Option<ClipKind>,
-) -> Result<HistoryPage, AppError> {
-    let query = HistoryQuery {
-        query,
-        regex,
-        kind,
-        pinned_only: false,
-        collection_id: collection_id(core, collection).await?,
-        offset,
-        expected_revision: Some(core.history_revision().await?),
+    let Some(selection) = selection else {
+        return Ok(None);
     };
-    core.history_window(query, false, Some(count)).await
+    let items = core.collections().await?.items;
+    items
+        .iter()
+        .find(|collection| collection.id == selection)
+        .or_else(|| items.iter().find(|collection| collection.name == selection))
+        .map(|collection| Some(collection.id.clone()))
+        .ok_or_else(|| AppError::new(ErrorCode::NotFound))
 }
 
 fn id(value: String) -> Result<String, AppError> {
@@ -216,16 +194,16 @@ pub async fn get(core: &CoreService, args: Get) -> Result<(), AppError> {
         Some(value) if args.collection.is_none() => (id(value)?, None),
         Some(_) => return Err(crate::invalid()),
         None => {
-            let page = page(
-                core,
-                args.collection,
-                args.index.unwrap_or(args.position.unwrap_or(1) - 1),
-                1,
-                String::new(),
-                false,
-                None,
-            )
-            .await?;
+            let query = HistoryQuery {
+                query: String::new(),
+                regex: false,
+                kind: None,
+                pinned_only: false,
+                collection_id: collection_id(core, args.collection).await?,
+                offset: args.index.unwrap_or(args.position.unwrap_or(1) - 1),
+                expected_revision: Some(core.history_revision().await?),
+            };
+            let page = core.history_window(query, false, Some(1)).await?;
             let clip = page
                 .items
                 .into_iter()
@@ -247,7 +225,14 @@ pub async fn get(core: &CoreService, args: Get) -> Result<(), AppError> {
         publish_record(core, id, to_copy).await?;
     }
     match payload {
-        ClipPayload::Text(text) => output(text.as_bytes(), !args.raw && !text.ends_with('\n')),
+        ClipPayload::Text(text) => {
+            let text = if !args.raw && io::stdout().is_terminal() {
+                terminal_text(&text)
+            } else {
+                text
+            };
+            output(text.as_bytes(), !args.raw && !text.ends_with('\n'))
+        }
         ClipPayload::Files(paths) => print_files(&paths, !args.raw),
         ClipPayload::Image {
             width,
@@ -255,6 +240,22 @@ pub async fn get(core: &CoreService, args: Get) -> Result<(), AppError> {
             rgba,
         } => output(&png(width, height, rgba)?, false),
     }
+}
+
+fn terminal_text(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\r' && characters.peek() == Some(&'\n') {
+            continue;
+        }
+        if character.is_control() && !matches!(character, '\n' | '\t') {
+            escaped.extend(character.escape_unicode());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
 }
 
 fn print_files(paths: &[String], newline: bool) -> Result<(), AppError> {
@@ -301,38 +302,39 @@ pub async fn list(
     kind: Option<ClipKind>,
 ) -> Result<(), AppError> {
     let default_limit = if kind.is_some() { 20 } else { 10 };
-    let page = page(
-        core,
-        args.collection,
-        0,
-        args.limit.unwrap_or(default_limit),
+    let limit = args.limit.unwrap_or(default_limit);
+    let mut query = HistoryQuery {
         query,
         regex,
         kind,
-    )
-    .await?;
-    if args.json {
-        return crate::print_json(&page);
-    }
-    for item in page.items {
-        if args.full {
-            let payload = core
-                .read_clip_in_history(item.id.clone(), Some(page.revision.clone()))
-                .await?;
+        pinned_only: false,
+        collection_id: collection_id(core, args.collection).await?,
+        offset: 0,
+        expected_revision: None,
+    };
+    if args.full {
+        for (item, payload) in core.history_content(query, limit).await? {
             crate::print_json(&FullItem {
                 item,
                 content: payload.try_into()?,
             })?;
-        } else {
-            let preview = serde_json::to_string(&item.preview).map_err(|_| crate::unavailable())?;
-            let kind = match item.kind {
-                ClipKind::Text => "text",
-                ClipKind::Image => "image",
-                ClipKind::Files => "files",
-            };
-            let line = format!("{}\t{kind}\t{preview}", item.id);
-            output(line.as_bytes(), true)?;
         }
+        return Ok(());
+    }
+    query.expected_revision = Some(core.history_revision().await?);
+    let page = core.history_window(query, false, Some(limit)).await?;
+    if args.json {
+        return crate::print_json(&page);
+    }
+    for item in page.items {
+        let preview = serde_json::to_string(&item.preview).map_err(|_| crate::unavailable())?;
+        let kind = match item.kind {
+            ClipKind::Text => "text",
+            ClipKind::Image => "image",
+            ClipKind::Files => "files",
+        };
+        let line = format!("{}\t{kind}\t{preview}", item.id);
+        output(line.as_bytes(), true)?;
     }
     Ok(())
 }
@@ -357,20 +359,26 @@ async fn save_input(
     copy: bool,
 ) -> Result<(), AppError> {
     let payload = input.read()?;
-    let id = core
-        .create_clip(payload, collection_id(core, collection).await?)
+    let clip = core
+        .create_clip_version(payload, collection_id(core, collection).await?)
         .await?;
-    output(id.as_bytes(), true)?;
-    if copy {
-        let payload = core
-            .clipboard_payload(vec![id.clone()], None, None, Vec::new())
-            .await?;
-        if let Err(error) = publish_record(core, id, payload).await {
-            eprintln!("uclip: record saved");
-            return Err(error);
+    let result = async {
+        output(clip.id.as_bytes(), true)?;
+        if copy {
+            let payload = core
+                .clipboard_payload(
+                    vec![clip.id.clone()],
+                    None,
+                    Some(clip.expected_revision),
+                    Vec::new(),
+                )
+                .await?;
+            publish_record(core, clip.id, payload).await?;
         }
+        Ok(())
     }
-    Ok(())
+    .await;
+    result.inspect_err(|_| eprintln!("uclip: record saved"))
 }
 
 pub async fn save(core: &CoreService, args: Save) -> Result<(), AppError> {
@@ -386,4 +394,15 @@ pub async fn copy(core: &CoreService, args: Copy) -> Result<(), AppError> {
         return publish_record(core, id, payload).await;
     }
     save_input(core, args.input, args.collection, true).await
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn terminal_text_escapes_controls_and_preserves_readable_whitespace() {
+        assert_eq!(
+            super::terminal_text("\u{7b14}\tline\r\n\r\x1b\u{9b}\x7f\0"),
+            "\u{7b14}\tline\n\\u{d}\\u{1b}\\u{9b}\\u{7f}\\u{0}"
+        );
+    }
 }

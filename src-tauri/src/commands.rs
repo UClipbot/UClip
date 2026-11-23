@@ -189,6 +189,19 @@ pub async fn change_clip_deletion(
     }
 }
 
+#[tauri::command]
+pub async fn purge_trash(
+    state: State<'_, AppState>,
+    request: uclip_core::PurgeTrash,
+) -> Result<u32, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .purge_trash(request)
+        .await
+}
+
 fn state_desktop_shortcut(app: &tauri::AppHandle) -> bool {
     use tauri::Manager;
     app.state::<crate::desktop::DesktopState>()

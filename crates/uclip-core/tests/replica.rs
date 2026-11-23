@@ -2,7 +2,8 @@ use std::{collections::BTreeSet, path::Path};
 
 use uclip_core::{
     ChangeClipDeletion, ChangeClipPin, ClipPayload, ClipVersion, CreateCollection, EditClip,
-    EditableContent, ReplicaBody, ReplicaEntry, ReplicaType, Storage,
+    EditableContent, EmptyTrash, ErrorCode, PurgeTrash, ReplicaBody, ReplicaEntry, ReplicaType,
+    Storage,
 };
 
 fn storage(path: &Path) -> Storage {
@@ -400,6 +401,77 @@ fn a_restore_replaces_the_deleted_head_in_every_delivery_order() {
             .unwrap());
         assert_eq!(c.history_revision().unwrap(), old_revision);
     }
+}
+
+#[test]
+fn permanent_deletion_wins_over_a_later_offline_restore_after_restart() {
+    let temp = tempfile::tempdir().unwrap();
+    let a_path = temp.path().join("a");
+    let b_path = temp.path().join("b");
+    let mut a = storage(&a_path);
+    let mut b = storage(&b_path);
+    let id = a.create_text("shared".into()).unwrap();
+    a.change_clip_deletion(ChangeClipDeletion {
+        id: id.clone(),
+        expected_revision: "0".into(),
+        deleted: true,
+    })
+    .unwrap();
+    set_pending_time(&a_path, &id, 10);
+    let deleted = entries(&mut a).remove(0);
+    transfer(&mut a, &mut b);
+
+    a.purge_trash(PurgeTrash::All(EmptyTrash {
+        expected_revision: a.history_revision().unwrap(),
+    }))
+    .unwrap();
+    set_pending_time(&a_path, &id, 20);
+    // B hasn't observed the purge. Its restore is deliberately later.
+    b.change_clip_deletion(ChangeClipDeletion {
+        id: id.clone(),
+        expected_revision: history_items(&b, true)[0].revision.clone(),
+        deleted: false,
+    })
+    .unwrap();
+    set_pending_time(&b_path, &id, 30);
+    let restored = entries(&mut b).remove(0);
+    let replay = rmp_serde::to_vec(&restored).unwrap();
+    let revision = a.history_revision().unwrap();
+    assert!(!a.apply_replica_entry(restored).unwrap());
+    assert_eq!(a.history_revision().unwrap(), revision);
+
+    let tombstone = entries(&mut a).remove(0);
+    assert!(tombstone.stamp.removed && tombstone.body.is_none());
+    assert!(b.apply_replica_entry(tombstone).unwrap());
+    drop((a, b));
+
+    let mut a = Storage::open(&a_path).unwrap();
+    let mut b = Storage::open(&b_path).unwrap();
+    // A fresh replica receives the live version before the purge and still converges.
+    let mut fresh = storage(&temp.path().join("fresh"));
+    fresh
+        .apply_replica_entry(rmp_serde::from_slice(&replay).unwrap())
+        .unwrap();
+    assert!(fresh.read_clip(&id).is_ok());
+    transfer(&mut b, &mut fresh);
+    assert_eq!(keys(&mut a), keys(&mut b));
+    assert_eq!(keys(&mut b), keys(&mut fresh));
+    for store in [&mut a, &mut b, &mut fresh] {
+        assert!(!store
+            .apply_replica_entry(rmp_serde::from_slice(&replay).unwrap())
+            .unwrap());
+        assert!(history_items(store, false).is_empty());
+        assert!(history_items(store, true).is_empty());
+        assert_eq!(store.read_clip(&id).unwrap_err().code, ErrorCode::NotFound);
+    }
+    assert!(!fresh.apply_replica_entry(deleted).unwrap());
+    let copied = fresh.create_text("shared".into()).unwrap();
+    assert_ne!(copied, id);
+    transfer(&mut fresh, &mut a);
+    assert_eq!(
+        a.read_clip(&copied).unwrap(),
+        ClipPayload::Text("shared".into())
+    );
 }
 
 #[test]

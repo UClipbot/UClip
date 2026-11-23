@@ -1,5 +1,5 @@
 use std::{
-    io::Write,
+    io::{Read, Write},
     path::Path,
     process::{Command, Output, Stdio},
 };
@@ -48,7 +48,7 @@ fn commands_round_trip_text_images_and_references_in_a_private_library() {
     assert_eq!(empty.status.code(), Some(3));
     assert!(!library.exists());
 
-    let payload = "  \u{7b14}\u{8bb0}\nsecond line  ";
+    let payload = "  \u{7b14}\u{8bb0}\nsecond line  \x1b";
     let id = String::from_utf8(successful(run(&library, &["save"], payload.as_bytes()))).unwrap();
     let id = id.trim();
     for selector in [
@@ -61,6 +61,10 @@ fn commands_round_trip_text_images_and_references_in_a_private_library() {
             payload.as_bytes()
         );
     }
+    assert_eq!(
+        successful(run(&library, &["get", id], b"")),
+        [payload.as_bytes(), b"\n"].concat()
+    );
     let files = temp.path().join("\u{6587}\u{4ef6}.txt");
     std::fs::write(&files, b"file content").unwrap();
     let path = files.to_str().unwrap();
@@ -152,6 +156,94 @@ fn commands_round_trip_text_images_and_references_in_a_private_library() {
         assert!(!result.is_empty());
         assert!(!missing.exists());
     }
+}
+
+#[test]
+fn an_exact_collection_id_takes_precedence_over_an_older_collection_name() {
+    use uclip_core::{CoreService, CreateCollection, RenameCollection};
+
+    let temp = tempfile::tempdir().unwrap();
+    let library = temp.path().join("profile");
+    successful(run(&library, &["save", "initial record"], b""));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let target = runtime.block_on(async {
+        let core = CoreService::open(library.join("foundation.sqlite3"))
+            .await
+            .unwrap();
+        let first = core
+            .create_collection(CreateCollection {
+                name: "First".into(),
+            })
+            .await
+            .unwrap();
+        let target = core
+            .create_collection(CreateCollection {
+                name: "Target".into(),
+            })
+            .await
+            .unwrap();
+        core.rename_collection(RenameCollection {
+            id: first.id,
+            name: target.id.clone(),
+            expected_revision: first.revision,
+        })
+        .await
+        .unwrap();
+        core.shutdown().await.unwrap();
+        target
+    });
+    successful(run(
+        &library,
+        &["save", "target record", "--collection", &target.id],
+        b"",
+    ));
+    assert_eq!(
+        successful(run(
+            &library,
+            &["get", "--collection", &target.name, "--raw"],
+            b""
+        )),
+        b"target record"
+    );
+}
+
+#[test]
+fn full_history_uses_one_snapshot_while_the_output_pipe_is_blocked() {
+    let temp = tempfile::tempdir().unwrap();
+    let library = temp.path().join("profile");
+    successful(run(&library, &["save", "first fixture"], b""));
+    let large = "x".repeat(256 * 1024);
+    successful(run(&library, &["save"], large.as_bytes()));
+
+    let mut exporter = cli(&library, &["list", "--full"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The first record is larger than the pipe buffer and keeps the writer
+    // blocked while another process changes the history revision.
+    let mut first_byte = [0];
+    exporter
+        .stdout
+        .as_mut()
+        .unwrap()
+        .read_exact(&mut first_byte)
+        .unwrap();
+    let concurrent_save = run(&library, &["save", "concurrent fixture"], b"");
+    let output = successful(exporter.wait_with_output().unwrap());
+    successful(concurrent_save);
+
+    let output = [first_byte.as_slice(), &output].concat();
+    let items = serde_json::Deserializer::from_slice(&output)
+        .into_iter::<serde_json::Value>()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["content"]["text"], large);
+    assert_eq!(items[1]["content"]["text"], "first fixture");
 }
 
 #[test]

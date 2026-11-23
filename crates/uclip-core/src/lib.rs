@@ -2,6 +2,7 @@
 mod collections;
 mod contracts;
 mod desktop;
+pub mod extensions;
 mod history;
 mod keyboard;
 mod replica;

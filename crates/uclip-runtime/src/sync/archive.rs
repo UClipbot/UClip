@@ -13,7 +13,7 @@ use super::transport::{
 };
 
 const MAGIC: &[u8] = b"UClip encrypted sync v1\0";
-const MANIFEST_VERSION: u8 = 3;
+const MANIFEST_VERSION: u8 = 4;
 const MAX_MANIFESTS: usize = 256;
 const OVERHEAD: usize = MAGIC.len() + 24 + 16;
 
@@ -60,9 +60,8 @@ pub(super) struct Archive<S> {
     store: S,
     key: [u8; 32],
     device: String,
-    generation: u64,
+    generation: Option<u64>,
     own: Vec<ReplicaStamp>,
-    own_version: u8,
     objects: ObjectLookup,
     previous: Vec<String>,
 }
@@ -73,9 +72,8 @@ impl<S: ArchiveStore> Archive<S> {
             store,
             device,
             key,
-            generation: 0,
+            generation: None,
             own: Vec::new(),
-            own_version: 0,
             objects: ObjectLookup::Unchecked,
             previous: Vec::new(),
         }
@@ -167,11 +165,10 @@ impl<S: ArchiveStore> ReplicaTransport for Archive<S> {
                 .read(Area::Manifests, &name, MAX_INVENTORY + OVERHEAD)?
                 .ok_or_else(unavailable)?;
             let plaintext = self.open(&name, &data)?;
-            let (version, stamps) = match decode::<(u8, Vec<ReplicaStamp>)>(&plaintext) {
-                Ok((version @ (2 | MANIFEST_VERSION), stamps)) => (version, stamps),
-                Ok(_) => return Err(invalid()),
-                Err(_) => (1, decode::<Vec<ReplicaStamp>>(&plaintext)?),
-            };
+            let (version, stamps): (u8, Vec<ReplicaStamp>) = decode(&plaintext)?;
+            if version != MANIFEST_VERSION {
+                return Err(invalid());
+            }
             if stamps.len() > MAX_STAMPS {
                 return Err(limit());
             }
@@ -186,8 +183,7 @@ impl<S: ArchiveStore> ReplicaTransport for Archive<S> {
             }
             if device == self.device {
                 self.own = stamps;
-                self.own_version = version;
-                self.generation = generation;
+                self.generation = Some(generation);
             }
         }
         Ok(result)
@@ -248,17 +244,18 @@ impl<S: ArchiveStore> ReplicaTransport for Archive<S> {
             available.extend(retained);
             available
                 .sort_by(|a, b| (&a.id, &a.writer, a.counter).cmp(&(&b.id, &b.writer, b.counter)));
-            if self.own == available {
-                return Ok(());
-            }
         }
-        if self.own_version == MANIFEST_VERSION && self.own == available {
+        if self.own == available && (self.generation.is_some() || !complete) {
             return Ok(());
         }
         if available.len() > MAX_STAMPS {
             return Err(limit());
         }
-        let generation = self.generation.checked_add(1).ok_or_else(limit)?;
+        let generation = self
+            .generation
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(limit)?;
         let name = format!("{}-{generation:016x}.idx", self.device);
         let body = self.seal(
             &name,
@@ -273,8 +270,7 @@ impl<S: ArchiveStore> ReplicaTransport for Archive<S> {
             }
         }
         self.own = available;
-        self.own_version = MANIFEST_VERSION;
-        self.generation = generation;
+        self.generation = Some(generation);
         Ok(())
     }
 }
@@ -325,6 +321,20 @@ mod tests {
 
         fn remove_manifest(&mut self, name: &str) {
             self.0.remove(name);
+        }
+    }
+
+    #[test]
+    fn rejects_manifest_versions_other_than_the_current_format() {
+        let device = Uuid::new_v4().to_string();
+        for version in [MANIFEST_VERSION - 1, MANIFEST_VERSION + 1] {
+            let mut store = MemoryStore::default();
+            let mut archive = Archive::new(&mut store, [23; 32], device.clone());
+            let name = format!("{device}-{:016x}.idx", 1);
+            let plaintext = encode(&(version, Vec::<ReplicaStamp>::new()), MAX_INVENTORY).unwrap();
+            let body = archive.seal(&name, &plaintext).unwrap();
+            assert!(archive.store.create(Area::Manifests, &name, body).unwrap());
+            assert!(matches!(archive.inventory(), Err(error) if error.code == ErrorCode::SyncData));
         }
     }
 

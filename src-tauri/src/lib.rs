@@ -75,6 +75,7 @@ pub fn run() {
             commands::update_capture_policy,
             commands::copy_clip,
             commands::change_clip_deletion,
+            commands::purge_trash,
             commands::change_clip_pin,
             commands::deduplicate_pinned,
             commands::collections_list,

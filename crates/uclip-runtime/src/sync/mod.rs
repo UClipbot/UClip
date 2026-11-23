@@ -11,6 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
+        mpsc::{self, SyncSender, TrySendError},
         Arc, Mutex,
     },
     thread,
@@ -163,12 +164,14 @@ impl Profile {
 
 #[derive(Default)]
 struct RemoteReport {
+    syncing: bool,
     success: Option<u64>,
     error: Option<AppError>,
 }
 
 struct RemoteWorker {
     stop: Arc<AtomicBool>,
+    request: SyncSender<()>,
     report: Arc<Mutex<RemoteReport>>,
 }
 
@@ -186,12 +189,16 @@ impl RemoteWorker {
         let key = derive(&key, b"uclip/archive/encryption/v1")?;
         let stop = Arc::new(AtomicBool::new(false));
         let report = Arc::new(Mutex::new(RemoteReport::default()));
+        let (request, wake) = mpsc::sync_channel(1);
         let signal = stop.clone();
         let status = report.clone();
         thread::Builder::new()
             .name("uclip-sync-storage".into())
             .spawn(move || {
                 while !signal.load(Ordering::Acquire) {
+                    if let Ok(mut status) = status.lock() {
+                        status.syncing = true;
+                    }
                     let result = match &settings {
                         SyncRemoteInput::Webdav {
                             url,
@@ -212,21 +219,32 @@ impl RemoteWorker {
                         .and_then(|store| archive_round(&core, store, key, &device, &signal)),
                     };
                     if let Ok(mut status) = status.lock() {
+                        status.syncing = false;
                         if matches!(result, Ok(true)) {
                             status.success = Some(lan::now());
                         }
                         status.error = result.err();
                     }
-                    for _ in 0..30 {
-                        if signal.load(Ordering::Acquire) {
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(200));
+                    if wake.recv_timeout(Duration::from_secs(6))
+                        == Err(mpsc::RecvTimeoutError::Disconnected)
+                    {
+                        break;
                     }
                 }
             })
             .map_err(|_| unavailable())?;
-        Ok(Self { stop, report })
+        Ok(Self {
+            stop,
+            request,
+            report,
+        })
+    }
+
+    fn sync_now(&self) -> Result<(), AppError> {
+        match self.request.try_send(()) {
+            Ok(()) | Err(TrySendError::Full(())) => Ok(()),
+            Err(TrySendError::Disconnected(())) => Err(AppError::new(ErrorCode::Unavailable)),
+        }
     }
 }
 
@@ -393,6 +411,7 @@ impl SyncService {
             lan_last_sync: None,
             lan_error: None,
             remote: profile.view(),
+            remote_syncing: false,
             remote_last_sync: None,
             remote_error: None,
         })
@@ -444,16 +463,17 @@ impl SyncService {
             Some(Err(error)) => (SyncRole::Discovering, 0, None, Some(error.clone())),
             None => (SyncRole::Off, 0, None, None),
         };
-        let (remote_last_sync, remote_error) = match &state.remote {
+        let (remote_syncing, remote_last_sync, remote_error) = match &state.remote {
             Some(Ok(remote)) => {
                 let report = remote.report.lock().map_err(|_| storage())?;
                 (
+                    report.syncing,
                     report.success.map(|time| time.to_string()),
                     report.error.clone(),
                 )
             }
-            Some(Err(error)) => (None, Some(error.clone())),
-            None => (None, None),
+            Some(Err(error)) => (false, None, Some(error.clone())),
+            None => (false, None, None),
         };
         Ok(SyncStatus {
             paired: state.profile.code.is_some(),
@@ -463,6 +483,7 @@ impl SyncService {
             lan_last_sync: last_sync,
             lan_error,
             remote: state.profile.view(),
+            remote_syncing,
             remote_last_sync,
             remote_error,
         })
@@ -508,6 +529,17 @@ impl SyncService {
                 }
                 next.remote = remote;
                 (false, true)
+            }
+            UpdateSync::SyncRemoteNow => {
+                state
+                    .remote
+                    .as_ref()
+                    .ok_or_else(|| AppError::new(ErrorCode::Unavailable))?
+                    .as_ref()
+                    .map_err(Clone::clone)?
+                    .sync_now()?;
+                drop(state);
+                return self.status();
             }
         };
         let encoded = serde_json::to_string(&next).map_err(|_| storage())?;
@@ -659,6 +691,22 @@ fn cache_size(path: &Path, depth: usize) -> Result<u64, AppError> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn remote_sync_requests_are_coalesced_and_never_block_the_caller() {
+        let (request, wake) = mpsc::sync_channel(1);
+        let worker = RemoteWorker {
+            stop: Arc::new(AtomicBool::new(false)),
+            request,
+            report: Arc::new(Mutex::new(RemoteReport::default())),
+        };
+        worker.sync_now().unwrap();
+        worker.sync_now().unwrap();
+        assert_eq!(wake.try_recv(), Ok(()));
+        assert_eq!(wake.try_recv(), Err(mpsc::TryRecvError::Empty));
+        drop(wake);
+        assert_eq!(worker.sync_now().unwrap_err().code, ErrorCode::Unavailable);
+    }
+
     fn fixture_objects(variable: &str, namespace: &str) -> Option<PathBuf> {
         std::env::var_os(variable).map(|root| PathBuf::from(root).join(namespace).join("objects"))
     }
@@ -770,6 +818,69 @@ mod tests {
                 uclip_core::ClipPayload::Text("newer concurrent edit".into())
             );
             assert_eq!(block(core.replica_inventory()).unwrap().len(), 2);
+        }
+        let query = uclip_core::HistoryQuery {
+            query: String::new(),
+            regex: false,
+            kind: None,
+            pinned_only: false,
+            collection_id: None,
+            offset: 0,
+            expected_revision: None,
+        };
+        let revision_of_first = |core: &CoreService, trash| {
+            block(core.history_window(query.clone(), trash, None))
+                .unwrap()
+                .items
+                .into_iter()
+                .find(|item| item.id == first)
+                .unwrap()
+                .revision
+        };
+        block(a.change_clip_deletion(uclip_core::ChangeClipDeletion {
+            id: first.clone(),
+            expected_revision: revision_of_first(&a, false),
+            deleted: true,
+        }))
+        .unwrap();
+        assert!(archive_round(&a, make_store(), key, &a_device, &stop).unwrap());
+        assert!(archive_round(&b, make_store(), key, &b_device, &stop).unwrap());
+        block(
+            a.purge_trash(uclip_core::PurgeTrash::All(uclip_core::EmptyTrash {
+                expected_revision: block(a.history_revision()).unwrap(),
+            })),
+        )
+        .unwrap();
+        let purged = block(a.replica_inventory())
+            .unwrap()
+            .into_iter()
+            .find(|stamp| stamp.id.id == first)
+            .unwrap();
+        thread::sleep(Duration::from_millis(15));
+        block(b.change_clip_deletion(uclip_core::ChangeClipDeletion {
+            id: first.clone(),
+            expected_revision: revision_of_first(&b, true),
+            deleted: false,
+        }))
+        .unwrap();
+        let restored = block(b.replica_inventory())
+            .unwrap()
+            .into_iter()
+            .find(|stamp| stamp.id.id == first)
+            .unwrap();
+        assert!(restored.changed_at > purged.changed_at);
+        // B publishes its restore while A's purge is still local.
+        assert!(archive_round(&b, make_store(), key, &b_device, &stop).unwrap());
+        for (core, device) in participants {
+            assert!(archive_round(core, make_store(), key, device, &stop).unwrap());
+            assert_eq!(
+                block(core.read_clip(first.clone())).unwrap_err().code,
+                ErrorCode::NotFound
+            );
+            let inventory = block(core.replica_inventory()).unwrap();
+            assert!(inventory.contains(&purged));
+            assert!(!inventory.contains(&restored));
+            assert_eq!(inventory.len(), 2);
         }
         block(a.shutdown()).unwrap();
         block(b.shutdown()).unwrap();

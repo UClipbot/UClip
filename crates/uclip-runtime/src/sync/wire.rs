@@ -69,7 +69,7 @@ impl Wire {
             .and_then(|()| stream.set_nodelay(true))
             .map_err(|_| unavailable())?;
         let builder = Builder::new(NOISE_SUITE.parse().map_err(|_| invalid())?)
-            .prologue(b"uclip-lan/v3")
+            .prologue(b"uclip-lan/v4")
             .map_err(|_| invalid())?
             .psk(0, key)
             .map_err(|_| authentication())?;

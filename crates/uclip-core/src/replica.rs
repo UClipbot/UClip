@@ -469,6 +469,9 @@ impl ReplicaStamp {
     }
 
     pub fn compare_version(&self, other: &Self) -> Ordering {
+        // A clip identity cannot be restored after a permanent deletion.
+        // Trash entries still carry a body and use the regular version order.
+        let permanent_removal = |stamp: &Self| stamp.id.kind == ReplicaType::Clip && stamp.removed;
         // Timestamps advance past observed versions before committing any local write.
         // Legacy stamps lack timestamps. A strict causal successor always has a larger
         // vector sum, so legacy imports also have a consistent total order.
@@ -479,8 +482,9 @@ impl ReplicaStamp {
                 .map(|counter| i128::from(*counter))
                 .sum::<i128>()
         };
-        self.changed_at
-            .cmp(&other.changed_at)
+        permanent_removal(self)
+            .cmp(&permanent_removal(other))
+            .then_with(|| self.changed_at.cmp(&other.changed_at))
             .then_with(|| weight(self).cmp(&weight(other)))
             .then_with(|| {
                 (&self.writer, self.counter, self.removed, &self.clock).cmp(&(

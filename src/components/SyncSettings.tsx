@@ -12,6 +12,7 @@ export function SyncSettings() {
   const [visibleCode, setVisibleCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [remoteRequested, setRemoteRequested] = useState(false);
   const [loadingError, setLoadingError] = useState('');
   const [kind, setKind] = useState<RemoteKind>('off');
   const [initialized, setInitialized] = useState(false);
@@ -29,6 +30,7 @@ export function SyncSettings() {
         if (current()) {
           setStatus(next);
           setLoadingError('');
+          setRemoteRequested(false);
         }
       } catch (failure) {
         if (current()) setLoadingError(safeError(failure).message);
@@ -55,6 +57,7 @@ export function SyncSettings() {
     generation.current++;
     setBusy(true);
     setError('');
+    setRemoteRequested(false);
     try {
       await operation();
     } catch (failure) {
@@ -69,6 +72,7 @@ export function SyncSettings() {
     perform(async () => {
       setStatus(await invoke<SyncStatus>('update_sync', { request }));
       if (request.action === 'join') setCode('');
+      if (request.action === 'sync_remote_now') setRemoteRequested(true);
     });
 
   const remote = status?.remote;
@@ -291,11 +295,24 @@ export function SyncSettings() {
             </button>
           </form>
           {remote && (
-            <p className="settings-feedback" role="status">
-              {status.remoteError
-                ? t(safeError(status.remoteError).message)
-                : lastSync(status.remoteLastSync) || t('sync_storage_pending')}
-            </p>
+            <>
+              <button
+                className="secondary-button"
+                disabled={busy || remoteRequested || status.remoteSyncing}
+                onClick={() => void update({ action: 'sync_remote_now' })}
+              >
+                {t('sync_storage_now')}
+              </button>
+              <p className="settings-feedback" role="status">
+                {status.remoteSyncing
+                  ? t('sync_storage_running')
+                  : remoteRequested
+                    ? t('sync_storage_requested')
+                    : status.remoteError
+                      ? t(safeError(status.remoteError).message)
+                      : lastSync(status.remoteLastSync) || t('sync_storage_pending')}
+              </p>
+            </>
           )}
         </>
       )}

@@ -13,6 +13,7 @@ import type {
   ClipDetail,
   CopyResult,
   HistoryPage,
+  PurgeTrash,
   CollectionItem,
   CollectionsSnapshot,
   DeleteCollection,
@@ -386,6 +387,7 @@ export function useHistory(
       mutateHistory<ClipPinSnapshot>('change_clip_pin', request),
     deduplicatePinned: (expectedRevision: string) =>
       mutateHistory<DeduplicationSnapshot>('deduplicate_pinned', { expectedRevision }),
+    purgeTrash: (request: PurgeTrash) => mutateHistory<number>('purge_trash', request),
     createText,
     mutating,
     copy,

@@ -20,6 +20,7 @@
     "allow-update-capture-policy",
     "allow-copy-clip",
     "allow-change-clip-deletion",
+    "allow-purge-trash",
     "allow-change-clip-pin",
     "allow-deduplicate-pinned",
     "allow-collections-list",

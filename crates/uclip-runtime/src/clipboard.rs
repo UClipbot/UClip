@@ -7,10 +7,15 @@ pub use crate::clipboard_native::ClipboardWrite;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub use crate::clipboard_native::Context;
 #[cfg(target_os = "linux")]
-use clipboard_rs::{common::RustImage, Clipboard, ClipboardContent, RustImageData};
+use clipboard_rs::{Clipboard, ClipboardContent};
+#[cfg(target_os = "linux")]
+use x11rb::connection::RequestConnection;
 
 #[cfg(target_os = "linux")]
-pub struct Context(clipboard_rs::ClipboardContext);
+pub struct Context {
+    clipboard: clipboard_rs::ClipboardContext,
+    max_property_bytes: usize,
+}
 
 #[cfg(target_os = "linux")]
 impl Context {
@@ -20,9 +25,22 @@ impl Context {
         {
             return Err(AppError::new(ErrorCode::Restricted));
         }
-        clipboard_rs::ClipboardContext::new()
-            .map(Self)
-            .map_err(|_| error())
+        let (connection, _) = x11rb::connect(None).map_err(|_| error())?;
+        // ChangeProperty has a 24-byte header and BIG-REQUESTS can add four bytes.
+        // The server limit and the remaining capacity are both four-byte aligned.
+        let max_property_bytes = connection.maximum_request_bytes().saturating_sub(28);
+        let clipboard = clipboard_rs::ClipboardContext::new().map_err(|_| error())?;
+        Ok(Self {
+            clipboard,
+            max_property_bytes,
+        })
+    }
+
+    fn check_property_size(&self, length: usize) -> Result<(), AppError> {
+        if length > self.max_property_bytes {
+            return Err(AppError::new(ErrorCode::LimitExceeded));
+        }
+        Ok(())
     }
 }
 
@@ -100,17 +118,21 @@ pub fn write(
     marker: &[u8],
 ) -> Result<(), AppError> {
     validate_write(&payload)?;
+    context.check_property_size(marker.len())?;
     let content = match payload {
-        ClipPayload::Text(text) => ClipboardContent::Text(text),
+        ClipPayload::Text(text) => {
+            context.check_property_size(text.len())?;
+            ClipboardContent::Text(text)
+        }
         ClipPayload::Image {
             width,
             height,
             rgba,
-        } => ClipboardContent::Image(RustImageData::from_dynamic_image(
-            image::DynamicImage::ImageRgba8(
-                image::RgbaImage::from_raw(width, height, rgba).ok_or_else(error)?,
-            ),
-        )),
+        } => {
+            let bytes = crate::clipboard_native::png(width, height, rgba)?;
+            context.check_property_size(bytes.len())?;
+            ClipboardContent::Other("image/png".into(), bytes)
+        }
         ClipPayload::Files(paths) => {
             let paths = paths
                 .iter()
@@ -120,11 +142,16 @@ pub fn write(
                         .map_err(|_| error())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            // The largest clipboard-rs file targets are the CRLF URI list and
+            // the GNOME/Nautilus URI lists with a "copy\n" prefix.
+            let uri_bytes: usize = paths.iter().map(String::len).sum();
+            let separators = paths.len() - 1;
+            context.check_property_size(uri_bytes + (2 * separators).max(5 + separators))?;
             ClipboardContent::Files(paths)
         }
     };
     context
-        .0
+        .clipboard
         .set(vec![
             content,
             ClipboardContent::Other(format.into(), marker.to_vec()),

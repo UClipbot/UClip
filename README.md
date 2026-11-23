@@ -14,6 +14,7 @@ UClip is a local-first clipboard manager. Save what you copy, then quickly searc
 - **Manual entries**: Create text records for snippets you use often.
 - **Pins and deduplication**: Keep useful content pinned and remove its unpinned duplicates from the pinned view.
 - **Collections**: Create and rename collections, and move or copy records between them.
+- **Trash**: Restore deleted records, permanently delete selected records, or empty Trash.
 - **Hover previews**: Read text, images and file references in a separate, resizable desktop window with the latest capture/save time. Hovering keeps your focus; click the preview to keep reading, or press Esc to close it.
 - **Custom shortcuts**: Adjust search, copy, preview, delete, and navigation shortcuts.
 - **Desktop integration**: Show the window from the tray or a shortcut, keep it always on top, pin it to prevent hiding on blur, and launch at login.
@@ -40,7 +41,9 @@ Search and filters are shown by default. Change this in Settings → Appearance.
 3. For devices that are online at different times, select **WebDAV** or **SFTP** under **Server storage** on both devices. Use the same pairing code and remote directory. WebDAV uses HTTPS and supports HTTP Basic authentication. SFTP uses password authentication and verifies the SSH host key against the SHA-256 fingerprint you provide. The server stores encrypted history. Leave local network sync on to use both paths at the same time.
 4. To paste a file from another device, select its item in history and copy or paste it as usual. UClip retrieves the original from the online source over the local network. Transfers support regular files and folders, up to 256 MiB per paste. UClip caches received copies locally and removes copies older than 24 hours at startup or before a later transfer.
 
-Synced items are ordered by capture or save time within the pinned and unpinned groups. A conflict keeps the latest operation, including edits, deletions, and restores. Keep all devices in the group on the same UClip version. Shared history has a 512 MiB payload limit, and synced items are retained across devices independently of the local capture count setting.
+Synced items are ordered by capture or save time within the pinned and unpinned groups. A conflict between edits, moves to Trash, and restores keeps the latest operation. Permanent deletion takes precedence for the same record, including restores made while a device was offline. LAN sync and server storage use protocol version 4. Shared history has a 512 MiB payload limit, and synced items are retained across devices independently of the local capture count setting.
+
+In **Server storage**, choose **Sync server storage now** to request an immediate sync with the configured server.
 
 ## Common shortcuts
 
@@ -77,9 +80,9 @@ uclip get latest --raw
 uclip copy --file ./notes.txt
 ```
 
-`get` accepts a UUID, `latest`, `--position` (one-based), or `--index` (zero-based). `--raw` preserves text bytes. Images are read as PNG, and file references are read as a JSON array of paths. `list` and `search` accept `--collection` (name or UUID) and `--limit`. `--full` produces JSON Lines with complete content. Use `--image` to read an image, `--file` to read text, or repeat `--reference` to save paths. `completion bash` and `completion zsh` generate shell completion scripts. Diagnostics go to stderr. Exit codes are `0` for success, `1` for other errors, `2` for invalid input, `3` for missing data, and `4` for conflicts or a busy library. An empty query result succeeds with zero rows.
+`get` accepts a UUID, `latest`, `--position` (one-based), or `--index` (zero-based). Text displayed in a terminal escapes control characters except newlines and tabs. Use `--raw` for the original text bytes with no added newline. Images are read as PNG, and file references are read as a JSON array of paths. `list` and `search` accept `--collection` (name or UUID) and `--limit`. `--full` produces JSON Lines with complete content from one history snapshot. Use `--image` to read an image, `--file` to read text, or repeat `--reference` to save paths. `completion bash` and `completion zsh` generate shell completion scripts. Diagnostics go to stderr. Exit codes are `0` for success, `1` for other errors, `2` for invalid input, `3` for missing data, and `4` for conflicts or a busy library. An empty query result succeeds with zero rows.
 
-The default library follows the desktop installation for the same build profile. `--dev` selects the `tauri:dev` library, `--portable` selects a profile under `uclip-data` beside the executable, and `--data-dir` or `UCLIP_DATA_DIR` selects an absolute library directory. On Unix, use a directory private to the account running UClip. History access works without a GUI. Clipboard writes require a supported desktop session, and copying a remote file reference still requires the desktop's LAN retrieval path.
+The default library follows the desktop installation for the same build profile. `--dev` selects the `tauri:dev` library, `--portable` selects a profile under `uclip-data` beside the executable, and `--data-dir` or `UCLIP_DATA_DIR` selects an absolute library directory. On Unix, use a directory private to the account running UClip. History access works without a GUI. Clipboard writes require a supported desktop session, and copying a remote file reference still requires the desktop's LAN retrieval path. On X11, content that exceeds the server's request size limit returns `limit_exceeded`.
 
 To keep an encrypted sync peer online, initialize a new private library and start the service in the foreground:
 

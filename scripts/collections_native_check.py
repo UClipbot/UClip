@@ -154,6 +154,33 @@ def run(c,capture,close_settings):
         wait(lambda:c.execute('return document.documentElement.dataset.theme===arguments[0]',[theme]),'collection theme')
         close_settings();capture('collections-'+theme)
         assert c.execute('return document.documentElement.scrollWidth<=innerWidth')
+
+    active_before = page(c)['total']
+    trashed = []
+    for text in ['purge visible fixture', 'purge filtered-out fixture']:
+        clip_id = c.action('create_text', text=text)
+        c.action('change_clip_deletion', request={
+            'id': clip_id, 'expectedRevision': '0', 'deleted': True,
+        })
+        trashed.append(clip_id)
+    scope(c, 'trash'); settled(c, 2)
+    c.click(f'[data-clip-id="{trashed[0]}"] [data-row-main]')
+    c.click(f'[data-clip-id="{trashed[0]}"] .row-more')
+    c.click('[data-testid="purge-trash-selected"]')
+    c.click('[data-testid="confirm-trash-purge"]'); settled(c, 1)
+    assert not c.execute('return !!document.querySelector(arguments[0])',
+                         [f'[data-clip-id="{trashed[0]}"]'])
+    c.enter('#history-search', 'purge visible fixture'); settled(c, 0)
+    app_menu(c, 'empty-trash')
+    assert c.execute('return document.querySelector("[role=dialog]").textContent.includes(arguments[0])',
+                     ['\u7b5b\u9009\u8303\u56f4\u4e4b\u5916'])
+    c.click('[data-testid="confirm-trash-purge"]')
+    wait(lambda: not c.execute('return !!document.querySelector("[data-testid=confirm-trash-purge]")'),
+         'empty Trash confirmation closes after commit')
+    c.enter('#history-search', ''); settled(c, 0)
+    assert page(c)['total'] == active_before
+    print('PASS: permanent Trash deletion and clearing hidden results, active history preserved', flush=True)
+
     c.expected_total=page(c)['total']
     print('PASS: real category pagination, scope change resets page/selection, category-to-global search, correct Enter action and both themes at 480px',flush=True)
 

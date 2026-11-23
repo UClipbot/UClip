@@ -70,6 +70,12 @@ mod x11 {
             return Err(AppError::new(ErrorCode::Restricted));
         }
         payload.validate()?;
+        // Image publication also encodes the PNG before taking ownership.
+        let timeout = if matches!(payload, ClipPayload::Image { .. }) {
+            Duration::from_secs(15)
+        } else {
+            Duration::from_secs(5)
+        };
         let executable = std::env::current_exe().map_err(|_| error())?;
         let mut child = Command::new(executable)
             .arg("__clipboard-owner")
@@ -99,9 +105,7 @@ mod x11 {
                     let _ = completed.send(result);
                 })
                 .map_err(|_| error())?;
-            receipt
-                .recv_timeout(Duration::from_secs(5))
-                .map_err(|_| error())?
+            receipt.recv_timeout(timeout).map_err(|_| error())?
         })();
         if result.is_err() {
             let _ = child.kill();
@@ -110,7 +114,7 @@ mod x11 {
         result
     }
 
-    fn open_selection() -> Result<(Context, Reader, Option<u32>), AppError> {
+    fn open_selection() -> Result<(Context, Reader, u32), AppError> {
         let packet = crate::history::read_bounded(io::stdin().lock(), MAX_PACKET)?;
         let mut decode = rmp_serde::Deserializer::new(packet.as_slice());
         decode.set_max_depth(8);
@@ -131,15 +135,14 @@ mod x11 {
         let context = Context::new()?;
         let marker = uuid::Uuid::new_v4().to_string();
         clipboard::write(&context, payload, CLI_MARKER, marker.as_bytes())?;
-        // A later copy may have already replaced our selection. Retain the
-        // owner only if this selection still answers with our publication.
-        let owner = reader.owner().ok().filter(|owner| {
-            *owner != 0
-                && reader
-                    .buffer(CLI_MARKER, 36)
-                    .is_ok_and(|bytes| bytes == marker.as_bytes())
-                && reader.owner().ok() == Some(*owner)
-        });
+        // A later copy may have already replaced our selection.
+        let owner = reader.owner()?;
+        if owner == 0
+            || reader.buffer(CLI_MARKER, marker.len())? != marker.as_bytes()
+            || reader.owner()? != owner
+        {
+            return Err(error());
+        }
         Ok((context, reader, owner))
     }
 
@@ -151,10 +154,8 @@ mod x11 {
         writeln!(acknowledgment).map_err(|_| error())?;
         drop(acknowledgment);
         let (_context, reader, owner) = selection?;
-        if let Some(owner) = owner {
-            while reader.owner().is_ok_and(|current| current == owner) {
-                std::thread::sleep(Duration::from_millis(250));
-            }
+        while reader.owner().is_ok_and(|current| current == owner) {
+            std::thread::sleep(Duration::from_millis(250));
         }
         Ok(())
     }

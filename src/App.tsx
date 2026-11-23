@@ -37,7 +37,13 @@ import { useDesktop } from './platform/useDesktop';
 import { useQuickPastePreferences } from './platform/useQuickPastePreferences';
 import { safeError } from './platform/client';
 import { useAppearance } from './platform/useAppearance';
-import type { Theme, Language, CollectionItem, TransferMode } from './generated/contracts';
+import type {
+  Theme,
+  Language,
+  CollectionItem,
+  TransferMode,
+  PurgeTrash,
+} from './generated/contracts';
 
 type Toast = { message: string; undo?: () => void };
 type Menu = { anchor: HTMLElement; clipId?: string };
@@ -47,6 +53,7 @@ type AppModal =
   | 'new'
   | 'shortcuts'
   | 'deduplicate'
+  | 'purge-trash'
   | 'collection'
   | 'transfer'
   | 'delete-collection'
@@ -118,6 +125,8 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const [transferUnknown, setTransferUnknown] = useState(false);
   const [dedupRevision, setDedupRevision] = useState('');
   const [dedupError, setDedupError] = useState('');
+  const [trashPurge, setTrashPurge] = useState<PurgeTrash | null>(null);
+  const [trashPurgeError, setTrashPurgeError] = useState('');
   const [toast, setToast] = useState<Toast | null>(null);
   const settingsWindow =
     appearance.native && new URLSearchParams(window.location.search).get('window') === 'settings';
@@ -491,6 +500,27 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       });
     } catch (error) {
       setDedupError(safeError(error).message);
+    }
+  }
+  function confirmTrashPurge(ids?: string[]) {
+    if (!ready || !live.revision || live.mutating || batchLock.current) return;
+    setTrashPurge(
+      ids
+        ? { scope: 'selected', ids, expectedRevision: live.revision }
+        : { scope: 'all', expectedRevision: live.revision },
+    );
+    setTrashPurgeError('');
+    openModal('purge-trash');
+  }
+  async function purgeTrash() {
+    if (!trashPurge || live.mutating || trashPurgeError) return;
+    try {
+      const count = await live.purgeTrash(trashPurge);
+      clearSelection();
+      closeModal();
+      setToast({ message: count ? t('trash_purged_count', { 0: count }) : t('trash_is_empty') });
+    } catch (error) {
+      setTrashPurgeError(safeError(error).message);
     }
   }
   function removeClip(clip: Clip) {
@@ -1699,6 +1729,24 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                       ? t('delete')
                       : t('move_to_trash')}
               </button>
+              {appearance.native && menuClip.deleted && (
+                <button
+                  role="menuitem"
+                  className="destructive"
+                  data-testid="purge-trash-selected"
+                  disabled={!ready || batchBusy || live.mutating || !live.revision}
+                  onClick={() =>
+                    confirmTrashPurge(
+                      selectedClips.some((clip) => clip.id === menuClip.id)
+                        ? selectedClips.map((clip) => clip.id)
+                        : [menuClip.id],
+                    )
+                  }
+                >
+                  <Icon name="trash" size={15} />
+                  {t('permanently_delete')}
+                </button>
+              )}
             </>
           ) : (
             <>
@@ -1763,6 +1811,18 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                   aria-label={t('deduplicate_pinned_history')}
                 >
                   {t('deduplicate_pinned_history')}
+                </button>
+              )}
+              {appearance.native && view === 'trash' && (
+                <button
+                  role="menuitem"
+                  className="destructive"
+                  data-testid="empty-trash"
+                  disabled={!ready || batchBusy || live.mutating || !live.revision}
+                  onClick={() => confirmTrashPurge()}
+                >
+                  <Icon name="trash" size={15} />
+                  {t('empty_trash')}
                 </button>
               )}
               <button role="menuitem" onClick={() => menuAction(() => setGrid(!grid))}>
@@ -2035,6 +2095,43 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               onClick={() => void deduplicatePinned()}
             >
               {live.mutating ? t('deduplicating') : t('delete_unpinned_duplicates')}
+            </button>
+          </div>
+        </Modal>
+      )}
+      {modal === 'purge-trash' && trashPurge && (
+        <Modal
+          title={t(trashPurge.scope === 'all' ? 'empty_trash' : 'permanently_delete')}
+          description={
+            trashPurge.scope === 'all'
+              ? t('empty_trash_confirmation')
+              : t('purge_selected_confirmation', { 0: trashPurge.ids.length })
+          }
+          onClose={() => {
+            if (!live.mutating) closeModal();
+          }}
+        >
+          {trashPurgeError && (
+            <p role="alert" className="settings-feedback">
+              {t(trashPurgeError)} {t('close_this_panel_refresh_and_check_the_scope_again')}
+            </p>
+          )}
+          <div className="form-actions">
+            <button
+              className="secondary-button"
+              data-autofocus
+              disabled={live.mutating}
+              onClick={closeModal}
+            >
+              {t('cancel')}
+            </button>
+            <button
+              className="primary-button"
+              data-testid="confirm-trash-purge"
+              disabled={live.mutating || !!trashPurgeError}
+              onClick={() => void purgeTrash()}
+            >
+              {t(trashPurge.scope === 'all' ? 'empty_trash' : 'permanently_delete')}
             </button>
           </div>
         </Modal>

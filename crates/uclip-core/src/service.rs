@@ -107,7 +107,7 @@ impl CoreService {
             .map_err(|_| AppError::new(ErrorCode::Unavailable))?
     }
 
-    async fn operation<T: Send + 'static>(
+    pub(crate) async fn operation<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&mut Storage) -> Result<T, AppError> + Send + 'static,
     ) -> Result<T, AppError> {
@@ -205,12 +205,12 @@ impl CoreService {
             .await
     }
 
-    pub async fn create_clip(
+    pub async fn create_clip_version(
         &self,
         payload: crate::ClipPayload,
         collection_id: Option<String>,
-    ) -> Result<String, AppError> {
-        self.operation(move |s| s.create_clip(payload, collection_id))
+    ) -> Result<crate::ClipVersion, AppError> {
+        self.operation(move |s| s.create_clip_version(payload, collection_id))
             .await
     }
     pub async fn collections(&self) -> Result<crate::CollectionsSnapshot, AppError> {
@@ -285,6 +285,14 @@ impl CoreService {
         self.operation(move |s| s.history_window(request, trash, count))
             .await
     }
+    pub async fn history_content(
+        &self,
+        request: crate::HistoryQuery,
+        count: u32,
+    ) -> Result<Vec<(crate::HistoryItem, crate::ClipPayload)>, AppError> {
+        self.operation(move |s| s.history_content(request, count))
+            .await
+    }
     pub async fn quick_paste_slots(
         &self,
         include_pinned: bool,
@@ -353,6 +361,9 @@ impl CoreService {
     ) -> Result<crate::ClipDeletionSnapshot, AppError> {
         self.operation(move |s| s.change_clip_deletion(request))
             .await
+    }
+    pub async fn purge_trash(&self, request: crate::PurgeTrash) -> Result<u32, AppError> {
+        self.operation(move |s| s.purge_trash(request)).await
     }
     pub async fn mark_used(&self, id: String) -> Result<(), AppError> {
         self.operation(move |s| s.mark_used(&id)).await
