@@ -283,6 +283,56 @@ option {
 .history-panel {
   position: relative;
 }
+.workspace-with-collections {
+  flex-direction: row;
+}
+.collection-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: min(var(--collection-width), 45%);
+  flex-shrink: 0;
+  border-inline-end: 1px solid var(--border-subtle);
+  padding: 8px;
+  gap: 6px;
+}
+.collection-sidebar-items {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+}
+.collection-sidebar-items button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 6px;
+  padding: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: start;
+  font-size: 12px;
+}
+.collection-sidebar-items button:hover,
+.collection-sidebar-items button[aria-current='page'] {
+  background: var(--selected);
+}
+.collection-sidebar-items button svg {
+  flex: none;
+}
+.collection-sidebar-items button span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.collection-sidebar input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.history-selection-count {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 12px 0;
+}
 .history-scroll {
   min-height: 0;
   overflow: auto;
@@ -915,6 +965,15 @@ body.settings-window .modal > .settings-feedback {
   flex-direction: column;
   gap: 8px;
 }
+.sync-form {
+  margin: 12px 0;
+}
+.sync-form .secondary-button {
+  align-self: flex-start;
+}
+.sync-settings h3:not(:first-child) {
+  margin-top: 20px;
+}
 .new-form label {
   color: var(--muted);
   font-size: 12px;
@@ -934,6 +993,32 @@ body.settings-window .modal > .settings-feedback {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
+}
+.clip-editor .form-actions {
+  flex-wrap: wrap;
+}
+.clip-editor textarea {
+  display: block;
+  margin-top: 4px;
+}
+.file-path-editor {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+.file-path-entry {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+.editor-discard {
+  border-block-start: 1px solid var(--border-subtle);
+  padding-top: 8px;
+}
+.editor-discard button + button {
+  margin-inline-start: 8px;
 }
 .shortcut-list > div {
   display: flex;

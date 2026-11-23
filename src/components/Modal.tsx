@@ -32,7 +32,7 @@ export function Modal({
       ).filter((target) => target.getClientRects().length);
     (element?.querySelector<HTMLElement>('[data-autofocus]') ?? targets()[0] ?? element)?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229) {
         event.preventDefault();
         event.stopPropagation();
         closeRef.current();

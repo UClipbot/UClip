@@ -75,8 +75,8 @@ pub fn report() -> PlatformReport {
             ),
             capability(
                 "sync",
-                State::NotImplemented,
-                "尚未实现云同步，不连接现有云端。",
+                State::Unverified,
+                "同步设置显示局域网发现、WebDAV 和 SFTP 的当前状态。",
             ),
         ],
     }

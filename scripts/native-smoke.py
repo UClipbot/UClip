@@ -49,6 +49,7 @@ def main():
     parser.add_argument('--manual-only',action='store_true',help='Isolated real manual text creation.')
     parser.add_argument('--titlebar-only',action='store_true',help='Isolated native/custom titlebar and window controls.')
     parser.add_argument('--settings-only',action='store_true',help='Independent settings window, IPC grants and integrated main chrome.')
+    parser.add_argument('--hover-preview-only', action='store_true', help='Native preview close, reopen and main-window geometry changes.')
     parser.add_argument('--source-only',action='store_true',help='Real Google Chrome copy source attribution on isolated X11.')
     parser.add_argument('--desktop-defaults-only',action='store_true',help='Fresh desktop defaults and one-time OS autostart, with optional failure fixture.')
     parser.add_argument('--pinned-only',action='store_true',help='Isolated pin, pinned page and explicit deduplication checks.')
@@ -173,8 +174,7 @@ def main():
                         click('[aria-label="更多选项"]')
                     request('POST', f'/session/{session}/element/{element(selector)}/click', {})
                     if selector in ['[data-testid="open-settings"]', '[data-testid="footer-settings"]']:
-                        wait_for(lambda: len(request('GET', f'/session/{session}/window/handles')) == 2, 'settings window created')
-                        switch_window('settings')
+                        wait_for(lambda: switch_window('settings'), 'settings window created')
                         wait_for(lambda: execute('return !!document.querySelector("#theme") && !document.querySelector("#theme").disabled'), 'settings form ready')
 
                 def close_settings():
@@ -190,10 +190,15 @@ def main():
                     switch_window('main')
 
                 def enter(selector, text):
+                    if not text:
+                        # WebKit's WebDriver clear command can leave a controlled input's state unchanged.
+                        execute('''const input = document.querySelector(arguments[0]);
+                            Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value').set.call(input, '');
+                            input.dispatchEvent(new Event('input', { bubbles: true }));''', [selector])
+                        return
                     key = element(selector)
                     request('POST', f'/session/{session}/element/{key}/clear', {})
-                    if text:
-                        request('POST', f'/session/{session}/element/{key}/value', {'text': text})
+                    request('POST', f'/session/{session}/element/{key}/value', {'text': text})
 
                 def capture(name):
                     if args.screenshots:
@@ -204,6 +209,10 @@ def main():
 
                 wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'workspace UI ready')
                 wait_for(lambda: execute('const e=document.querySelector(".app-more");return e && e.getBoundingClientRect().width>0 && innerWidth>0'), 'window layout ready')
+                if args.hover_preview_only:
+                    from hover_preview_native_check import run
+                    run(invoke, invoke_current, execute, switch_window, wait_for, env)
+                    return
                 if args.quick_paste_only:
                     from quick_paste_native_check import run, verify_restart
                     saved = run(invoke, invoke_current, execute, click, close_settings, switch_window, wait_for, env, directory, log)
@@ -295,7 +304,7 @@ def main():
                     from clipboard_native_check import ClipboardChecks
                     from collections_native_check import run, verify_restart
                     clipboard_checks=ClipboardChecks(invoke,execute,click,enter,env,directory,log)
-                    run(clipboard_checks,capture)
+                    run(clipboard_checks,capture,close_settings)
                     for abrupt in [False,True]:
                         if abrupt:os.kill(owned_processes()[0][0],signal.SIGKILL)
                         else:invoke('quit_app')

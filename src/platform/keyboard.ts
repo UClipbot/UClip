@@ -21,7 +21,7 @@ export const DEFAULT_KEYS: KeyBindings = {
 export const keyLabels: Record<keyof KeyBindings, string> = {
   search: 'toggle_search',
   settings: 'settings',
-  copy: 'copy',
+  copy: 'paste_or_copy',
   preview: 'view_full_content',
   remove: 'delete_record',
   up: 'previous_record',

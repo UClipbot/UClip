@@ -4,6 +4,7 @@ import hashlib
 import os
 import select
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -96,7 +97,42 @@ class ClipboardChecks:
     def activate(self, window):
         self.key('windowactivate',str(window))
         wait(lambda: subprocess.check_output(['xdotool','getactivewindow'],env=self.env,text=True).strip()==str(window), 'active window')
+    def check_terminal_paste(self):
+        if not shutil.which('gnome-terminal'):
+            print('SKIP: GNOME Terminal is required for the native terminal paste check', flush=True)
+            return
+        payload = 'UClip terminal paste fixture'
+        clip = self.action('create_text', text=payload)
+        result = self.directory / 'terminal-input.bin'
+        receiver = '''import os, sys, tty
+tty.setraw(0)
+with open(sys.argv[1], 'wb', buffering=0) as output:
+    while data := os.read(0, 4096):
+        output.write(data)
+'''
+        terminal = subprocess.Popen([
+            'gnome-terminal', '--wait', '--title=UClip terminal paste receiver', '--',
+            '/usr/bin/python3', '-c', receiver, str(result),
+        ], env=self.env, stdout=self.log, stderr=self.log)
+        self.processes.append(terminal)
+        window = self.window('^UClip terminal paste receiver$')
+        try:
+            wait(result.exists, 'terminal receiver in raw mode')
+            self.activate(window)
+            self.key('key', '--clearmodifiers', 'ctrl+shift+v')
+            wait(lambda: self.execute('return document.hasFocus()'), 'main focused from terminal')
+            copied = self.action('copy_clip', id=clip, paste=True)
+            assert copied['copied'] and copied['pasteRequested'], copied
+            wait(lambda: result.stat().st_size > 0, 'terminal receives paste')
+            time.sleep(0.2)
+            assert result.read_bytes() == payload.encode(), result.read_bytes()
+            assert subprocess.check_output(['xdotool', 'getactivewindow'], env=self.env, text=True).strip() == str(window)
+            print('PASS B: terminal receives clipboard bytes without Ctrl+V or reactivating UClip', flush=True)
+        finally:
+            subprocess.run(['wmctrl', '-ic', hex(int(window))], env=self.env, check=True)
+
     def run(self):
+        self.activate(self.window('^UClip$'))
         assert self.query()['total'] == 0
         assert self.action('clipboard_status')['policy']['enabled'], 'fresh startup must listen without a click'
         started = self.set('text', text=self.text)
@@ -105,7 +141,9 @@ class ClipboardChecks:
         self.timings.append({'action':'text capture commit','ms':round((time.monotonic()-started)*1000,2)})
         assert self.action('clip_detail', id=item['id'], thumbnail=False)['text'] == self.text
         wait(lambda: self.execute('return document.querySelectorAll(".clip-row").length===1'), 'real history visible')
-        self.click('.row-more')
+        row = f'[data-clip-id="{item["id"]}"]'
+        self.click(f'{row} [data-row-main]')
+        self.click(f'{row} .row-more')
         self.click('[data-testid="copy-history-item"]')
         wait(lambda: self.execute('return document.querySelector(".toast")?.textContent.includes("已复制")'), 'UI copy')
         self.received('text',self.text)
@@ -260,6 +298,7 @@ class ClipboardChecks:
             if kind=='text': assert value['text']==self.text,value
             if kind=='image': assert {k:value[k] for k in ['width','height','rgba']}==self.image,value
             if kind=='files': assert [unquote(urlparse(uri).path) for uri in value['uris']]==self.files,value
+        self.check_terminal_paste()
         # Change the actual server map after startup, then require GTK to receive
         # the original text through the newly mapped V key. Only this nested display is touched.
         from Xlib import X, XK, display as xdisplay

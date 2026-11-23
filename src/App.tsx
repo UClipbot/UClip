@@ -1,6 +1,6 @@
 import { t, formatHistoryTime } from './i18n';
-import { selectRange } from './platform/selection';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { selectionRange } from './platform/selection';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { WindowResizeGrip } from './components/WindowResizeGrip';
 import { GlobalShortcutSettings } from './components/GlobalShortcutSettings';
 import { onQuickPasteUnavailable } from './platform/quickPaste';
@@ -9,6 +9,7 @@ import { Modal } from './components/Modal';
 import { ActionMenu } from './components/ActionMenu';
 import { FilterMenu } from './components/FilterMenu';
 import { ClipPreview } from './components/ClipPreview';
+import { ClipEditor } from './components/ClipEditor';
 import {
   initialClips,
   collectionNames,
@@ -21,6 +22,7 @@ import {
 import { useClipQuery } from './demo/useClipQuery';
 import { useHistory } from './platform/useHistory';
 import { KeyboardSettings } from './components/KeyboardSettings';
+import { SyncSettings } from './components/SyncSettings';
 import { WindowTitlebar } from './components/WindowTitlebar';
 import { HistoryViewport } from './components/HistoryViewport';
 import { HoverPreview } from './components/HoverPreview';
@@ -40,7 +42,16 @@ import type { Theme, Language, CollectionItem, TransferMode } from './generated/
 type Toast = { message: string; undo?: () => void };
 type Menu = { anchor: HTMLElement; clipId?: string };
 type AppView = View | `collection:${string}`;
-type AppModal = 'settings' | 'new' | 'shortcuts' | 'deduplicate' | 'collection' | 'transfer';
+type AppModal =
+  | 'settings'
+  | 'new'
+  | 'shortcuts'
+  | 'deduplicate'
+  | 'collection'
+  | 'transfer'
+  | 'delete-collection'
+  | 'edit';
+type SelectionEntry = { clip: Clip; index: number };
 const viewTitles: Record<View, string> = {
   all: 'all_history',
   pinned: 'pinned',
@@ -60,7 +71,7 @@ const capabilityNames: Record<string, string> = {
   global_shortcut: 'global_shortcut',
   paste_to_app: 'paste_to_original_app',
   tray: 'system_tray',
-  sync: 'cloud_sync',
+  sync: 'sync_settings',
 };
 
 export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
@@ -77,12 +88,16 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const [regex, setRegex] = useState(false);
   const [oldest, setOldest] = useState(false);
   const [grid, setGrid] = useState(false);
+  const [collectionsOpen, setCollectionsOpen] = useState(false);
+  const [collectionWidth, setCollectionWidth] = useState(168);
   const [selectedId, setSelectedId] = useState('note-1');
-  const [selection, setSelection] = useState<{ scope: string; ids: string[] }>({
-    scope: '',
-    ids: [],
-  });
-  const anchorId = useRef('note-1');
+  const [selection, setSelection] = useState<{
+    scope: string;
+    query: string;
+    entries: SelectionEntry[];
+  }>({ scope: '', query: '', entries: [] });
+  const anchorIndex = useRef<number | null>(null);
+  const currentSelectionScope = useRef('');
   const [batchBusy, setBatchBusy] = useState(false);
   const batchLock = useRef(false);
   const [preview, setPreview] = useState<{ id: string; focus: HTMLElement | null } | null>(null);
@@ -92,9 +107,15 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const [collectionName, setCollectionName] = useState('');
   const [editingCollection, setEditingCollection] = useState<CollectionItem | null>(null);
   const [collectionError, setCollectionError] = useState('');
-  const [transfer, setTransfer] = useState<{ clip: Clip; mode: TransferMode } | null>(null);
+  const [transfer, setTransfer] = useState<{
+    clips: Clip[];
+    mode: TransferMode;
+    completed: number;
+  } | null>(null);
+  const [editingClip, setEditingClip] = useState<Clip | null>(null);
   const [transferTarget, setTransferTarget] = useState('');
   const [transferError, setTransferError] = useState('');
+  const [transferUnknown, setTransferUnknown] = useState(false);
   const [dedupRevision, setDedupRevision] = useState('');
   const [dedupError, setDedupError] = useState('');
   const [toast, setToast] = useState<Toast | null>(null);
@@ -145,10 +166,19 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
     type,
     view === 'pinned',
     nativeCollectionId,
+    view === 'trash',
     preview?.id,
     settingsWindow,
   );
   const currentCollection = live.collections.find((item) => item.id === nativeCollectionId);
+  const scopeOptions = appearance.native
+    ? [
+        { value: 'all', label: t('all_history') },
+        { value: 'pinned', label: t('pinned') },
+        ...live.collections.map((item) => ({ value: `collection:${item.id}`, label: item.name })),
+        { value: 'trash', label: t('trash') },
+      ]
+    : Object.entries(viewTitles).map(([value, label]) => ({ value, label: t(label) }));
   const demoResult = useClipQuery(
     clips,
     appearance.native ? 'all' : (view as View),
@@ -180,34 +210,89 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       if (first) setSelectedId(first.id);
     }
   }, [result.items, result.pending, result.error, selectedId]);
-  const selectionScope = JSON.stringify([query, regex, type, view, live.offset, oldest]);
+  const selectionQuery = JSON.stringify([query, regex, type, view, oldest]);
+  const selectionScope = JSON.stringify([selectionQuery, live.revision]);
+  currentSelectionScope.current = selectionScope;
+  const replaceSelection = (entries: SelectionEntry[]) =>
+    setSelection({ scope: selectionScope, query: selectionQuery, entries });
   useEffect(() => {
-    setSelection({ scope: selectionScope, ids: [] });
-    anchorId.current = '';
-  }, [selectionScope]);
-  const explicitSelection =
-    selection.scope === selectionScope
-      ? result.items.filter((clip) => selection.ids.includes(clip.id))
-      : [];
-  const selectedClips = selection.scope === selectionScope ? explicitSelection : [];
+    if (selection.scope === selectionScope) return;
+    const sameQuery = selection.query === selectionQuery;
+    if (sameQuery && result.pending) return;
+    const previous =
+      sameQuery && !result.error && selection.entries.length === 1
+        ? selection.entries[0]?.clip
+        : undefined;
+    // Refresh the position of a single unchanged row after a background history update.
+    const index = previous
+      ? result.items.findIndex(
+          (clip) => clip.id === previous.id && clip.revision === previous.revision,
+        )
+      : -1;
+    anchorIndex.current = index < 0 ? null : live.offset + index;
+    replaceSelection(index < 0 ? [] : [{ clip: result.items[index]!, index: live.offset + index }]);
+  }, [
+    selection,
+    selectionQuery,
+    selectionScope,
+    result.items,
+    result.pending,
+    result.error,
+    live.offset,
+  ]);
+  const selectionEntries = selection.scope === selectionScope ? selection.entries : [];
+  const selectedClips = appearance.native
+    ? selectionEntries.map(({ clip }) => clip)
+    : result.items.filter((clip) => selectionEntries.some((entry) => entry.clip.id === clip.id));
   function selectClip(id: string, extend = false, toggle = false) {
     if (!ready || batchLock.current) return;
-    const ids = result.items.map((clip) => clip.id);
-    const next = extend
-      ? selectRange(ids, anchorId.current, id)
-      : toggle
-        ? selectedClips.some((clip) => clip.id === id)
-          ? selectedClips.filter((clip) => clip.id !== id).map((clip) => clip.id)
-          : [...selectedClips.map((clip) => clip.id), id]
-        : [id];
-    if (!extend) anchorId.current = id;
+    const localIndex = result.items.findIndex((clip) => clip.id === id);
+    if (localIndex === -1) return;
+    const index = live.offset + localIndex;
     setSelectedId(id);
-    setSelection({ scope: selectionScope, ids: next });
+    if (extend && anchorIndex.current !== null) {
+      const { start, end } = selectionRange(anchorIndex.current, index);
+      const applyRange = (clips: Clip[]) =>
+        replaceSelection(clips.map((clip, offset) => ({ clip, index: start + offset })));
+      if (!appearance.native || (start >= live.offset && end < live.offset + result.items.length)) {
+        applyRange(result.items.slice(start - live.offset, end - live.offset + 1));
+      } else {
+        batchLock.current = true;
+        setBatchBusy(true);
+        void live
+          .readRange(start, end - start + 1)
+          .then((clips) => {
+            if (
+              currentSelectionScope.current === selectionScope &&
+              clips.length === end - start + 1
+            )
+              applyRange(clips);
+          })
+          .catch((error) => {
+            if (currentSelectionScope.current === selectionScope)
+              setToast({ message: safeError(error).message });
+          })
+          .finally(() => {
+            batchLock.current = false;
+            setBatchBusy(false);
+          });
+      }
+      return;
+    }
+    anchorIndex.current = index;
+    const entry = { clip: result.items[localIndex]!, index };
+    const withoutCurrent = selectionEntries.filter(({ clip }) => clip.id !== id);
+    const entries = toggle
+      ? withoutCurrent.length === selectionEntries.length
+        ? [...withoutCurrent, entry]
+        : withoutCurrent
+      : [entry];
+    replaceSelection(entries.sort((a, b) => a.index - b.index));
   }
   function clearSelection() {
     if (batchLock.current) return;
-    setSelection({ scope: selectionScope, ids: [] });
-    anchorId.current = '';
+    replaceSelection([]);
+    anchorIndex.current = null;
   }
   async function removeSelected() {
     if (!ready || batchLock.current || copying.current || live.mutating || !selectedClips.length)
@@ -241,40 +326,41 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
           targets.map((clip) => ({
             id: clip.id,
             expectedRevision: clip.revision!,
-            deleted: true,
+            deleted: !clip.deleted,
           })),
         );
-        const undo = outcome.completed.length
-          ? () => {
-              if (batchLock.current) return;
-              batchLock.current = true;
-              setBatchBusy(true);
-              void live
-                .changeDeletions(
-                  outcome.completed.map((clip) => ({
-                    id: clip.id,
-                    expectedRevision: clip.revision,
-                    deleted: false,
-                  })),
-                )
-                .then((restored) =>
-                  setToast({
-                    message: restored.failure
-                      ? t('batch_partial', {
-                          0: restored.completed.length,
-                          1: outcome.completed.length,
-                          2: t(safeError(restored.failure).message),
-                        })
-                      : t('deletion_undone'),
-                  }),
-                )
-                .catch((error) => setToast({ message: safeError(error).message }))
-                .finally(() => {
-                  batchLock.current = false;
-                  setBatchBusy(false);
-                });
-            }
-          : undefined;
+        const undo =
+          outcome.completed.length && view !== 'trash'
+            ? () => {
+                if (batchLock.current) return;
+                batchLock.current = true;
+                setBatchBusy(true);
+                void live
+                  .changeDeletions(
+                    outcome.completed.map((clip) => ({
+                      id: clip.id,
+                      expectedRevision: clip.revision,
+                      deleted: false,
+                    })),
+                  )
+                  .then((restored) =>
+                    setToast({
+                      message: restored.failure
+                        ? t('batch_partial', {
+                            0: restored.completed.length,
+                            1: outcome.completed.length,
+                            2: t(safeError(restored.failure).message),
+                          })
+                        : t('deletion_undone'),
+                    }),
+                  )
+                  .catch((error) => setToast({ message: safeError(error).message }))
+                  .finally(() => {
+                    batchLock.current = false;
+                    setBatchBusy(false);
+                  });
+              }
+            : undefined;
         setToast({
           message: outcome.failure
             ? t('batch_partial', {
@@ -282,11 +368,13 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                 1: targets.length,
                 2: t(safeError(outcome.failure).message),
               })
-            : t('batch_changed', { 0: outcome.completed.length }),
+            : t(view === 'trash' ? 'batch_restored' : 'batch_changed', {
+                0: outcome.completed.length,
+              }),
           undo,
         });
       }
-      setSelection({ scope: selectionScope, ids: [] });
+      replaceSelection([]);
       list.current?.focus({ preventScroll: true });
     } catch (error) {
       setToast({ message: safeError(error).message });
@@ -429,11 +517,18 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       const deleted = await live.changeDeletion({
         id: clip.id,
         expectedRevision: clip.revision,
-        deleted: true,
+        deleted: !clip.deleted,
       });
       setSelectedId(nextId);
       if (preview) closePreview();
       else requestAnimationFrame(() => list.current?.focus({ preventScroll: true }));
+      if (clip.deleted) {
+        const missingCollection =
+          clip.collectionId &&
+          !live.collections.some((collection) => collection.id === clip.collectionId);
+        setToast({ message: t(missingCollection ? 'restored_to_history' : 'record_restored') });
+        return;
+      }
       setToast({
         message: t('deleted'),
         undo: () => {
@@ -457,7 +552,12 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
     }
   }
   async function copyClip(clip: Clip, paste = false, fallbackToCopy = false) {
-    if (batchLock.current || !ready || !result.items.some((item) => item.id === clip.id)) return;
+    if (
+      batchLock.current ||
+      !ready ||
+      ![...result.items, ...selectedClips].some((item) => item.id === clip.id)
+    )
+      return;
     if (clip.deleted) {
       removeClip(clip);
       return;
@@ -466,7 +566,12 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       if (copying.current) return;
       copying.current = true;
       try {
-        const outcome = await live.copy(clip.id, paste, fallbackToCopy);
+        const outcome = await live.copy(
+          clip.id,
+          paste,
+          fallbackToCopy,
+          result.items.some((item) => item.id === clip.id) ? undefined : [clip.id],
+        );
         setToast({
           message: outcome.warning
             ? `${outcome.pasteRequested ? t('copied_and_requested_paste_to_original_app') : t('copied')}；${t(safeError(outcome.warning).message)}`
@@ -515,7 +620,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
     }
   }
   function openPreview(clip: Clip) {
-    if (!ready || batchLock.current) return;
+    if (!ready || batchLock.current || (appearance.native && clip.deleted)) return;
     setSelectedId(clip.id);
     setPreview({ id: clip.id, focus: menu?.anchor ?? (document.activeElement as HTMLElement) });
   }
@@ -594,24 +699,64 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       setCollectionError(safeError(error).message);
     }
   }
+  async function deleteCollection() {
+    if (!editingCollection || live.mutating) return;
+    setCollectionError('');
+    try {
+      const count = await live.deleteCollection({
+        id: editingCollection.id,
+        expectedRevision: editingCollection.revision,
+      });
+      clearFilters();
+      setPreview(null);
+      closeModal();
+      setToast({ message: t('collection_deleted_records', { 0: count }) });
+    } catch (error) {
+      setCollectionError(safeError(error).message);
+    }
+  }
   function openTransfer(clip: Clip, mode: TransferMode) {
-    setTransfer({ clip, mode });
-    setTransferTarget(live.collections.find((item) => item.id !== clip.collectionId)?.id ?? '');
+    if (batchLock.current || clip.deleted) return;
+    const clips = selectedClips.some((item) => item.id === clip.id) ? selectedClips : [clip];
+    setTransfer({ clips, mode, completed: 0 });
+    setTransferTarget(
+      live.collections.find(
+        (item) => mode === 'copy' || clips.some((clip) => clip.collectionId !== item.id),
+      )?.id ?? '',
+    );
     setTransferError('');
+    setTransferUnknown(false);
     openModal('transfer');
   }
   async function saveTransfer(event: FormEvent) {
     event.preventDefault();
-    if (!transfer?.clip.revision || live.mutating) return;
+    if (!transfer || live.mutating || transferUnknown) return;
+    const destination = transferTarget || null;
+    const targets = transfer.clips.filter(
+      (clip) => transfer.mode === 'copy' || (clip.collectionId ?? null) !== destination,
+    );
+    if (!targets.length || targets.some((clip) => !clip.revision)) return;
     setTransferError('');
     try {
-      const result = await live.transferClip({
-        id: transfer.clip.id,
-        expectedRevision: transfer.clip.revision,
-        collectionId: transferTarget || null,
-        mode: transfer.mode,
-      });
-      setSelectedId(result.id);
+      const clips = targets.map((clip) => ({ id: clip.id, expectedRevision: clip.revision! }));
+      const request = { collectionId: destination, mode: transfer.mode };
+      const outcome =
+        clips.length === 1 && !transfer.completed
+          ? { completed: [await live.transferClip({ ...request, ...clips[0]! })], failure: null }
+          : await live.transferClips({ ...request, clips });
+      if (outcome.failure) {
+        const completed = transfer.completed + outcome.completed.length;
+        setTransfer({ ...transfer, completed, clips: targets.slice(outcome.completed.length) });
+        setTransferError(
+          t('batch_partial', {
+            0: completed,
+            1: transfer.completed + targets.length,
+            2: t(safeError(outcome.failure).message),
+          }),
+        );
+        return;
+      }
+      setSelectedId(outcome.completed[0]!.id);
       setView(transferTarget ? `collection:${transferTarget}` : 'all');
       setQuery('');
       setType('all');
@@ -620,14 +765,26 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       closeModal();
       setToast({
         message:
-          transfer.mode === 'copy'
-            ? t('copied_to_collection')
-            : transferTarget
-              ? t('moved_to_collection')
-              : t('removed_from_collection'),
+          transfer.clips.length > 1 || transfer.completed
+            ? t(
+                transfer.mode === 'copy'
+                  ? 'batch_copied_to_collection'
+                  : 'batch_moved_to_collection',
+                { 0: transfer.completed + outcome.completed.length },
+              )
+            : transfer.mode === 'copy'
+              ? t('copied_to_collection')
+              : transferTarget
+                ? t('moved_to_collection')
+                : t('removed_from_collection'),
       });
     } catch (error) {
-      setTransferError(safeError(error).message);
+      if (typeof error !== 'object' || error === null || !('code' in error)) {
+        setTransferUnknown(true);
+        setTransferError(t('transfer_outcome_unknown'));
+      } else {
+        setTransferError(safeError(error).message);
+      }
     }
   }
   function clearFilters() {
@@ -701,7 +858,11 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
         if (preview) {
           event.preventDefault();
           closePreview();
-        } else if (selectedClips.length > 1) {
+        } else if (
+          selectedClips.length > 1 ||
+          (selectedClips.length === 1 &&
+            !result.items.some((clip) => clip.id === selectedClips[0]!.id))
+        ) {
           event.preventDefault();
           clearSelection();
         } else if (searchVisible) {
@@ -745,13 +906,13 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       ) {
         // Let the system copy an explicit text selection, and keep input editing native.
         if (window.getSelection()?.isCollapsed === false) return;
-        if (selectedClips.length) {
+        if (selectedClips.length && view !== 'trash') {
           event.preventDefault();
           if (!event.repeat) void copySelected();
         }
         return;
       }
-      if (withinList && isHistoryAction('remove')) {
+      if (withinList && isHistoryAction('remove') && (!appearance.native || view !== 'trash')) {
         event.preventDefault();
         if (!event.repeat) void removeSelected();
         return;
@@ -769,7 +930,9 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       if (inList && (event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyA') {
         event.preventDefault();
         if (ready && !batchLock.current)
-          setSelection({ scope: selectionScope, ids: result.items.map((clip) => clip.id) });
+          replaceSelection(
+            result.items.map((clip, index) => ({ clip, index: live.offset + index })),
+          );
         return;
       }
       if (isHistoryAction('down') || isHistoryAction('up')) {
@@ -796,7 +959,12 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       }
       if (isHistoryAction('copy')) {
         event.preventDefault();
-        if (!event.repeat && ready && selected) void copySelected();
+        if (!event.repeat && ready && selected) {
+          if (selectedClips.length && view === 'trash') void removeSelected();
+          else if (selectedClips.length === 1) void copySelected(true, true);
+          else if (selectedClips.length) void copySelected();
+          else if (target === search.current && !selected.deleted) void copyClip(selected);
+        }
       }
       if (isHistoryAction('preview') && inList) {
         event.preventDefault();
@@ -971,22 +1139,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                   label={t('history_scope')}
                   value={view}
                   onChange={(value) => setView(value as AppView)}
-                  options={Object.entries(
-                    appearance.native
-                      ? {
-                          all: t('all_history'),
-                          pinned: t('pinned'),
-                          ...Object.fromEntries(
-                            live.collections.map((item) => [`collection:${item.id}`, item.name]),
-                          ),
-                          trash: t('trash'),
-                        }
-                      : viewTitles,
-                  ).map(([key, label]) => ({
-                    value: key,
-                    label: `${appearance.native && key.startsWith('collection:') ? label : t(label)}${appearance.native && key === 'trash' ? t('not_implemented_2') : ''}`,
-                    disabled: appearance.native && key === 'trash',
-                  }))}
+                  options={scopeOptions}
                 />
                 <Icon name="chevron" size={12} />
               </div>
@@ -1031,7 +1184,52 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
             </button>
           </div>
         )}
-        <main className="content-workspace">
+        <main
+          className={`content-workspace ${collectionsOpen && !previewClip ? 'workspace-with-collections' : ''}`}
+        >
+          {appearance.native && collectionsOpen && !previewClip && (
+            <nav
+              id="collection-sidebar"
+              aria-label={t('collections_sidebar')}
+              className="collection-sidebar"
+              style={{ '--collection-width': `${collectionWidth}px` } as CSSProperties}
+            >
+              <div className="collection-sidebar-items">
+                {scopeOptions.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    aria-current={view === value ? 'page' : undefined}
+                    title={label}
+                    onClick={() => setView(value as AppView)}
+                  >
+                    <Icon
+                      name={
+                        value === 'all'
+                          ? 'history'
+                          : value === 'trash'
+                            ? 'trash'
+                            : value === 'pinned'
+                              ? 'pin'
+                              : 'folder'
+                      }
+                      size={15}
+                    />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
+              <input
+                aria-label={t('collection_sidebar_width')}
+                title={t('collection_sidebar_width')}
+                type="range"
+                min={128}
+                max={280}
+                value={collectionWidth}
+                onChange={(event) => setCollectionWidth(Number(event.target.value))}
+              />
+            </nav>
+          )}
           <section
             className="history-panel"
             hidden={!!previewClip}
@@ -1043,7 +1241,10 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               list.current?.focus({ preventScroll: true });
             }}
           >
-            <span className="sr-only" aria-live="polite">
+            <span
+              className={selectedClips.length > 1 ? 'history-selection-count' : 'sr-only'}
+              aria-live="polite"
+            >
               {t('selected_count', { 0: selectedClips.length })}
             </span>
             <HistoryViewport
@@ -1114,7 +1315,12 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                         selectClip(clip.id, event.shiftKey, event.ctrlKey || event.metaKey)
                       }
                       onDoubleClick={(event) => {
-                        if (!event.ctrlKey && !event.metaKey && !event.shiftKey)
+                        if (
+                          (!appearance.native || !clip.deleted) &&
+                          !event.ctrlKey &&
+                          !event.metaKey &&
+                          !event.shiftKey
+                        )
                           void copySelected(true, true);
                       }}
                     >
@@ -1216,15 +1422,20 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               onMore={(anchor) => openMenu(anchor, previewClip)}
             />
           )}
-          {ready && !modal && !menu && !preview && !settingsWindow && (
-            <HoverPreview
-              key={JSON.stringify([query, regex, type, view, live.offset, oldest, grid])}
-              listRef={list}
-              clips={result.items}
-              native={appearance.native}
-              onError={(message) => setToast({ message: t(message) })}
-            />
-          )}
+          {ready &&
+            !modal &&
+            !menu &&
+            !preview &&
+            !settingsWindow &&
+            (!appearance.native || view !== 'trash') && (
+              <HoverPreview
+                key={JSON.stringify([query, regex, type, view, live.offset, oldest, grid])}
+                listRef={list}
+                clips={result.items}
+                native={appearance.native}
+                onError={(message) => setToast({ message: t(message) })}
+              />
+            )}
         </main>
         <footer className="statusbar" aria-label={t('bottom_toolbar')}>
           <button
@@ -1249,7 +1460,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
             <div className="pagination">
               <button
                 className="text-button"
-                disabled={live.pending || !live.offset}
+                disabled={live.pending || batchBusy || !live.offset}
                 onClick={() => live.setOffset(Math.max(0, live.offset - 25))}
               >
                 {t('previous_page')}
@@ -1257,7 +1468,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               <span>{Math.floor(live.offset / 25) + 1}</span>
               <button
                 className="text-button"
-                disabled={live.pending || live.offset + 25 >= live.total}
+                disabled={live.pending || batchBusy || live.offset + 25 >= live.total}
                 onClick={() => live.setOffset(live.offset + 25)}
               >
                 {t('next_page')}
@@ -1265,6 +1476,22 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
             </div>
           )}
           <div className="footer-tools">
+            {appearance.native && (
+              <button
+                className="icon-button"
+                type="button"
+                aria-label={t('collections_sidebar')}
+                title={t('collections_sidebar')}
+                aria-expanded={collectionsOpen}
+                aria-controls={collectionsOpen && !previewClip ? 'collection-sidebar' : undefined}
+                onClick={() => {
+                  setPreview(null);
+                  setCollectionsOpen(!collectionsOpen);
+                }}
+              >
+                <Icon name="folder" size={16} />
+              </button>
+            )}
             <button
               type="button"
               className={`icon-button search-toggle ${filtersActive ? 'has-filters' : ''}`}
@@ -1366,10 +1593,26 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               )}
               {selectedClips.length <= 1 && (
                 <>
-                  <button role="menuitem" onClick={() => menuAction(() => openPreview(menuClip))}>
-                    <Icon name="text" size={15} />
-                    {t('view_full_content')}
-                  </button>
+                  {(!appearance.native || !menuClip.deleted) && (
+                    <button role="menuitem" onClick={() => menuAction(() => openPreview(menuClip))}>
+                      <Icon name="text" size={15} />
+                      {t('view_full_content')}
+                    </button>
+                  )}
+                  {appearance.native && !menuClip.deleted && menuClip.type !== 'image' && (
+                    <button
+                      role="menuitem"
+                      data-testid="edit-clip"
+                      disabled={!ready || live.mutating}
+                      onClick={() => {
+                        setEditingClip(menuClip);
+                        openModal('edit');
+                      }}
+                    >
+                      <Icon name="text" size={15} />
+                      {t('edit_record')}
+                    </button>
+                  )}
                   <button
                     role="menuitem"
                     data-testid="toggle-pin"
@@ -1379,28 +1622,6 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                     <Icon name="pin" size={15} />
                     {menuClip.pinned ? t('unpin') : t('pin')}
                   </button>
-                  {appearance.native && (
-                    <>
-                      <button
-                        role="menuitem"
-                        disabled={!ready || live.mutating}
-                        data-testid="move-to-collection"
-                        onClick={() => menuAction(() => openTransfer(menuClip, 'move'))}
-                      >
-                        <Icon name="folder" size={15} />
-                        {t('move_to_collection')}
-                      </button>
-                      <button
-                        role="menuitem"
-                        disabled={!ready || live.mutating || !live.collections.length}
-                        data-testid="copy-to-collection"
-                        onClick={() => menuAction(() => openTransfer(menuClip, 'copy'))}
-                      >
-                        <Icon name="copy" size={15} />
-                        {t('copy_to_collection')}
-                      </button>
-                    </>
-                  )}
                   {!appearance.native && !menuClip.deleted && (
                     <>
                       <div className="menu-separator" />
@@ -1425,6 +1646,36 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                       ))}
                     </>
                   )}
+                </>
+              )}
+              {appearance.native && !menuClip.deleted && (
+                <>
+                  <button
+                    role="menuitem"
+                    disabled={!ready || batchBusy || live.mutating}
+                    data-testid="move-to-collection"
+                    onClick={() => openTransfer(menuClip, 'move')}
+                  >
+                    <Icon name="folder" size={15} />
+                    {t(
+                      selectedClips.length > 1
+                        ? 'move_selected_to_collection'
+                        : 'move_to_collection',
+                    )}
+                  </button>
+                  <button
+                    role="menuitem"
+                    disabled={!ready || batchBusy || live.mutating || !live.collections.length}
+                    data-testid="copy-to-collection"
+                    onClick={() => openTransfer(menuClip, 'copy')}
+                  >
+                    <Icon name="copy" size={15} />
+                    {t(
+                      selectedClips.length > 1
+                        ? 'copy_selected_to_collection'
+                        : 'copy_to_collection',
+                    )}
+                  </button>
                 </>
               )}
               <div className="menu-separator" />
@@ -1471,15 +1722,31 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                     {t('new_collection')}
                   </button>
                   {currentCollection && (
-                    <button
-                      role="menuitem"
-                      data-testid="rename-collection"
-                      disabled={live.mutating}
-                      onClick={() => menuAction(() => openCollectionEditor(currentCollection))}
-                    >
-                      <Icon name="folder" size={15} />
-                      {t('rename_current_collection')}
-                    </button>
+                    <>
+                      <button
+                        role="menuitem"
+                        data-testid="rename-collection"
+                        disabled={live.mutating}
+                        onClick={() => menuAction(() => openCollectionEditor(currentCollection))}
+                      >
+                        <Icon name="folder" size={15} />
+                        {t('rename_current_collection')}
+                      </button>
+                      <button
+                        role="menuitem"
+                        data-testid="delete-collection"
+                        className="destructive"
+                        disabled={live.mutating}
+                        onClick={() => {
+                          setEditingCollection(currentCollection);
+                          setCollectionError('');
+                          openModal('delete-collection');
+                        }}
+                      >
+                        <Icon name="trash" size={15} />
+                        {t('delete_current_collection')}
+                      </button>
+                    </>
                   )}
                 </>
               )}
@@ -1611,6 +1878,51 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
           </form>
         </Modal>
       )}
+      {modal === 'delete-collection' && editingCollection && (
+        <Modal
+          title={t('delete_current_collection')}
+          description={t('collection_delete_confirmation', { 0: editingCollection.name })}
+          onClose={() => {
+            if (!live.mutating) closeModal();
+          }}
+        >
+          {collectionError && (
+            <p role="alert" className="settings-feedback">
+              {t(collectionError)}
+            </p>
+          )}
+          <div className="form-actions">
+            <button
+              className="secondary-button"
+              data-autofocus
+              disabled={live.mutating}
+              onClick={closeModal}
+            >
+              {t('cancel')}
+            </button>
+            <button
+              className="primary-button"
+              disabled={live.mutating}
+              onClick={() => void deleteCollection()}
+            >
+              {t('delete')}
+            </button>
+          </div>
+        </Modal>
+      )}
+      {modal === 'edit' && editingClip?.revision && (
+        <ClipEditor
+          clip={{ id: editingClip.id, expectedRevision: editingClip.revision }}
+          load={live.editableContent}
+          save={live.editClip}
+          onClose={closeModal}
+          onSaved={() => {
+            setPreview(null);
+            closeModal();
+            setToast({ message: t('record_edited') });
+          }}
+        />
+      )}
       {modal === 'transfer' && transfer && (
         <Modal
           title={transfer.mode === 'copy' ? t('copy_to_collection_2') : t('move_to_collection_3')}
@@ -1631,6 +1943,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               id="transfer-collection"
               data-autofocus
               value={transferTarget}
+              disabled={live.mutating || transfer.completed > 0 || transferUnknown}
               onChange={(event) => setTransferTarget(event.target.value)}
             >
               {transfer.mode === 'move' && <option value="">{t('uncategorized')}</option>}
@@ -1668,12 +1981,24 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                 className="primary-button"
                 disabled={
                   live.mutating ||
+                  transferUnknown ||
                   (transfer.mode === 'copy'
                     ? !transferTarget
-                    : (transfer.clip.collectionId ?? '') === transferTarget)
+                    : transfer.clips.every((clip) => (clip.collectionId ?? '') === transferTarget))
                 }
               >
-                {transfer.mode === 'copy' ? t('copy_record') : t('move_record')}
+                {transfer.clips.length > 1
+                  ? t(
+                      transfer.mode === 'copy' ? 'copy_selected_records' : 'move_selected_records',
+                      {
+                        0: transfer.clips.filter(
+                          (clip) =>
+                            transfer.mode === 'copy' ||
+                            (clip.collectionId ?? '') !== transferTarget,
+                        ).length,
+                      },
+                    )
+                  : t(transfer.mode === 'copy' ? 'copy_record' : 'move_record')}
               </button>
             </div>
           </form>
@@ -1746,6 +2071,9 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                 {(
                   [
                     ['capture', t('capture'), 'history'],
+                    ...(appearance.native
+                      ? ([['sync', t('sync_settings'), 'history']] as const)
+                      : []),
                     ['desktop', t('desktop'), 'monitor'],
                     ['keyboard', t('shortcuts'), 'keyboard'],
                     ['appearance', t('appearance'), 'sun'],
@@ -1823,9 +2151,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                     {t('save_capture_rules')}
                   </button>
                   <p className="settings-feedback">
-                    {t(
-                      'limits_4_mib_of_text_8_million_image_pixels_256_file_references_and_128_mib_of_total_history_payload_oversized_content_is_rejected_without_truncation',
-                    )}
+                    {t('capture_payload_limits')}
                     {desktop.status?.shortcutAvailable
                       ? t('0_to_show_the_window', { 0: desktop.status.preferences.shortcut })
                       : ''}
@@ -1995,6 +2321,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                         : t('the_browser_remembers_language_and_appearance_preferences'))}
                 </p>
               </section>
+              {settingsWindow && settingsPage === 'sync' && <SyncSettings />}
               <details
                 className="about-section"
                 open={settingsWindow || undefined}
@@ -2004,9 +2331,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                 <p>UClip · 0.1.0</p>
                 <p>
                   {appearance.native
-                    ? t(
-                        'history_stays_on_this_device_files_are_references_only_cloud_sync_cli_and_full_management_are_not_available_yet_automatic_paste_and_platform_verification_are_reported_separately',
-                      )
+                    ? t('about_sync_availability')
                     : t('this_is_a_browser_preview_all_records_are_in_memory_samples')}
                 </p>
                 {appearance.snapshot?.platform.capabilities.map((item) => (
@@ -2092,7 +2417,13 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               </kbd>
             </div>
             <div>
-              <span>{t('copy_restore_from_trash')}</span>
+              <span>
+                {t(
+                  appearance.native
+                    ? 'paste_or_copy_restore_from_trash'
+                    : 'copy_restore_from_trash',
+                )}
+              </span>
               <kbd>{formatKey(activeKeys.copy, modifier)}</kbd>
             </div>
             <div>
@@ -2115,7 +2446,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
           <p className="settings-feedback">
             {t('these_shortcuts_apply_only_in_the_current_window')}
             {appearance.native
-              ? t('double_click_pastes_at_the_original_cursor')
+              ? t('single_record_paste_hint')
               : t('the_browser_can_only_copy_sample_text')}
           </p>
         </Modal>

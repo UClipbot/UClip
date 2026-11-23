@@ -104,6 +104,8 @@ def run(invoke, invoke_current, execute, click, close_settings, switch_window, w
         assert not denied_recording['ok'] and 'not allowed' in str(denied_recording['error']), denied_recording
         assert not set_quick(main_binding)['ok']
         # Exercise the actual settings form, including disabled-by-default and separate binding.
+        xdo('windowactivate', '--sync', main_xid)
+        main_focused()
         click('[data-testid="footer-settings"]')
         wait(lambda: execute('return document.hasFocus()'), 'settings window focused')
         settings_size = drag_corner(execute, wait, xdo, xdo('getactivewindow'))
@@ -195,7 +197,7 @@ def run(invoke, invoke_current, execute, click, close_settings, switch_window, w
         click(main_save)
         wait(lambda: invoke_current('desktop_status')['value']['preferences']['shortcut'] == restored_main_binding, 'original main combination restored')
 
-        copy_keys = '[aria-label="修改复制快捷键"]'
+        copy_keys = '[aria-label="\u4fee\u6539\u56de\u7c98\u6216\u590d\u5236\u5feb\u6377\u952e"]'
         click(copy_keys)
         wait(lambda: execute('return document.activeElement?.matches(arguments[0]) && document.activeElement.getAttribute("aria-pressed") === "true"', [copy_keys]), 'window shortcut recording started')
         xdo('key', '--clearmodifiers', 'ctrl+Return')

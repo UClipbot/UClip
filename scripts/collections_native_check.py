@@ -54,7 +54,7 @@ def transfer_ui(c, clip_id, mode, destination):
     return next(i['id'] for i in page(c,destination)['items'] if i['id'] not in before)
 
 
-def run(c,capture):
+def run(c,capture,close_settings):
     c.policy(enabled=False)
     assert not c.action('clipboard_status')['policy']['enabled']
     c.activate(c.window('^UClip$'))
@@ -71,7 +71,9 @@ def run(c,capture):
     c.click('.new-form .primary-button')
     wait(lambda:c.execute('return document.querySelector("[role=alert]")?.textContent.includes("数据已发生变化")'),'stale rename rejected')
     c.click('[aria-label="关闭面板"]')
-    wait(lambda:c.execute('return document.querySelector("[aria-label=历史范围]").selectedOptions[0].textContent==="外部重命名"'),'external rename refreshes label without changing scope')
+    wait(lambda:c.execute('const scope = document.querySelector(arguments[0]); return scope?.value === arguments[1] && scope.textContent.trim() === arguments[2]',
+                         ['.scope-control .filter-trigger','collection:'+b['id'],'\u5916\u90e8\u91cd\u547d\u540d']),
+         'external rename refreshes label without changing scope')
     app_menu(c,'rename-collection');paste(c,'#collection-name','我的素材');c.click('.new-form .primary-button')
     wait(lambda:not c.execute('return !!document.querySelector("#collection-name")'),'rename commits')
     renamed=c.action('collections_list')['items'][1]
@@ -150,7 +152,7 @@ def run(c,capture):
     for theme in ['light','dark']:
         c.click('[data-testid="open-settings"]');c.click(f'#theme option[value="{theme}"]')
         wait(lambda:c.execute('return document.documentElement.dataset.theme===arguments[0]',[theme]),'collection theme')
-        c.click('[aria-label="关闭面板"]');capture('collections-'+theme)
+        close_settings();capture('collections-'+theme)
         assert c.execute('return document.documentElement.scrollWidth<=innerWidth')
     c.expected_total=page(c)['total']
     print('PASS: real category pagination, scope change resets page/selection, category-to-global search, correct Enter action and both themes at 480px',flush=True)

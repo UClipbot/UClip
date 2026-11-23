@@ -1,3 +1,5 @@
+mod common;
+
 use rusqlite::Connection;
 use uclip_core::{AuxiliaryWindow, AuxiliaryWindowSize, ErrorCode, Storage};
 
@@ -9,6 +11,7 @@ fn window_sizes_upgrade_from_v14_and_persist_independently() {
     let main = storage.desktop_preferences().unwrap();
     drop(storage);
     let prior = Connection::open(&path).unwrap();
+    common::remove_replica_schema(&prior);
     prior
         .execute_batch("DROP TABLE auxiliary_window_sizes; PRAGMA user_version=14;")
         .unwrap();

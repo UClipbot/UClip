@@ -27,6 +27,10 @@ const codes: ReadonlySet<ErrorCode> = new Set([
   'query_timeout',
   'excluded',
   'duplicate_name',
+  'sync_connection',
+  'sync_authentication',
+  'sync_data',
+  'file_peer_offline',
 ]);
 
 export function safeError(error: unknown): AppError {
@@ -54,6 +58,10 @@ export function safeError(error: unknown): AppError {
       shortcut_conflict:
         'the_shortcut_is_duplicated_occupied_or_reserved_by_the_system_previous_settings_were_kept',
       excluded: 'content_matched_an_exclusion_rule_and_was_not_saved',
+      sync_connection: 'sync_connection_failed',
+      sync_authentication: 'sync_authentication_failed',
+      sync_data: 'sync_incomplete_data',
+      file_peer_offline: 'sync_file_source_offline',
       duplicate_name: 'a_collection_with_this_name_already_exists_choose_another_name',
       query_timeout: 'search_timed_out_narrow_the_scope_or_simplify_the_expression',
       unavailable: 'the_local_service_is_unavailable_restart_the_desktop_app',

@@ -2,11 +2,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 use uclip_core::{AppError, ErrorCode};
 
-pub const DATA_PROFILE: &str = if cfg!(debug_assertions) {
-    "development"
-} else {
-    "release"
-};
+pub use uclip_runtime::paths::DATA_PROFILE;
 
 pub fn data_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
     let root = app
@@ -18,7 +14,7 @@ pub fn data_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
 }
 
 pub fn prepare_directory(path: &std::path::Path) -> Result<(), AppError> {
-    std::fs::create_dir_all(path).map_err(|_| AppError::new(ErrorCode::Storage))?;
+    uclip_runtime::paths::prepare_directory(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

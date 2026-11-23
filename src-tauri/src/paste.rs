@@ -279,7 +279,7 @@ impl PasteService {
     pub fn paste(
         &self,
         prepared: PreparedPaste,
-        #[cfg(target_os = "windows")] publication: crate::clipboard_native::ClipboardWrite,
+        #[cfg(target_os = "windows")] publication: uclip_runtime::clipboard::ClipboardWrite,
         #[cfg(target_os = "linux")] selection_owner: Option<u32>,
     ) -> Result<(), AppError> {
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -354,7 +354,7 @@ mod x11 {
     fn fail() -> AppError {
         AppError::new(ErrorCode::TargetLost)
     }
-    // Held only around final focus verification and four key events: never around
+    // Held only around final focus verification and key dispatch: never around
     // clipboard transfer, window activation, sleeps, storage or another client API.
     struct ServerGuard<'a>(&'a RustConnection);
     impl Drop for ServerGuard<'_> {
@@ -363,7 +363,37 @@ mod x11 {
             let _ = self.0.flush();
         }
     }
-    fn paste_keys(first: u8, per_key: u8, symbols: &[u32]) -> Result<(u8, u8), AppError> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum PasteShortcut {
+        ControlV,
+        ControlShiftV,
+        ShiftInsert,
+        CopyOnly,
+    }
+
+    fn paste_shortcut(wm_class: &[u8]) -> PasteShortcut {
+        // WM_CLASS contains two NUL-terminated strings: instance and class.
+        let class = wm_class.split(|&byte| byte == 0).nth(1).unwrap_or_default();
+        match class.to_ascii_lowercase().as_slice() {
+            b"gnome-terminal" | b"konsole" | b"kitty" | b"xfce4-terminal" | b"mate-terminal"
+            | b"terminator" | b"tilix" => PasteShortcut::ControlShiftV,
+            b"tabby" => PasteShortcut::ShiftInsert,
+            b"xterm" | b"uxterm" | b"rxvt" | b"urxvt" => PasteShortcut::CopyOnly,
+            _ => PasteShortcut::ControlV,
+        }
+    }
+
+    struct PasteKeys {
+        key: u8,
+        modifiers: [Option<u8>; 2],
+    }
+
+    fn paste_keys(
+        first: u8,
+        per_key: u8,
+        symbols: &[u32],
+        shortcut: PasteShortcut,
+    ) -> Result<PasteKeys, AppError> {
         if per_key == 0 || !symbols.len().is_multiple_of(usize::from(per_key)) {
             return Err(fail());
         }
@@ -374,7 +404,16 @@ mod x11 {
                 .and_then(|i| u8::try_from(i).ok()?.checked_add(first))
                 .ok_or_else(fail)
         };
-        Ok((find(u32::from(b'v'))?, find(0xffe3)?))
+        let control = || find(0xffe3);
+        let shift = || find(0xffe1);
+        let v = || find(u32::from(b'v'));
+        let (key, modifiers) = match shortcut {
+            PasteShortcut::ControlV => (v()?, [Some(control()?), None]),
+            PasteShortcut::ControlShiftV => (v()?, [Some(control()?), Some(shift()?)]),
+            PasteShortcut::ShiftInsert => (find(0xff63)?, [None, Some(shift()?)]),
+            PasteShortcut::CopyOnly => return Err(AppError::new(ErrorCode::Restricted)),
+        };
+        Ok(PasteKeys { key, modifiers })
     }
     pub struct Desktop {
         conn: RustConnection,
@@ -503,7 +542,7 @@ mod x11 {
             }
             Ok(())
         }
-        fn focus_in_target(&self, target: Window) -> Result<bool, AppError> {
+        fn focused_window_in_target(&self, target: Window) -> Result<Option<Window>, AppError> {
             let mut focus = self
                 .conn
                 .get_input_focus()
@@ -511,10 +550,12 @@ mod x11 {
                 .reply()
                 .map_err(|_| fail())?
                 .focus;
-            let mut in_target = focus == target;
+            let focused = focus;
             for _ in 0..16 {
-                if in_target
-                    || focus == NONE
+                if focus == target {
+                    return Ok(Some(focused));
+                }
+                if focus == NONE
                     || focus == self.root
                     || focus == u32::from(InputFocus::POINTER_ROOT)
                 {
@@ -527,9 +568,17 @@ mod x11 {
                     .reply()
                     .map_err(|_| fail())?
                     .parent;
-                in_target = focus == target;
             }
-            Ok(in_target)
+            Ok((focus == target).then_some(focused))
+        }
+        fn shortcut_for(&self, target: Window) -> Result<PasteShortcut, AppError> {
+            let class = self
+                .conn
+                .get_property(false, target, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 64)
+                .map_err(|_| fail())?
+                .reply()
+                .map_err(|_| fail())?;
+            Ok(paste_shortcut(&class.value))
         }
         pub fn modifiers_released(&self) -> Result<bool, AppError> {
             let modifiers = u16::from(
@@ -560,6 +609,10 @@ mod x11 {
                 return Err(fail());
             }
             let (target, _, _) = expected;
+            let shortcut = self.shortcut_for(target)?;
+            if shortcut == PasteShortcut::CopyOnly {
+                return Err(AppError::new(ErrorCode::Restricted));
+            }
             let original = self.active()?;
             let event = ClientMessageEvent::new(
                 32,
@@ -581,7 +634,7 @@ mod x11 {
                 let current = self.active()?;
                 // Some WMs publish the active window before moving input focus.
                 // Wait outside the server guard so the WM can finish both requests.
-                if current == target && self.focus_in_target(target)? {
+                if current == target && self.focused_window_in_target(target)?.is_some() {
                     break;
                 }
                 if (current != original && current != target) || Instant::now() >= deadline {
@@ -626,7 +679,7 @@ mod x11 {
                 .map_err(|_| fail())?
                 .reply()
                 .map_err(|_| fail())?;
-            let (v_key, ctrl_key) = paste_keys(first, map.keysyms_per_keycode, &map.keysyms)?;
+            let keys = paste_keys(first, map.keysyms_per_keycode, &map.keysyms, shortcut)?;
             let modifiers = self
                 .conn
                 .get_modifier_mapping()
@@ -634,15 +687,20 @@ mod x11 {
                 .reply()
                 .map_err(|_| fail())?;
             let stride = usize::from(modifiers.keycodes_per_modifier());
-            if stride == 0 || !modifiers.keycodes[2 * stride..3 * stride].contains(&ctrl_key) {
-                return Err(fail());
+            for (index, key) in [(2, keys.modifiers[0]), (0, keys.modifiers[1])] {
+                if key.is_some_and(|key| {
+                    !modifiers.keycodes[index * stride..(index + 1) * stride].contains(&key)
+                }) {
+                    return Err(fail());
+                }
             }
 
-            if !self.focus_in_target(target)? {
-                return Err(fail());
-            }
+            let focus = self.focused_window_in_target(target)?.ok_or_else(fail)?;
             // Never inject into an arbitrary active window; recheck immediately before dispatch.
-            if self.active()? != target {
+            if self.active()? != target
+                || self.property(target, self.pid_atom)? != expected.1
+                || self.shortcut_for(target)? != shortcut
+            {
                 return Err(fail());
             }
             if let Some(owner) = selection_owner {
@@ -658,43 +716,73 @@ mod x11 {
                     return Err(fail());
                 }
             }
-            for (event, key) in [
-                (KEY_PRESS_EVENT, ctrl_key),
-                (KEY_PRESS_EVENT, v_key),
-                (KEY_RELEASE_EVENT, v_key),
-                (KEY_RELEASE_EVENT, ctrl_key),
-            ] {
-                if xtest::fake_input(&self.conn, event, key, CURRENT_TIME, NONE, 0, 0, 0)
-                    .map_err(|_| fail())
-                    .and_then(|cookie| cookie.check().map_err(|_| fail()))
-                    .is_err()
-                {
-                    let _ = xtest::fake_input(
-                        &self.conn,
-                        KEY_RELEASE_EVENT,
-                        v_key,
-                        CURRENT_TIME,
-                        NONE,
-                        0,
-                        0,
-                        0,
-                    );
-                    let _ = xtest::fake_input(
-                        &self.conn,
-                        KEY_RELEASE_EVENT,
-                        ctrl_key,
-                        CURRENT_TIME,
-                        NONE,
-                        0,
-                        0,
-                        0,
-                    );
-                    let _ = self.conn.flush();
-                    return Err(fail());
-                }
-            }
+            self.dispatch(focus, shortcut, keys)?;
             self.conn.flush().map_err(|_| fail())?;
             self.target = None;
+            Ok(())
+        }
+
+        fn fake_key(&self, event: u8, key: u8) -> Result<(), AppError> {
+            xtest::fake_input(&self.conn, event, key, CURRENT_TIME, NONE, 0, 0, 0)
+                .map_err(|_| fail())?
+                .check()
+                .map_err(|_| fail())
+        }
+
+        fn dispatch(
+            &self,
+            focus: Window,
+            shortcut: PasteShortcut,
+            keys: PasteKeys,
+        ) -> Result<(), AppError> {
+            let result = (|| {
+                for key in keys.modifiers.into_iter().flatten() {
+                    self.fake_key(KEY_PRESS_EVENT, key)?;
+                }
+                if shortcut == PasteShortcut::ControlShiftV {
+                    // Send V to the focused client so the root's global shortcut
+                    // cannot intercept it. Some clients also track modifier presses.
+                    self.send_terminal_key(focus, keys.key)
+                } else {
+                    let pressed = self.fake_key(KEY_PRESS_EVENT, keys.key);
+                    let released = self.fake_key(KEY_RELEASE_EVENT, keys.key);
+                    pressed.and(released)
+                }
+            })();
+            let mut released = Ok(());
+            for key in keys.modifiers.into_iter().rev().flatten() {
+                released = released.and(self.fake_key(KEY_RELEASE_EVENT, key));
+            }
+            result.and(released)
+        }
+
+        fn send_terminal_key(&self, focus: Window, key: u8) -> Result<(), AppError> {
+            let event = KeyPressEvent {
+                response_type: KEY_PRESS_EVENT,
+                detail: key,
+                sequence: 0,
+                time: CURRENT_TIME,
+                root: self.root,
+                event: focus,
+                child: NONE,
+                root_x: 0,
+                root_y: 0,
+                event_x: 0,
+                event_y: 0,
+                state: KeyButMask::CONTROL | KeyButMask::SHIFT,
+                same_screen: true,
+            };
+            for response_type in [KEY_PRESS_EVENT, KEY_RELEASE_EVENT] {
+                let event = KeyPressEvent {
+                    response_type,
+                    ..event
+                };
+                self.conn
+                    .send_event(false, focus, EventMask::NO_EVENT, event)
+                    .map_err(|_| fail())?
+                    .check()
+                    .map_err(|_| fail())?;
+            }
             Ok(())
         }
     }
@@ -711,7 +799,8 @@ mod x11 {
                 u32::from(b'x'),
                 0,
             ];
-            assert_eq!(paste_keys(8, 2, &old).unwrap(), (8, 9));
+            let keys = paste_keys(8, 2, &old, PasteShortcut::ControlV).unwrap();
+            assert_eq!((keys.key, keys.modifiers), (8, [Some(9), None]));
             let remapped = [
                 u32::from(b'x'),
                 0,
@@ -720,9 +809,29 @@ mod x11 {
                 u32::from(b'v'),
                 u32::from(b'V'),
             ];
-            assert_eq!(paste_keys(8, 2, &remapped).unwrap(), (10, 9));
-            assert!(paste_keys(8, 2, &[u32::from(b'x'), u32::from(b'v'), 0xffe3, 0]).is_err());
-            assert!(paste_keys(8, 0, &[]).is_err());
+            let keys = paste_keys(8, 2, &remapped, PasteShortcut::ControlV).unwrap();
+            assert_eq!((keys.key, keys.modifiers), (10, [Some(9), None]));
+            assert!(paste_keys(
+                8,
+                2,
+                &[u32::from(b'x'), u32::from(b'v'), 0xffe3, 0],
+                PasteShortcut::ControlV,
+            )
+            .is_err());
+            assert!(paste_keys(8, 0, &[], PasteShortcut::ControlV).is_err());
+        }
+
+        #[test]
+        fn terminal_shortcuts_use_the_window_class_and_the_live_keymap() {
+            let symbols = [b'v'.into(), 0xffe3, 0xff63, 0xffe1];
+            let gnome = paste_shortcut(b"gnome-terminal-server\0Gnome-terminal\0");
+            let keys = paste_keys(8, 1, &symbols, gnome).unwrap();
+            assert_eq!((keys.key, keys.modifiers), (8, [Some(9), Some(11)]));
+            let tabby = paste_shortcut(b"tabby\0Tabby\0");
+            let keys = paste_keys(8, 1, &symbols, tabby).unwrap();
+            assert_eq!((keys.key, keys.modifiers), (10, [None, Some(11)]));
+            assert!(paste_shortcut(b"terminal-in-title\0Firefox\0") == PasteShortcut::ControlV);
+            assert!(paste_shortcut(b"xterm\0XTerm\0") == PasteShortcut::CopyOnly);
         }
     }
 }

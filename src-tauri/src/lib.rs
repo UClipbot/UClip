@@ -1,13 +1,7 @@
 mod autostart;
 mod auxiliary_window;
 pub mod clipboard;
-#[cfg(any(target_os = "windows", target_os = "macos", test))]
-mod clipboard_native;
-#[cfg(target_os = "linux")]
-mod clipboard_source;
 mod clipboard_watch;
-#[cfg(target_os = "linux")]
-mod clipboard_x11;
 mod commands;
 mod desktop;
 mod hover_preview;
@@ -15,6 +9,7 @@ mod paste;
 mod paths;
 mod platform;
 mod quick_paste;
+use uclip_runtime::sync;
 #[cfg(target_os = "linux")]
 mod window_activation;
 
@@ -28,6 +23,7 @@ static EXIT_STARTED: AtomicBool = AtomicBool::new(false);
 pub(crate) struct AppState {
     core: Result<CoreService, AppError>,
     clipboard: Result<clipboard::ClipboardService, AppError>,
+    sync: Result<sync::SyncService, AppError>,
 }
 
 /// Navigation is restricted independently from CSP/ACL. Never load clipboard HTML as a document.
@@ -67,6 +63,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::get_settings,
+            commands::sync_status,
+            commands::update_sync,
+            commands::sync_pairing_code,
             commands::update_settings,
             commands::set_ui_language,
             commands::history_query,
@@ -81,7 +80,11 @@ pub fn run() {
             commands::collections_list,
             commands::create_collection,
             commands::rename_collection,
+            commands::delete_collection,
             commands::transfer_clip,
+            commands::transfer_clips,
+            commands::editable_content,
+            commands::edit_clip,
             commands::desktop_status,
             commands::update_desktop_preferences,
             desktop::set_global_shortcut_recording,
@@ -120,20 +123,34 @@ pub fn run() {
                     })
                     .await
                     .map_err(|_| uclip_core::AppError::new(uclip_core::ErrorCode::Unavailable))??;
-                    let core = CoreService::open(directory.join("foundation.sqlite3")).await?;
+                    let core =
+                        CoreService::open(directory.join(uclip_runtime::paths::DATABASE)).await?;
                     Ok::<_, uclip_core::AppError>(core)
                 }
                 .await;
                 if let Err(ref error) = startup {
                     eprintln!("startup_failed: {:?}: {}", error.code, error.message);
                 }
+                let sync = match &startup {
+                    Ok(core) => {
+                        let core = core.clone();
+                        let directory = paths::data_dir(&handle);
+                        tauri::async_runtime::spawn_blocking(move || {
+                            sync::SyncService::start(core, &directory?)
+                        })
+                        .await
+                        .unwrap_or_else(|_| Err(AppError::new(uclip_core::ErrorCode::Unavailable)))
+                    }
+                    Err(error) => Err(error.clone()),
+                };
                 // Even a failed database startup gets a visible, safe error in the local UI.
                 let clipboard = match &startup {
                     Ok(core) => {
                         let core = core.clone();
                         let app = handle.clone();
+                        let sync = sync.as_ref().ok().cloned();
                         tauri::async_runtime::spawn_blocking(move || {
-                            clipboard::ClipboardService::start(core, Some(app))
+                            clipboard::ClipboardService::start(core, Some(app), sync)
                         })
                         .await
                         .unwrap_or_else(|_| Err(AppError::new(uclip_core::ErrorCode::Unavailable)))
@@ -177,6 +194,7 @@ pub fn run() {
                 handle.manage(AppState {
                     core: startup,
                     clipboard,
+                    sync,
                 });
                 // Creating a WebView in an async task avoids Windows synchronous-handler deadlocks.
                 let native_titlebar = handle
@@ -307,6 +325,12 @@ pub(crate) fn shutdown(app: tauri::AppHandle) {
         let core = app
             .try_state::<AppState>()
             .and_then(|s| s.core.as_ref().ok().cloned());
+        if let Some(sync) = app
+            .try_state::<AppState>()
+            .and_then(|s| s.sync.as_ref().ok().cloned())
+        {
+            let _ = tauri::async_runtime::spawn_blocking(move || sync.stop()).await;
+        }
         let clip_failed = if let Some(c) = clipboard {
             c.stop().await.is_err()
         } else {

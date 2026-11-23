@@ -1,3 +1,5 @@
+mod common;
+
 use rusqlite::Connection;
 use uclip_core::{ErrorCode, KeyBindings, Storage, UpdateKeyBindings};
 
@@ -84,6 +86,7 @@ fn v3_keyboard_migration_is_atomic_and_corrupt_maps_fail_without_reset() {
     let path = dir.path().join("v3.sqlite3");
     drop(Storage::open(&path).unwrap());
     let c = Connection::open(&path).unwrap();
+    common::remove_replica_schema(&c);
     c.execute_batch("DROP TABLE keyboard_bindings; DROP TABLE collections; DROP TABLE collection_changes; DROP INDEX clips_collection_order; ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=3; CREATE TABLE keyboard_bindings(fixture TEXT);").unwrap();
     drop(c);
     assert!(Storage::open(&path).is_err());
@@ -126,6 +129,7 @@ fn v11_search_shortcut_migrates_only_the_untouched_default() {
             legacy.copy = KeyBindings::default().search;
         }
         let c = Connection::open(&path).unwrap();
+        common::remove_replica_schema(&c);
         c.execute_batch(
             "ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; PRAGMA user_version=11;",
         )

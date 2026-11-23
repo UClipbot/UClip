@@ -48,11 +48,17 @@ export type CreateCollection = { name: string, };
 
 export type RenameCollection = { id: string, name: string, expectedRevision: string, };
 
+export type DeleteCollection = { id: string, expectedRevision: string, };
+
 export type TransferMode = "move" | "copy";
 
 export type TransferClip = { id: string, expectedRevision: string, collectionId: string | null, mode: TransferMode, };
 
+export type TransferClips = { clips: Array<ClipVersion>, collectionId: string | null, mode: TransferMode, };
+
 export type ClipTransferSnapshot = { id: string, revision: string, collectionId: string | null, mode: TransferMode, };
+
+export type ClipTransferBatch = { completed: Array<ClipTransferSnapshot>, failure: AppError | null, };
 
 export type ClipKind = "text" | "image" | "files";
 
@@ -71,6 +77,12 @@ matchRanges: Array<[number, number]>, };
 export type HistoryPage = { items: Array<HistoryItem>, total: number, revision: string, };
 
 export type ClipDetail = { id: string, text: string, imageDataUrl: string | null, };
+
+export type ClipVersion = { id: string, expectedRevision: string, };
+
+export type EditableContent = { "kind": "text", "value": string } | { "kind": "files", "value": Array<string> };
+
+export type EditClip = { clip: ClipVersion, content: EditableContent, };
 
 export type PreviewAnchor = { x: number, y: number, width: number, height: number, };
 
@@ -96,7 +108,17 @@ export type UpdateSettings = { theme: Theme,
  */
 language: Language | null, showSearchByDefault: boolean | null, expectedRevision: string, };
 
-export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout" | "excluded" | "duplicate_name";
+export type SyncRole = "off" | "discovering" | "host" | "client";
+
+export type SyncRemoteInput = { "kind": "webdav", url: string, username: string, password: string, } | { "kind": "sftp", host: string, port: number, directory: string, username: string, password: string, hostKey: string, };
+
+export type SyncRemoteSettings = { "kind": "webdav", url: string, username: string, } | { "kind": "sftp", host: string, port: number, directory: string, username: string, hostKey: string, };
+
+export type SyncStatus = { paired: boolean, lanEnabled: boolean, role: SyncRole, peers: number, lanLastSync: string | null, lanError: AppError | null, remote: SyncRemoteSettings | null, remoteLastSync: string | null, remoteError: AppError | null, };
+
+export type UpdateSync = { "action": "create" } | { "action": "join", code: string, } | { "action": "lan", enabled: boolean, } | { "action": "remote", remote: SyncRemoteInput | null, };
+
+export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout" | "excluded" | "duplicate_name" | "sync_connection" | "sync_authentication" | "sync_data" | "file_peer_offline";
 
 export type AppError = { code: ErrorCode, message: string, };
 

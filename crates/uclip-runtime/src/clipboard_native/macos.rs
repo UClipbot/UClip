@@ -11,7 +11,7 @@ impl Context {
     pub fn new() -> Result<Self, AppError> {
         Ok(Self)
     }
-    pub(crate) fn source_application(&self) -> source::Source {
+    pub fn source_application(&self) -> source::Source {
         source::Source::capture()
     }
     pub fn read(&self, marker: &[u8]) -> Result<Option<ClipPayload>, AppError> {
@@ -69,7 +69,12 @@ impl Context {
             Ok(None)
         })
     }
-    pub fn write(&self, payload: ClipPayload, marker: &[u8]) -> Result<(), AppError> {
+    pub fn write(
+        &self,
+        payload: ClipPayload,
+        marker_format: &str,
+        marker: &[u8],
+    ) -> Result<(), AppError> {
         autoreleasepool(|_| {
             let representations = match payload {
                 ClipPayload::Text(value) => vec![("public.utf8-plain-text", value.into_bytes())],
@@ -94,7 +99,7 @@ impl Context {
                 if !item.setData_forType(&NSData::with_bytes(&bytes), &NSString::from_str(name))
                     || !item.setData_forType(
                         &NSData::with_bytes(marker),
-                        &NSString::from_str(crate::clipboard::MARKER),
+                        &NSString::from_str(marker_format),
                     )
                 {
                     return Err(error());

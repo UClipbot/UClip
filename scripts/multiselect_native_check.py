@@ -12,6 +12,13 @@ def run(invoke, execute, click, wait, env):
         assert response['ok'], response
         return response['value']
 
+    def key(keys):
+        subprocess.run(['xdotool', 'key', '--clearmodifiers', keys], env=env, check=True)
+
+    def clipboard_text():
+        value = subprocess.run(['xclip', '-selection', 'clipboard', '-o'], env=env, capture_output=True, text=True)
+        return value.stdout if value.returncode == 0 else None
+
     assert action('clipboard_status')['policy']['enabled'], 'recapture suppression must be tested with capture enabled'
     ids = [action('create_text', text=value) for value in ['batch first', 'batch second']]
     wait(lambda: execute('return document.querySelectorAll("[data-row-main]").length === 2'), 'created batch records')
@@ -22,8 +29,7 @@ def run(invoke, execute, click, wait, env):
     expected = execute('return [...document.querySelectorAll(".clip-row.selected .clip-excerpt")].map(e=>e.textContent).join("\\n")')
     subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+c'], env=env, check=True)
     def copied():
-        value = subprocess.run(['xclip', '-selection', 'clipboard', '-o'], env=env, capture_output=True, text=True)
-        return value.returncode == 0 and value.stdout == expected
+        return clipboard_text() == expected
     wait(copied, 'one merged native clipboard write')
     wait(lambda: execute('return document.querySelector(".history-scroll").getAttribute("aria-busy") === "false"'), 'copy refresh')
     # Wait beyond collection polling to ensure internal clipboard content is never captured as a new row.
@@ -55,6 +61,14 @@ def run(invoke, execute, click, wait, env):
     wait(lambda: execute('return document.querySelectorAll("[data-row-main]").length === 1 && (document.querySelector(".toast").textContent.includes("1/2") || document.querySelector(".toast").textContent.includes("1 of 2"))'), 'partial failure feedback')
     click('.toast button')
     wait(lambda: execute('return document.querySelectorAll("[data-row-main]").length === 2'), 'partial batch undo')
+
+    click('[data-row-main]')
+    fallback_text = execute('return document.querySelector(".clip-row.selected .clip-excerpt").textContent')
+    assert not action('clipboard_status')['pasteTarget'], 'fallback test requires no native target'
+    key('Return')
+    wait(lambda: clipboard_text() == fallback_text, 'Enter copies the selected item without a paste target')
+    assert execute('return document.hasFocus()'), 'copy fallback hid the main window'
+
     with tempfile.TemporaryDirectory(prefix='uclip-batch-receiver-') as directory:
         result = Path(directory) / 'received.json'
         receiver = subprocess.Popen(['/usr/bin/python3', 'scripts/paste-receiver.py', str(result)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -63,19 +77,44 @@ def run(invoke, execute, click, wait, env):
                 value = subprocess.run(['xdotool', 'search', '--name', '^UClip native fixture receiver$'], env=env, capture_output=True, text=True)
                 return value.stdout.strip().splitlines() if value.returncode == 0 else None
             window = wait(receiver_window, 'batch paste receiver')[0]
+
+            def open_from_receiver():
+                subprocess.run(['xdotool', 'windowactivate', '--sync', window], env=env, check=True)
+                key('ctrl+shift+v')
+                wait(lambda: action('clipboard_status')['pasteTarget'] and execute('return document.hasFocus()'), 'history opened with the GTK paste target')
+
+            def received():
+                try: return json.loads(result.read_text())
+                except (OSError, json.JSONDecodeError): return None
+
+            open_from_receiver()
+            execute('document.querySelector(".toast .icon-button")?.click()')
+            click('.clip-row:nth-of-type(2) [data-row-main]')
+            single_text = execute('return document.querySelector(".clip-row.selected .clip-excerpt").textContent')
+            assert single_text != fallback_text
+            key('ctrl+c')
+            wait(lambda: clipboard_text() == single_text, 'Ctrl+C only copies even with a paste target')
+            wait(lambda: execute('return !!document.querySelector(".toast") && document.querySelector(".history-scroll").getAttribute("aria-busy") === "false"'),
+                 'copy result and refreshed history ready')
+            assert execute('return document.hasFocus()') and not result.exists()
+            click('.clip-row:nth-of-type(2) [data-row-main]')
+            assert execute('return document.querySelector(".clip-row.selected .clip-excerpt")?.textContent') == single_text
+            key('Return')
+            pasted = wait(received, 'Enter delivered the single selection to GTK', timeout=5)
+            assert pasted == {'kind': 'text', 'text': single_text}, pasted
+            key('ctrl+a')
+            key('BackSpace')
+            result.unlink()
+            print('PASS: Enter pasted the selected item to the external GTK window and fell back to copy without a target', flush=True)
+
+            open_from_receiver()
             expected = execute('return [...document.querySelectorAll(".clip-excerpt")].map(e=>e.textContent).join("\\n")')
             click('[data-row-main]')
             execute('document.querySelectorAll("[data-row-main]")[1].dispatchEvent(new MouseEvent("click", {bubbles:true,ctrlKey:true}))')
             wait(lambda: execute('return document.querySelectorAll(".clip-row.selected").length === 2'), 'paste selection')
-            subprocess.run(['xdotool', 'windowactivate', '--sync', window], env=env, check=True)
-            subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+shift+v'], env=env, check=True)
-            wait(lambda: action('clipboard_status')['pasteTarget'] and execute('return document.hasFocus()'), 'batch paste target')
             execute('document.querySelector("[data-clip-id]").dispatchEvent(new MouseEvent("contextmenu", {bubbles:true,cancelable:true}))')
             wait(lambda: execute('return document.querySelector(".action-menu button:first-child")?.disabled === false'), 'batch paste enabled in the menu')
             click('.action-menu button:first-child')
-            def received():
-                try: return json.loads(result.read_text())
-                except (OSError, json.JSONDecodeError): return None
             value = wait(received, 'actual external batch text paste')
             assert value == {'kind': 'text', 'text': expected}, value
         finally:

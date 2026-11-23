@@ -21,12 +21,12 @@ use ::windows::{
 use std::path::Path;
 
 #[derive(Clone, Copy)]
-pub(crate) struct ClipboardWrite {
+pub struct ClipboardWrite {
     owner: isize,
 }
 
 impl ClipboardWrite {
-    pub(crate) fn is_current(self) -> bool {
+    pub fn is_current(self) -> bool {
         unsafe { GetClipboardOwner() }.ok() == Some(HWND(self.owner as _))
     }
 }
@@ -149,7 +149,12 @@ impl Context {
         }
         Ok(None)
     }
-    pub fn write(&self, payload: ClipPayload, marker: &[u8]) -> Result<ClipboardWrite, AppError> {
+    pub fn write(
+        &self,
+        payload: ClipPayload,
+        marker_format: &str,
+        marker: &[u8],
+    ) -> Result<ClipboardWrite, AppError> {
         let mut representations = match payload {
             ClipPayload::Text(value) => {
                 if value.contains('\0') {
@@ -189,7 +194,7 @@ impl Context {
                 ]
             }
         };
-        representations.push((register(crate::clipboard::MARKER)?, marker.to_vec()));
+        representations.push((register(marker_format)?, marker.to_vec()));
         // Allocate every representation before clearing the original clipboard.
         let mut prepared = representations
             .into_iter()

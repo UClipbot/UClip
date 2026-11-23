@@ -1,4 +1,3 @@
-use crate::clipboard_native::ClipboardWrite;
 use ::windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
     UI::{
@@ -21,6 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 use uclip_core::{AppError, ErrorCode};
+use uclip_runtime::clipboard::ClipboardWrite;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Window {

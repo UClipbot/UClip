@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { selectRange } from './selection';
+import { selectionRange } from './selection';
 describe('result selection', () => {
   it('selects inclusive ranges in display order in either direction', () => {
-    expect(selectRange(['a', 'b', 'c', 'd'], 'b', 'd')).toEqual(['b', 'c', 'd']);
-    expect(selectRange(['a', 'b', 'c', 'd'], 'd', 'b')).toEqual(['b', 'c', 'd']);
+    expect(selectionRange(23, 30)).toEqual({ start: 23, end: 30 });
+    expect(selectionRange(30, 23)).toEqual({ start: 23, end: 30 });
   });
-  it('does not reuse an anchor from another result page', () => {
-    expect(selectRange(['b', 'c'], 'a', 'c')).toEqual(['c']);
+  it('allows a single index as an inclusive range', () => {
+    expect(selectionRange(25, 25)).toEqual({ start: 25, end: 25 });
   });
 });

@@ -15,6 +15,12 @@ import type {
   HistoryPage,
   CollectionItem,
   CollectionsSnapshot,
+  DeleteCollection,
+  ClipTransferBatch,
+  ClipVersion,
+  EditableContent,
+  EditClip,
+  TransferClips,
   RenameCollection,
   TransferClip,
   ClipTransferSnapshot,
@@ -29,6 +35,7 @@ export function useHistory(
   type: ClipType | 'all',
   pinnedOnly: boolean,
   collectionId: string | null,
+  trash: boolean,
   previewId?: string,
   settingsOnly = false,
 ) {
@@ -55,12 +62,20 @@ export function useHistory(
     type,
     pinnedOnly,
     collectionId,
+    trash,
     offset,
     historyRevision,
     queryEpoch,
   ]);
   const [settledKey, setSettledKey] = useState('');
   const pending = native && (loading || settledKey !== requestKey);
+  const queryScope = {
+    query,
+    regex,
+    pinnedOnly,
+    collectionId,
+    kind: type === 'all' ? null : type === 'image' ? 'image' : type === 'file' ? 'files' : 'text',
+  };
   const refresh = useCallback(async () => {
     if (!native || mutation.current) return;
     const generation = ++statusGeneration.current;
@@ -98,7 +113,7 @@ export function useHistory(
   }, [native, refresh]);
   useEffect(() => {
     setOffset(0);
-  }, [query, regex, type, pinnedOnly, collectionId]);
+  }, [query, regex, type, pinnedOnly, collectionId, trash]);
   useEffect(() => {
     if (!native || settingsOnly) return;
     let active = true;
@@ -114,13 +129,9 @@ export function useHistory(
         setPending(false);
       }, 5000);
       invoke<HistoryPage>('history_query', {
+        trash,
         request: {
-          query,
-          regex,
-          pinnedOnly,
-          collectionId,
-          kind:
-            type === 'all' ? null : type === 'image' ? 'image' : type === 'file' ? 'files' : 'text',
+          ...queryScope,
           offset,
           expectedRevision: offset ? pageRevision.current : null,
         },
@@ -164,6 +175,7 @@ export function useHistory(
     type,
     pinnedOnly,
     collectionId,
+    trash,
     offset,
     historyRevision,
     refresh,
@@ -171,7 +183,7 @@ export function useHistory(
     settingsOnly,
   ]);
   useEffect(() => {
-    if (!native || !page) return;
+    if (!native || !page || trash) return;
     let active = true;
     void (async () => {
       for (const item of page.items) {
@@ -193,7 +205,7 @@ export function useHistory(
     return () => {
       active = false;
     };
-  }, [native, page]);
+  }, [native, page, trash]);
   async function updatePolicy(request: UpdateCapturePolicy) {
     if (mutation.current) throw safeError({ code: 'busy' });
     mutation.current = true;
@@ -268,7 +280,13 @@ export function useHistory(
     }
   }
   async function copy(id: string, paste: boolean, fallbackToCopy: boolean, ids?: string[]) {
-    const result = await invoke<CopyResult>('copy_clip', { id, ids, paste, fallbackToCopy });
+    const result = await invoke<CopyResult>('copy_clip', {
+      id,
+      ids,
+      paste,
+      fallbackToCopy,
+      historyRevision: ids ? page?.revision : undefined,
+    });
     await refresh();
     return result;
   }
@@ -289,36 +307,57 @@ export function useHistory(
       await refresh();
     }
   }
-  const items: Clip[] = (page?.items ?? []).map((item) => ({
-    id: item.id,
-    revision: item.revision,
-    savedAt: item.capturedAt,
-    matchRanges: item.matchRanges,
-    native: true,
-    type: item.kind === 'files' ? 'file' : item.kind,
-    title: item.kind === 'files' ? item.preview : '',
-    content:
-      item.kind === 'image'
-        ? t('image_0_1', { 0: item.width ?? 0, 1: item.height ?? 0 })
-        : item.preview,
-    source: item.manual ? t('manually_created') : (item.sourceApp ?? t('unknown_source')),
-    time: formatHistoryTime(Number(item.capturedAt)),
-    day: formatHistoryDate(Number(item.capturedAt)),
-    pinned: item.pinned,
-    collection: null,
-    collectionId: item.collectionId ?? undefined,
-    size:
-      item.kind === 'image'
-        ? `${item.width} × ${item.height}`
-        : item.kind === 'files'
-          ? t('0_items', { 0: item.fileCount })
-          : undefined,
-    image: thumbnails[item.id],
-  }));
+  const mapItems = (items: HistoryPage['items']): Clip[] =>
+    items.map((item) => ({
+      id: item.id,
+      revision: item.revision,
+      savedAt: item.capturedAt,
+      matchRanges: item.matchRanges,
+      native: true,
+      type: item.kind === 'files' ? 'file' : item.kind,
+      title: item.kind === 'files' ? item.preview : '',
+      content:
+        item.kind === 'image'
+          ? t('image_0_1', { 0: item.width ?? 0, 1: item.height ?? 0 })
+          : item.preview,
+      source: item.manual ? t('manually_created') : (item.sourceApp ?? t('unknown_source')),
+      time: formatHistoryTime(Number(item.capturedAt)),
+      day: formatHistoryDate(Number(item.capturedAt)),
+      pinned: item.pinned,
+      deleted: trash,
+      collection: null,
+      collectionId: item.collectionId ?? undefined,
+      size:
+        item.kind === 'image'
+          ? `${item.width} × ${item.height}`
+          : item.kind === 'files'
+            ? t('0_items', { 0: item.fileCount })
+            : undefined,
+      image: trash ? undefined : thumbnails[item.id],
+    }));
+  async function readRange(offset: number, count: number) {
+    if (!page || pending || error) throw safeError({ code: 'conflict' });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const range = await Promise.race([
+        invoke<HistoryPage>('history_query', {
+          trash,
+          count,
+          request: { ...queryScope, offset, expectedRevision: page.revision },
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(safeError({ code: 'query_timeout' })), 5000);
+        }),
+      ]);
+      return mapItems(range.items);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   return {
     status,
     collections: collections?.items ?? [],
-    items,
+    items: mapItems(page?.items ?? []),
     pending,
     error,
     statusError,
@@ -334,8 +373,15 @@ export function useHistory(
       mutateHistory<CollectionItem>('create_collection', { name }),
     renameCollection: (request: RenameCollection) =>
       mutateHistory<CollectionItem>('rename_collection', request),
+    deleteCollection: (request: DeleteCollection) =>
+      mutateHistory<number>('delete_collection', request),
+    editableContent: (request: ClipVersion) =>
+      invoke<EditableContent>('editable_content', { request }),
+    editClip: (request: EditClip) => mutateHistory<void>('edit_clip', request),
     transferClip: (request: TransferClip) =>
       mutateHistory<ClipTransferSnapshot>('transfer_clip', request),
+    transferClips: (request: TransferClips) =>
+      mutateHistory<ClipTransferBatch>('transfer_clips', request),
     changePin: (request: ChangeClipPin) =>
       mutateHistory<ClipPinSnapshot>('change_clip_pin', request),
     deduplicatePinned: (expectedRevision: string) =>
@@ -344,6 +390,7 @@ export function useHistory(
     mutating,
     copy,
     changeDeletions,
+    readRange,
     refresh,
     retryQuery: () => setQueryEpoch((epoch) => epoch + 1),
   };

@@ -1,0 +1,41 @@
+[package]
+name = "uclip-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+uclip-core = { path = "../uclip-core" }
+serde.workspace = true
+serde_json.workspace = true
+url = "2"
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
+dirs = "7"
+futures-executor = "0.3"
+base64 = "=0.23.1"
+uuid = { version = "=1.29.2", features = ["v4"] }
+chacha20poly1305 = "=0.10.1"
+getrandom = "=0.4.3"
+hmac = "=0.12.1"
+sha2 = "=0.10.9"
+snow = "=0.10.0"
+socket2 = "=0.6.5"
+rmp-serde = "=1.3.1"
+serde_bytes = "=0.11.19"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
+quick-xml = "0.40"
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+clipboard-rs = "=0.3.5"
+x11rb = { version = "=0.13.2", features = ["res"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "=0.59.0", features = ["Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["NSPasteboard", "NSPasteboardItem", "NSWorkspace", "NSRunningApplication", "NSApplication"] }
+objc2 = "=0.6.5"
+objc2-foundation = { version = "=0.3.2", features = ["NSArray", "NSData", "NSString"] }

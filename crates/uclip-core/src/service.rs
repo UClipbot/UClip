@@ -119,6 +119,67 @@ impl CoreService {
             .await
             .map_err(|_| AppError::new(ErrorCode::Unavailable))?
     }
+    pub async fn replica_device(&self) -> Result<String, AppError> {
+        self.operation(|s| s.replica_device()).await
+    }
+
+    pub async fn enroll_replica(&self) -> Result<(), AppError> {
+        self.operation(|s| s.enroll_replica()).await
+    }
+
+    pub async fn replica_profile(&self) -> Result<Option<String>, AppError> {
+        self.operation(|s| s.replica_profile()).await
+    }
+
+    pub async fn save_replica_profile(&self, profile: String) -> Result<(), AppError> {
+        self.operation(move |s| s.save_replica_profile(profile))
+            .await
+    }
+
+    pub async fn replica_inventory(&self) -> Result<Vec<crate::ReplicaStamp>, AppError> {
+        self.operation(|s| s.replica_inventory()).await
+    }
+
+    pub async fn replica_entry(
+        &self,
+        stamp: crate::ReplicaStamp,
+    ) -> Result<Option<crate::ReplicaEntry>, AppError> {
+        self.operation(move |s| s.replica_entry(&stamp)).await
+    }
+
+    pub async fn apply_replica_entry(&self, entry: crate::ReplicaEntry) -> Result<bool, AppError> {
+        self.operation(move |s| s.apply_replica_entry(entry)).await
+    }
+
+    pub async fn remote_file_tickets(
+        &self,
+        ids: Vec<String>,
+    ) -> Result<Vec<(String, crate::FileTicket)>, AppError> {
+        self.operation(move |s| s.remote_file_tickets(ids)).await
+    }
+
+    pub async fn clipboard_payload(
+        &self,
+        ids: Vec<String>,
+        history_revision: Option<String>,
+        slot_revision: Option<String>,
+        staged: Vec<crate::FileReplacement>,
+    ) -> Result<crate::ClipPayload, AppError> {
+        self.operation(move |s| {
+            s.clipboard_payload(
+                &ids,
+                history_revision.as_deref(),
+                slot_revision.as_deref(),
+                staged,
+            )
+        })
+        .await
+    }
+
+    pub async fn replica_grant(&self, token: String) -> Result<Vec<String>, AppError> {
+        self.operation(move |s| s.replica_grant(&token)).await
+    }
+
     pub async fn capture_policy(&self) -> Result<crate::CapturePolicy, AppError> {
         self.operation(|s| s.capture_policy()).await
     }
@@ -143,6 +204,15 @@ impl CoreService {
         self.operation(move |s| s.create_text_in_collection(text, collection_id))
             .await
     }
+
+    pub async fn create_clip(
+        &self,
+        payload: crate::ClipPayload,
+        collection_id: Option<String>,
+    ) -> Result<String, AppError> {
+        self.operation(move |s| s.create_clip(payload, collection_id))
+            .await
+    }
     pub async fn collections(&self) -> Result<crate::CollectionsSnapshot, AppError> {
         self.operation(|s| s.collections()).await
     }
@@ -164,6 +234,31 @@ impl CoreService {
     ) -> Result<crate::ClipTransferSnapshot, AppError> {
         self.operation(move |s| s.transfer_clip(request)).await
     }
+
+    pub async fn delete_collection(
+        &self,
+        request: crate::DeleteCollection,
+    ) -> Result<u32, AppError> {
+        self.operation(move |s| s.delete_collection(request)).await
+    }
+
+    pub async fn transfer_clips(
+        &self,
+        request: crate::TransferClips,
+    ) -> Result<crate::ClipTransferBatch, AppError> {
+        self.operation(move |s| s.transfer_clips(request)).await
+    }
+
+    pub async fn editable_content(
+        &self,
+        clip: crate::ClipVersion,
+    ) -> Result<crate::EditableContent, AppError> {
+        self.operation(move |s| s.editable_content(clip)).await
+    }
+
+    pub async fn edit_clip(&self, request: crate::EditClip) -> Result<(), AppError> {
+        self.operation(move |s| s.edit_clip(request)).await
+    }
     pub async fn capture(&self, payload: crate::ClipPayload) -> Result<Option<String>, AppError> {
         self.operation(move |s| s.capture(payload)).await
     }
@@ -180,6 +275,15 @@ impl CoreService {
         request: crate::HistoryQuery,
     ) -> Result<crate::HistoryPage, AppError> {
         self.operation(move |s| s.history(request)).await
+    }
+    pub async fn history_window(
+        &self,
+        request: crate::HistoryQuery,
+        trash: bool,
+        count: Option<u32>,
+    ) -> Result<crate::HistoryPage, AppError> {
+        self.operation(move |s| s.history_window(request, trash, count))
+            .await
     }
     pub async fn quick_paste_slots(
         &self,
@@ -224,8 +328,24 @@ impl CoreService {
     pub async fn read_clip(&self, id: String) -> Result<crate::ClipPayload, AppError> {
         self.operation(move |s| s.read_clip(&id)).await
     }
+    pub async fn read_clip_in_history(
+        &self,
+        id: String,
+        expected_revision: Option<String>,
+    ) -> Result<crate::ClipPayload, AppError> {
+        self.operation(move |s| s.read_clip_in_history(&id, expected_revision.as_deref()))
+            .await
+    }
     pub async fn read_clips(&self, ids: Vec<String>) -> Result<crate::ClipPayload, AppError> {
         self.operation(move |s| s.read_clips(&ids)).await
+    }
+    pub async fn read_clips_at_revision(
+        &self,
+        ids: Vec<String>,
+        revision: String,
+    ) -> Result<crate::ClipPayload, AppError> {
+        self.clipboard_payload(ids, Some(revision), None, Vec::new())
+            .await
     }
     pub async fn change_clip_deletion(
         &self,

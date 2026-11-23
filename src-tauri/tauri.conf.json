@@ -9,7 +9,8 @@
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist",
     "additionalWatchFolders": [
-      "../crates/uclip-core"
+      "../crates/uclip-core",
+      "../crates/uclip-runtime"
     ]
   },
   "app": {

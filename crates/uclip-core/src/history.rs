@@ -20,6 +20,7 @@ pub const MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_IMAGE_PIXELS: u64 = 8_388_608;
 pub const MAX_HISTORY_BYTES: i64 = 128 * 1024 * 1024;
 pub const PAGE_SIZE: usize = 25;
+pub(crate) const MAX_TRASH_ITEMS: u32 = 1000;
 
 /// Only Rust platform adapters construct capture payloads. There is no arbitrary-payload IPC.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,9 +126,26 @@ fn parse_kind(kind: &str) -> rusqlite::Result<ClipKind> {
     }
 }
 
+pub(crate) fn read_capture_policy(
+    connection: &rusqlite::Connection,
+) -> Result<CapturePolicy, AppError> {
+    Ok(connection.query_row(
+        "SELECT enabled,exclude_pattern,max_items,revision FROM capture_policy WHERE singleton=1",
+        [],
+        |row| {
+            Ok(CapturePolicy {
+                enabled: row.get(0)?,
+                exclude_pattern: row.get(1)?,
+                max_items: row.get(2)?,
+                revision: row.get::<_, i64>(3)?.to_string(),
+            })
+        },
+    )?)
+}
+
 impl Storage {
     pub fn capture_policy(&self) -> Result<CapturePolicy, AppError> {
-        Ok(self.connection.query_row("SELECT enabled,exclude_pattern,max_items,revision FROM capture_policy WHERE singleton=1", [], |r| Ok(CapturePolicy { enabled: r.get(0)?, exclude_pattern: r.get(1)?, max_items: r.get(2)?, revision: r.get::<_,i64>(3)?.to_string() }))?)
+        read_capture_policy(&self.connection)
     }
     pub fn history_revision(&self) -> Result<String, AppError> {
         Ok(self
@@ -188,7 +206,15 @@ impl Storage {
         text: String,
         collection_id: Option<String>,
     ) -> Result<String, AppError> {
-        self.save_payload(ClipPayload::Text(text), false, collection_id, None)?
+        self.create_clip(ClipPayload::Text(text), collection_id)
+    }
+
+    pub fn create_clip(
+        &mut self,
+        payload: ClipPayload,
+        collection_id: Option<String>,
+    ) -> Result<String, AppError> {
+        self.save_payload(payload, false, collection_id, None)?
             .ok_or_else(|| AppError::new(ErrorCode::Excluded))
     }
     fn save_payload(
@@ -203,13 +229,7 @@ impl Storage {
         }) {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
-        let policy = self.capture_policy()?;
-        if !validate_save_payload(&payload, &policy)? {
-            return Ok(None);
-        }
-        if captured && !policy.enabled {
-            return Ok(None);
-        }
+        payload.validate()?;
         let (kind, text, data, width, height, count) = match &payload {
             ClipPayload::Text(text) => (ClipKind::Text, text.clone(), vec![], None, None, 0),
             ClipPayload::Image {
@@ -237,12 +257,16 @@ impl Storage {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let policy = read_capture_policy(&tx)?;
+        if (captured && !policy.enabled) || !allowed_by_capture_policy(&payload, &policy)? {
+            return Ok(None);
+        }
         // Fingerprints are not identities. Only the unclassified, unpinned capture scope deduplicates.
         if let Some(id) = &collection_id {
             crate::collections::ensure_collection(&tx, id)?;
         }
         let existing: Option<String> = if captured {
-            tx.query_row("SELECT id FROM clips WHERE fingerprint=?1 AND origin='capture' AND pinned=0 AND deleted=0 AND collection IS NULL LIMIT 1", [&fingerprint], |r| r.get(0)).optional()?
+            tx.query_row("SELECT id FROM clips WHERE fingerprint=?1 AND origin='capture' AND pinned=0 AND deleted=0 AND collection IS NULL AND NOT EXISTS (SELECT 1 FROM replica_files f,replica_state s WHERE f.id=clips.id AND f.device<>s.device) LIMIT 1", [&fingerprint], |r| r.get(0)).optional()?
         } else {
             None
         };
@@ -263,6 +287,23 @@ impl Storage {
         Ok(Some(id))
     }
     pub fn history(&self, query: HistoryQuery) -> Result<HistoryPage, AppError> {
+        self.history_window(query, false, None)
+    }
+
+    pub fn history_window(
+        &self,
+        query: HistoryQuery,
+        trash: bool,
+        count: Option<u32>,
+    ) -> Result<HistoryPage, AppError> {
+        if count
+            .is_some_and(|count| !(1..=1000).contains(&count) || query.expected_revision.is_none())
+            || (trash && (query.pinned_only || query.collection_id.is_some()))
+        {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let _snapshot = self.connection.unchecked_transaction()?;
+        let limit = count.map_or(PAGE_SIZE, |count| count as usize);
         let started = std::time::Instant::now();
         let revision = self.history_revision()?;
         if query
@@ -272,15 +313,30 @@ impl Storage {
         {
             return Err(AppError::new(ErrorCode::Conflict));
         }
-        if query.offset > 1000 {
+        let synchronized = crate::replica::enrolled(&self.connection)?;
+        let max_offset = if synchronized {
+            crate::replica::MAX_ENTITIES
+        } else {
+            1000
+        };
+        if query.offset > max_offset {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
+        let order = if synchronized {
+            "captured_at"
+        } else {
+            "sequence"
+        };
         let matcher = pattern(&query.query, !query.regex)?;
         if let Some(id) = &query.collection_id {
             crate::collections::ensure_collection(&self.connection, id)?;
         }
-        let mut statement = self.connection.prepare("SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision,origin,pinned,collection,source_app FROM clips WHERE deleted=0 AND (?1=0 OR pinned=1) AND (?2 IS NULL OR collection=?2) ORDER BY pinned DESC,sequence DESC,id")?;
-        let mut rows = statement.query(params![query.pinned_only, query.collection_id])?;
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision,origin,pinned,collection,source_app
+             FROM clips WHERE deleted=?3 AND (?1=0 OR pinned=1) AND (?2 IS NULL OR collection=?2)
+             ORDER BY pinned DESC,{order} DESC,id"
+        ))?;
+        let mut rows = statement.query(params![query.pinned_only, query.collection_id, trash])?;
         let mut total = 0;
         let mut items = vec![];
         while let Some(row) = rows.next()? {
@@ -306,16 +362,18 @@ impl Storage {
             if !matcher.is_match(&searchable) {
                 continue;
             }
-            if total >= query.offset && items.len() < PAGE_SIZE {
+            if total >= query.offset && items.len() < limit {
                 let preview: String = if kind == ClipKind::Files {
                     serde_json::from_str::<Vec<String>>(&text)
                         .map_err(|_| AppError::new(ErrorCode::Storage))?
                         .iter()
-                        .map(|p| {
-                            Path::new(p)
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
+                        .map(|path| {
+                            if path.starts_with('/') {
+                                path.rsplit('/').find(|part| !part.is_empty())
+                            } else {
+                                path.rsplit(['/', '\\']).find(|part| !part.is_empty())
+                            }
+                            .unwrap_or_default()
                         })
                         .collect::<Vec<_>>()
                         .join("、")
@@ -365,10 +423,15 @@ impl Storage {
         })
     }
     pub fn quick_paste_slots(&self, include_pinned: bool) -> Result<Vec<QuickPasteSlot>, AppError> {
-        let mut statement = self.connection.prepare(
+        let order = if crate::replica::enrolled(&self.connection)? {
+            "captured_at"
+        } else {
+            "sequence"
+        };
+        let mut statement = self.connection.prepare(&format!(
             "SELECT id, revision, kind, CASE WHEN kind='text' THEN substr(text,1,300) ELSE '' END, file_count
-             FROM clips WHERE deleted=0 AND (?1 OR pinned=0) ORDER BY sequence DESC,id LIMIT 5",
-        )?;
+             FROM clips WHERE deleted=0 AND (?1 OR pinned=0) ORDER BY {order} DESC,id LIMIT 5",
+        ))?;
         let slots = statement.query_map([include_pinned], |row| {
             Ok(QuickPasteSlot {
                 id: row.get(0)?,
@@ -385,19 +448,105 @@ impl Storage {
     }
 
     pub fn read_quick_paste_slot(&self, id: &str, revision: &str) -> Result<ClipPayload, AppError> {
-        self.read_active_clip(id, Some(mutation_revision(revision)?))
+        let snapshot = self.connection.unchecked_transaction()?;
+        Self::read_active_clip(&snapshot, id, Some(mutation_revision(revision)?))
     }
 
     pub fn read_clip(&self, id: &str) -> Result<ClipPayload, AppError> {
-        self.read_active_clip(id, None)
+        self.read_clip_in_history(id, None)
     }
 
-    fn read_active_clip(&self, id: &str, revision: Option<i64>) -> Result<ClipPayload, AppError> {
+    pub fn read_clip_in_history(
+        &self,
+        id: &str,
+        expected_revision: Option<&str>,
+    ) -> Result<ClipPayload, AppError> {
+        let _snapshot = self.connection.unchecked_transaction()?;
+        if let Some(revision) = expected_revision {
+            if self.history_revision()? != revision {
+                return Err(AppError::new(ErrorCode::Conflict));
+            }
+        }
+        Self::read_active_clip(&self.connection, id, None)
+    }
+
+    pub fn editable_content(
+        &self,
+        clip: crate::ClipVersion,
+    ) -> Result<crate::EditableContent, AppError> {
+        let snapshot = self.connection.unchecked_transaction()?;
+        Self::read_editable_content(&snapshot, &clip)
+    }
+
+    fn read_editable_content(
+        connection: &rusqlite::Connection,
+        clip: &crate::ClipVersion,
+    ) -> Result<crate::EditableContent, AppError> {
+        if crate::replica::remote_file(connection, &clip.id)?.is_some() {
+            return Err(AppError::new(ErrorCode::Restricted));
+        }
+        match Self::read_active_clip(
+            connection,
+            &clip.id,
+            Some(mutation_revision(&clip.expected_revision)?),
+        )? {
+            ClipPayload::Text(text) => Ok(crate::EditableContent::Text(text)),
+            ClipPayload::Files(files) => Ok(crate::EditableContent::Files(files)),
+            ClipPayload::Image { .. } => Err(AppError::new(ErrorCode::Restricted)),
+        }
+    }
+
+    pub fn edit_clip(&mut self, request: crate::EditClip) -> Result<(), AppError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = Self::read_editable_content(&tx, &request.clip)?;
+        let (payload, text, count) = match (current, request.content) {
+            (crate::EditableContent::Text(before), crate::EditableContent::Text(text))
+                if before != text =>
+            {
+                (ClipPayload::Text(text.clone()), text, 0)
+            }
+            (crate::EditableContent::Files(before), crate::EditableContent::Files(paths))
+                if before != paths =>
+            {
+                let text = serde_json::to_string(&paths)
+                    .map_err(|_| AppError::new(ErrorCode::InvalidInput))?;
+                let count = paths.len();
+                (ClipPayload::Files(paths), text, count)
+            }
+            _ => return Err(AppError::new(ErrorCode::InvalidInput)),
+        };
+        let policy = read_capture_policy(&tx)?;
+        if !validate_save_payload(&payload, &policy)? {
+            return Err(AppError::new(ErrorCode::Excluded));
+        }
+        let id = request.clip.id;
+        if tx.execute(
+            "UPDATE clips SET text=?1,file_count=?2,fingerprint=?3,captured_at=?4,revision=revision+1 WHERE id=?5 AND deleted=0 AND revision=?6",
+            params![text, count as u32, payload.fingerprint(), now(), id, mutation_revision(&request.clip.expected_revision)?],
+        )? != 1 {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        prune(&tx, policy.max_items, Some(&id))?;
+        check_change_budget(&tx)?;
+        tx.execute(
+            "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn read_active_clip(
+        connection: &rusqlite::Connection,
+        id: &str,
+        revision: Option<i64>,
+    ) -> Result<ClipPayload, AppError> {
         if uuid::Uuid::parse_str(id).is_err() {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
-        let row = self
-            .connection
+        let row = connection
             .query_row(
                 "SELECT kind,text,data,width,height,revision FROM clips WHERE id=?1 AND deleted=0",
                 [id],
@@ -429,20 +578,65 @@ impl Storage {
             },
             _ => return Err(AppError::new(ErrorCode::Storage)),
         };
-        payload.validate()?;
+        match &payload {
+            ClipPayload::Files(paths)
+                if crate::replica::remote_file(connection, id)?.is_some()
+                    && crate::replica::portable_paths(paths) => {}
+            _ => payload.validate()?,
+        }
         Ok(payload)
     }
     /// Build one bounded clipboard publication in caller-specified display order.
     pub fn read_clips(&self, ids: &[String]) -> Result<ClipPayload, AppError> {
-        if ids.is_empty()
-            || ids.len() > 100
-            || ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len()
-        {
+        self.clipboard_payload(ids, None, None, Vec::new())
+    }
+
+    pub fn clipboard_payload(
+        &self,
+        ids: &[String],
+        history_revision: Option<&str>,
+        slot_revision: Option<&str>,
+        staged: Vec<crate::FileReplacement>,
+    ) -> Result<ClipPayload, AppError> {
+        validate_clip_ids(ids)?;
+        let _snapshot = self.connection.unchecked_transaction()?;
+        if let Some(revision) = history_revision {
+            if self.history_revision()? != revision {
+                return Err(AppError::new(ErrorCode::Conflict));
+            }
+        }
+        let slot_revision = slot_revision.map(mutation_revision).transpose()?;
+        if slot_revision.is_some() && ids.len() != 1 {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
-        let mut payload = self.read_clip(&ids[0])?;
+        let mut staged = staged
+            .into_iter()
+            .map(|file| (file.id.clone(), file))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut read = |id: &str| -> Result<ClipPayload, AppError> {
+            let original = Self::read_active_clip(&self.connection, id, slot_revision)?;
+            if matches!(original, ClipPayload::Files(_)) {
+                if let Some(ticket) = crate::replica::remote_file(&self.connection, id)? {
+                    let file = staged
+                        .remove(id)
+                        .ok_or_else(|| AppError::new(ErrorCode::FilePeerOffline))?;
+                    if file.ticket != ticket {
+                        return Err(AppError::new(ErrorCode::Conflict));
+                    }
+                    let payload = ClipPayload::Files(file.paths);
+                    payload.validate()?;
+                    return Ok(payload);
+                }
+                crate::replica::verify_local_file(&self.connection, id)?;
+            }
+            if staged.contains_key(id) {
+                return Err(AppError::new(ErrorCode::Conflict));
+            }
+            Ok(original)
+        };
+        let mut payload = read(&ids[0])?;
         for id in &ids[1..] {
-            match (&mut payload, self.read_clip(id)?) {
+            match (&mut payload, read(id)?) {
                 (ClipPayload::Text(text), ClipPayload::Text(next)) => {
                     if text.len() + 1 + next.len() > MAX_TEXT_BYTES {
                         return Err(AppError::new(ErrorCode::LimitExceeded));
@@ -456,6 +650,20 @@ impl Storage {
             payload.validate()?;
         }
         Ok(payload)
+    }
+
+    pub fn remote_file_tickets(
+        &self,
+        ids: Vec<String>,
+    ) -> Result<Vec<(String, crate::FileTicket)>, AppError> {
+        validate_clip_ids(&ids)?;
+        let mut files = Vec::new();
+        for id in ids {
+            if let Some(ticket) = crate::replica::remote_file(&self.connection, &id)? {
+                files.push((id, ticket));
+            }
+        }
+        Ok(files)
     }
 
     pub fn change_clip_deletion(
@@ -490,10 +698,10 @@ impl Storage {
             return Err(AppError::new(ErrorCode::Conflict));
         }
         tx.execute(
-            "UPDATE clips SET deleted=?1,revision=revision+1 WHERE id=?2 AND revision=?3",
+            "UPDATE clips SET deleted=?1,revision=revision+1,collection=CASE WHEN ?1=0 AND NOT EXISTS(SELECT 1 FROM collections WHERE id=clips.collection AND deleted=0) THEN NULL ELSE collection END WHERE id=?2 AND revision=?3",
             params![request.deleted, request.id, revision],
         )?;
-        if !request.deleted {
+        if !request.deleted && !crate::replica::enrolled(&tx)? {
             // Undo must never evict another active record to make room.
             let count: u32 =
                 tx.query_row("SELECT count(*) FROM clips WHERE deleted=0", [], |r| {
@@ -590,6 +798,11 @@ impl Storage {
                   AND keeper.kind=candidate.kind AND keeper.text=candidate.text
                   AND keeper.data=candidate.data AND keeper.width IS candidate.width
                   AND keeper.height IS candidate.height AND keeper.file_count=candidate.file_count
+                  AND (keeper.kind<>'files' OR
+                    coalesce((SELECT device FROM replica_files WHERE id=keeper.id),
+                                     (SELECT device FROM replica_state WHERE singleton=1)) =
+                    coalesce((SELECT device FROM replica_files WHERE id=candidate.id),
+                                     (SELECT device FROM replica_state WHERE singleton=1)))
             )",
             [],
         )? as u32;
@@ -627,6 +840,17 @@ impl Storage {
         Ok(())
     }
 }
+fn validate_clip_ids(ids: &[String]) -> Result<(), AppError> {
+    if ids.is_empty()
+        || ids.len() > 100
+        || ids.iter().collect::<std::collections::HashSet<_>>().len() != ids.len()
+        || ids.iter().any(|id| uuid::Uuid::parse_str(id).is_err())
+    {
+        return Err(AppError::new(ErrorCode::InvalidInput));
+    }
+    Ok(())
+}
+
 pub(crate) fn mutation_revision(value: &str) -> Result<i64, AppError> {
     let revision: i64 = value
         .parse()
@@ -637,20 +861,26 @@ pub(crate) fn mutation_revision(value: &str) -> Result<i64, AppError> {
     Ok(revision)
 }
 fn prune(tx: &rusqlite::Transaction<'_>, max: u32, keep: Option<&str>) -> Result<(), AppError> {
-    prune_protecting(tx, max, keep, None)
+    prune_protecting(tx, max, keep, "[]")
 }
 pub(crate) fn prune_protecting(
     tx: &rusqlite::Transaction<'_>,
     max: u32,
     keep: Option<&str>,
-    source: Option<&str>,
+    protected: &str,
 ) -> Result<(), AppError> {
+    if crate::replica::enrolled(tx)? {
+        return crate::replica::check_capacity(tx);
+    }
     loop {
         let (count, bytes, deleted): (i64,i64,i64) = tx.query_row("SELECT count(*) FILTER(WHERE deleted=0),coalesce(sum(length(CAST(text AS BLOB))+length(data)),0),count(*) FILTER(WHERE deleted<>0) FROM clips", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-        if count <= i64::from(max) && bytes <= MAX_HISTORY_BYTES && deleted <= 1000 {
+        if count <= i64::from(max)
+            && bytes <= MAX_HISTORY_BYTES
+            && deleted <= i64::from(MAX_TRASH_ITEMS)
+        {
             return Ok(());
         }
-        let removed_deleted = if bytes > MAX_HISTORY_BYTES || deleted > 1000 {
+        let removed_deleted = if bytes > MAX_HISTORY_BYTES || deleted > i64::from(MAX_TRASH_ITEMS) {
             tx.execute("DELETE FROM clips WHERE id=(SELECT id FROM clips WHERE deleted<>0 AND (?1 IS NULL OR id<>?1) ORDER BY sequence LIMIT 1)",[keep])?
         } else {
             0
@@ -658,7 +888,7 @@ pub(crate) fn prune_protecting(
         if removed_deleted > 0 {
             continue;
         }
-        let changed = tx.execute("DELETE FROM clips WHERE id=(SELECT id FROM clips WHERE origin='capture' AND deleted=0 AND pinned=0 AND collection IS NULL AND (?1 IS NULL OR id<>?1) AND (?2 IS NULL OR id<>?2) ORDER BY sequence LIMIT 1)", params![keep,source])?;
+        let changed = tx.execute("DELETE FROM clips WHERE id=(SELECT id FROM clips WHERE origin='capture' AND deleted=0 AND pinned=0 AND collection IS NULL AND (?1 IS NULL OR id<>?1) AND id NOT IN (SELECT value FROM json_each(?2)) ORDER BY sequence LIMIT 1)", params![keep,protected])?;
         if changed == 0 {
             return Err(AppError::new(ErrorCode::LimitExceeded));
         }
@@ -682,6 +912,13 @@ pub(crate) fn validate_save_payload(
     policy: &CapturePolicy,
 ) -> Result<bool, AppError> {
     payload.validate()?;
+    allowed_by_capture_policy(payload, policy)
+}
+
+pub(crate) fn allowed_by_capture_policy(
+    payload: &ClipPayload,
+    policy: &CapturePolicy,
+) -> Result<bool, AppError> {
     if policy.exclude_pattern.is_empty() {
         return Ok(true);
     }

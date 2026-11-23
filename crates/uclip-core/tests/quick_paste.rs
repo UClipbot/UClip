@@ -1,3 +1,5 @@
+mod common;
+
 use rusqlite::Connection;
 use uclip_core::*;
 
@@ -60,6 +62,7 @@ fn upgrade_keeps_main_binding_and_persists_quick_settings() {
         .unwrap();
     drop(storage);
     let connection = Connection::open(&path).unwrap();
+    common::remove_replica_schema(&connection);
     connection
         .execute_batch("DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; PRAGMA user_version=13;")
         .unwrap();

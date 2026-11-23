@@ -1,0 +1,315 @@
+use std::{
+    io::Write,
+    path::Path,
+    process::{Command, Output, Stdio},
+};
+
+const UCLIP: &str = env!("CARGO_BIN_EXE_uclip");
+
+fn cli(directory: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(UCLIP);
+    command
+        .args(["--data-dir"])
+        .arg(directory)
+        .args(args)
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("XDG_SESSION_TYPE");
+    command
+}
+
+fn run(directory: &Path, args: &[&str], input: &[u8]) -> Output {
+    let mut child = cli(directory, args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    if !input.is_empty() {
+        child.stdin.take().unwrap().write_all(input).unwrap();
+    }
+    child.wait_with_output().unwrap()
+}
+
+fn successful(output: Output) -> Vec<u8> {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+#[test]
+fn commands_round_trip_text_images_and_references_in_a_private_library() {
+    let temp = tempfile::tempdir().unwrap();
+    let library = temp.path().join("profile");
+    let empty = run(&library, &["list"], b"");
+    assert_eq!(empty.status.code(), Some(3));
+    assert!(!library.exists());
+
+    let payload = "  \u{7b14}\u{8bb0}\nsecond line  ";
+    let id = String::from_utf8(successful(run(&library, &["save"], payload.as_bytes()))).unwrap();
+    let id = id.trim();
+    for selector in [
+        vec!["get", id, "--raw"],
+        vec!["get", "latest", "-r"],
+        vec!["get", "--index", "0", "-r"],
+    ] {
+        assert_eq!(
+            successful(run(&library, &selector, b"")),
+            payload.as_bytes()
+        );
+    }
+    let files = temp.path().join("\u{6587}\u{4ef6}.txt");
+    std::fs::write(&files, b"file content").unwrap();
+    let path = files.to_str().unwrap();
+    let file_id = String::from_utf8(successful(run(
+        &library,
+        &["save", "--reference", path],
+        b"",
+    )))
+    .unwrap();
+    let reference = successful(run(&library, &["get", file_id.trim(), "--raw"], b""));
+    assert_eq!(
+        serde_json::from_slice::<Vec<String>>(&reference).unwrap(),
+        vec![path]
+    );
+
+    let png = uclip_runtime::clipboard_native::png(1, 1, vec![22, 44, 66, 128]).unwrap();
+    let image_id =
+        String::from_utf8(successful(run(&library, &["save", "--image", "-"], &png))).unwrap();
+    assert_eq!(
+        successful(run(&library, &["get", image_id.trim(), "--raw"], b"")),
+        png
+    );
+
+    let search = successful(run(&library, &["search", "SECOND", "--full"], b""));
+    let record: serde_json::Value = serde_json::from_slice(&search).unwrap();
+    assert_eq!(record["item"]["id"], id);
+    assert_eq!(record["content"]["text"], payload);
+    let syntax = run(&library, &["search", "[", "--regex"], b"");
+    assert_eq!(syntax.status.code(), Some(2));
+    assert!(syntax.stdout.is_empty());
+
+    let missing = temp.path().join("missing");
+    let failed = run(
+        &library,
+        &["save", "--file", missing.to_str().unwrap()],
+        b"",
+    );
+    assert_eq!(failed.status.code(), Some(3));
+    let all: serde_json::Value =
+        serde_json::from_slice(&successful(run(&library, &["list", "--json"], b""))).unwrap();
+    assert_eq!(all["total"], 3);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let collection = runtime.block_on(async {
+        let core = uclip_core::CoreService::open(library.join("foundation.sqlite3"))
+            .await
+            .unwrap();
+        let collection = core
+            .create_collection(uclip_core::CreateCollection {
+                name: "Notes".into(),
+            })
+            .await
+            .unwrap();
+        let policy = core.capture_policy().await.unwrap();
+        core.update_capture_policy(uclip_core::UpdateCapturePolicy {
+            enabled: false,
+            exclude_pattern: "^excluded fixture$".into(),
+            max_items: policy.max_items,
+            expected_revision: policy.revision,
+        })
+        .await
+        .unwrap();
+        core.shutdown().await.unwrap();
+        collection
+    });
+    let excluded = run(&library, &["save", "excluded fixture"], b"");
+    assert_eq!(excluded.status.code(), Some(1));
+    assert_eq!(excluded.stderr, b"uclip: excluded\n");
+    successful(run(
+        &library,
+        &["save", "a classified note", "--collection", "Notes"],
+        b"",
+    ));
+    for selector in [collection.name.as_str(), collection.id.as_str()] {
+        assert_eq!(
+            successful(run(
+                &library,
+                &["get", "latest", "--collection", selector, "--raw"],
+                b""
+            )),
+            b"a classified note"
+        );
+    }
+
+    for shell in ["bash", "zsh"] {
+        let result = successful(run(&missing, &["completion", shell], b""));
+        assert!(!result.is_empty());
+        assert!(!missing.exists());
+    }
+}
+
+#[test]
+fn configures_remote_transport_offline_and_keeps_the_secret_out_of_status() {
+    let temp = tempfile::tempdir().unwrap();
+    let library = temp.path().join("profile");
+    successful(run(&library, &["sync", "create"], b""));
+    let config = br#"{"kind":"webdav","url":"https://uclip-fixture.invalid/","username":"fixture","password":"fixture-secret"}"#;
+    let result = successful(run(&library, &["sync", "remote"], config));
+    let result = std::str::from_utf8(&result).unwrap();
+    assert!(result.contains("uclip-fixture.invalid"));
+    assert!(!result.contains("fixture-secret"));
+    let disabled = successful(run(&library, &["sync", "lan", "false"], b""));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&disabled).unwrap()["lanEnabled"],
+        false
+    );
+    successful(run(&library, &["sync", "clear-remote"], b""));
+    let refused = run(&library, &["serve"], b"");
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(refused.stdout.is_empty());
+}
+
+#[cfg(unix)]
+mod lan {
+    use super::*;
+    use std::{
+        fs::File,
+        process::Child,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    struct Server(Child);
+
+    impl Server {
+        fn start(directory: &Path, log: &Path) -> Self {
+            Self(
+                cli(directory, &["serve"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(File::create(log).unwrap())
+                    .spawn()
+                    .unwrap(),
+            )
+        }
+
+        fn stop(&mut self) {
+            let signaled = Command::new("kill")
+                .args(["-TERM", &self.0.id().to_string()])
+                .status()
+                .unwrap();
+            assert!(signaled.success());
+            wait_for(|| self.0.try_wait().unwrap().is_some());
+            assert!(self.0.wait().unwrap().success());
+        }
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn wait_for(mut condition: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(25);
+        while !condition() {
+            assert!(
+                Instant::now() < deadline,
+                "the headless services did not converge"
+            );
+            thread::sleep(Duration::from_millis(200));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires local IPv4 multicast"]
+    fn headless_profiles_sync_lock_and_restart_without_a_display() {
+        let temp = tempfile::tempdir().unwrap();
+        let a = temp.path().join("one");
+        let b = temp.path().join("two");
+        successful(run(&a, &["sync", "create"], b""));
+        let code = successful(run(&a, &["sync", "code"], b""));
+        successful(run(&b, &["sync", "join"], &code));
+        let first = successful(run(&a, &["save", "from A"], b""));
+        let second = successful(run(&b, &["save", "from B"], b""));
+        let a_id = std::str::from_utf8(&first).unwrap().trim();
+        let b_id = std::str::from_utf8(&second).unwrap().trim();
+
+        let a_log = temp.path().join("one.log");
+        let b_log = temp.path().join("two.log");
+        let mut server = Server::start(&a, &a_log);
+        wait_for(|| std::fs::read_to_string(&a_log).is_ok_and(|log| log.contains("LAN Host")));
+        let duplicate = run(&a, &["serve"], b"");
+        assert_eq!(duplicate.status.code(), Some(4));
+        let blocked = run(&a, &["sync", "lan", "false"], b"");
+        assert_eq!(blocked.status.code(), Some(4));
+
+        let mut peer = Server::start(&b, &b_log);
+        wait_for(|| {
+            run(&b, &["get", a_id, "--raw"], b"").stdout == b"from A"
+                && run(&a, &["get", b_id, "--raw"], b"").stdout == b"from B"
+        });
+        assert!(!std::fs::read(&a_log)
+            .unwrap()
+            .windows(code.len() - 1)
+            .any(|bytes| bytes == &code[..code.len() - 1]));
+        server.stop();
+        let mut server = Server::start(&a, &a_log);
+        wait_for(|| {
+            std::fs::read_to_string(&a_log)
+                .is_ok_and(|log| log.contains("synchronization service started"))
+        });
+        assert_eq!(successful(run(&a, &["get", b_id, "--raw"], b"")), b"from B");
+        server.stop();
+        peer.stop();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an isolated X11 display"]
+fn x11_copy_outlives_the_cli_without_saving_history() {
+    use uclip_core::ClipPayload;
+    use uclip_runtime::clipboard::{self, Context, CLI_MARKER};
+    use uclip_runtime::clipboard_x11::Reader;
+
+    assert_eq!(std::env::var("UCLIP_FIXTURE_DISPLAY").as_deref(), Ok("1"));
+    assert!(!matches!(
+        std::env::var("DISPLAY").as_deref(),
+        Err(_) | Ok(":0" | ":0.0")
+    ));
+    let directory = tempfile::tempdir().unwrap();
+    let reader = Reader::new().unwrap();
+    let result = Command::new(UCLIP)
+        .args(["--data-dir"])
+        .arg(directory.path())
+        .args(["copy", "clipboard from a short-lived process"])
+        .output()
+        .unwrap();
+    assert!(successful(result).is_empty());
+    let formats = reader.formats().unwrap();
+    assert!(formats.iter().any(|name| name == CLI_MARKER));
+    assert_eq!(
+        reader.payload(&formats).unwrap(),
+        Some(ClipPayload::Text(
+            "clipboard from a short-lived process".into()
+        ))
+    );
+    assert!(!directory.path().join("foundation.sqlite3").exists());
+    // Take ownership and release the short-lived CLI publisher.
+    let context = Context::new().unwrap();
+    clipboard::write(
+        &context,
+        ClipPayload::Text("replacement".into()),
+        CLI_MARKER,
+        b"test",
+    )
+    .unwrap();
+}

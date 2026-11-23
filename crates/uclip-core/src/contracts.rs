@@ -63,6 +63,10 @@ pub enum ErrorCode {
     QueryTimeout,
     Excluded,
     DuplicateName,
+    SyncConnection,
+    SyncAuthentication,
+    SyncData,
+    FilePeerOffline,
 }
 
 /// Safe across IPC. Never expose SQLite errors, paths, or user content.
@@ -94,6 +98,10 @@ impl AppError {
             ErrorCode::Excluded => "内容命中排除规则，未保存。",
             ErrorCode::DuplicateName => "分类名称已存在，请使用其他名称。",
             ErrorCode::QueryTimeout => "搜索超时，请缩小范围或简化表达式。",
+            ErrorCode::SyncConnection => "无法连接同步设备或存储服务。",
+            ErrorCode::SyncAuthentication => "同步认证失败，请检查配对码或服务凭据。",
+            ErrorCode::SyncData => "同步数据不完整或无法读取。",
+            ErrorCode::FilePeerOffline => "文件来源设备不在线。",
             ErrorCode::Unavailable => "本地服务不可用，请重启应用。",
         };
         Self {
@@ -106,6 +114,12 @@ impl AppError {
 impl From<rusqlite::Error> for AppError {
     fn from(error: rusqlite::Error) -> Self {
         let code = match error {
+            rusqlite::Error::SqliteFailure(ref inner, Some(ref message))
+                if inner.code == rusqlite::ErrorCode::ConstraintViolation
+                    && message == "uclip_replica_clock_limit" =>
+            {
+                ErrorCode::LimitExceeded
+            }
             rusqlite::Error::SqliteFailure(ref inner, _)
                 if matches!(
                     inner.code,
@@ -233,6 +247,27 @@ pub struct ClipDetail {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipVersion {
+    pub id: String,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum EditableContent {
+    Text(String),
+    Files(Vec<String>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EditClip {
+    pub clip: ClipVersion,
+    pub content: EditableContent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipboardStatus {
     pub policy: CapturePolicy,
@@ -328,6 +363,13 @@ pub struct RenameCollection {
     pub expected_revision: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeleteCollection {
+    pub id: String,
+    pub expected_revision: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TransferMode {
@@ -342,6 +384,21 @@ pub struct TransferClip {
     pub expected_revision: String,
     pub collection_id: Option<String>,
     pub mode: TransferMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TransferClips {
+    pub clips: Vec<ClipVersion>,
+    pub collection_id: Option<String>,
+    pub mode: TransferMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipTransferBatch {
+    pub completed: Vec<ClipTransferSnapshot>,
+    pub failure: Option<AppError>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -456,4 +513,82 @@ pub struct HoverPreviewRequest {
     pub saved_at: String,
     pub size: Option<String>,
     pub anchor: PreviewAnchor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncRole {
+    Off,
+    Discovering,
+    Host,
+    Client,
+}
+
+#[derive(Clone, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SyncRemoteInput {
+    Webdav {
+        url: String,
+        username: String,
+        password: String,
+    },
+    Sftp {
+        host: String,
+        port: u16,
+        directory: String,
+        username: String,
+        password: String,
+        host_key: String,
+    },
+}
+
+#[derive(Clone, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SyncRemoteSettings {
+    Webdav {
+        url: String,
+        username: String,
+    },
+    Sftp {
+        host: String,
+        port: u16,
+        directory: String,
+        username: String,
+        host_key: String,
+    },
+}
+
+#[derive(Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    pub paired: bool,
+    pub lan_enabled: bool,
+    pub role: SyncRole,
+    pub peers: u32,
+    pub lan_last_sync: Option<String>,
+    pub lan_error: Option<AppError>,
+    pub remote: Option<SyncRemoteSettings>,
+    pub remote_last_sync: Option<String>,
+    pub remote_error: Option<AppError>,
+}
+
+#[derive(Deserialize, TS)]
+#[serde(
+    tag = "action",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum UpdateSync {
+    Create,
+    Join { code: String },
+    Lan { enabled: bool },
+    Remote { remote: Option<SyncRemoteInput> },
 }

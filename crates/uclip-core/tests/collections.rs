@@ -1,3 +1,5 @@
+mod common;
+
 use rusqlite::{params, Connection};
 use uclip_core::*;
 
@@ -361,6 +363,7 @@ fn v4_migration_preserves_history_and_rolls_back_partial_schema_without_reset() 
     let before = s.history_revision().unwrap();
     drop(s);
     let c = Connection::open(&path).unwrap();
+    common::remove_replica_schema(&c);
     c.execute_batch("DROP TABLE collections; DROP TABLE collection_changes; DROP INDEX clips_collection_order; ALTER TABLE desktop_preferences DROP COLUMN native_titlebar; ALTER TABLE desktop_preferences DROP COLUMN autostart_initialized; ALTER TABLE clips DROP COLUMN source_app; ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=4; CREATE TABLE collection_changes(fixture TEXT)").unwrap();
     assert!(Storage::open(&path).is_err());
     assert_eq!(
@@ -391,5 +394,201 @@ fn v4_migration_preserves_history_and_rolls_back_partial_schema_without_reset() 
             .get::<_, i64>(0))
             .unwrap(),
         1
+    );
+}
+
+#[test]
+fn deleting_a_collection_rolls_back_as_one_unit_and_preserves_trash_identity() {
+    let folder = tempfile::tempdir().unwrap();
+    let db = folder.path().join("collections.sqlite3");
+    let mut storage = Storage::open(&db).unwrap();
+    let group = category(&mut storage, "Work");
+    let clip = storage
+        .create_text_in_collection("keep the payload".into(), Some(group.id.clone()))
+        .unwrap();
+    let delete = DeleteCollection {
+        id: group.id.clone(),
+        expected_revision: group.revision,
+    };
+    let other_connection = Connection::open(&db).unwrap();
+    other_connection
+        .execute_batch("CREATE TRIGGER fail_collection_delete BEFORE UPDATE ON clips WHEN NEW.deleted=1 BEGIN SELECT RAISE(ABORT,'fixture'); END")
+        .unwrap();
+    let revision = storage.history_revision().unwrap();
+    assert!(storage.delete_collection(delete.clone()).is_err());
+    assert_eq!(storage.history_revision().unwrap(), revision);
+    assert_eq!(storage.collections().unwrap().items.len(), 1);
+    assert_eq!(storage.history(query(None)).unwrap().total, 1);
+    other_connection
+        .execute_batch("DROP TRIGGER fail_collection_delete")
+        .unwrap();
+    assert_eq!(storage.delete_collection(delete).unwrap(), 1);
+    assert!(storage.collections().unwrap().items.is_empty());
+    assert_eq!(storage.history(query(None)).unwrap().total, 0);
+    let trash = storage.history_window(query(None), true, None).unwrap();
+    assert_eq!(trash.items[0].id, clip);
+    assert_eq!(
+        trash.items[0].collection_id.as_deref(),
+        Some(group.id.as_str())
+    );
+    let recreated = category(&mut storage, "Work");
+    assert_ne!(recreated.id, group.id);
+    storage
+        .change_clip_deletion(ChangeClipDeletion {
+            id: clip.clone(),
+            expected_revision: trash.items[0].revision.clone(),
+            deleted: false,
+        })
+        .unwrap();
+    assert_eq!(
+        storage.history(query(None)).unwrap().items[0].collection_id,
+        None
+    );
+    assert_eq!(
+        storage.read_clip(&clip).unwrap(),
+        ClipPayload::Text("keep the payload".into())
+    );
+}
+
+#[test]
+fn batch_copy_preserves_unprocessed_sources_and_reports_the_confirmed_prefix() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut storage = Storage::open(&folder.path().join("batch.sqlite3")).unwrap();
+    let destination = category(&mut storage, "Copies");
+    let first = storage
+        .capture(ClipPayload::Text("first".into()))
+        .unwrap()
+        .unwrap();
+    let second = storage
+        .capture(ClipPayload::Text("second".into()))
+        .unwrap()
+        .unwrap();
+    policy(&mut storage, 3, "");
+    let batch = storage
+        .transfer_clips(TransferClips {
+            clips: vec![
+                ClipVersion {
+                    id: first.clone(),
+                    expected_revision: "0".into(),
+                },
+                ClipVersion {
+                    id: second.clone(),
+                    expected_revision: "0".into(),
+                },
+            ],
+            collection_id: Some(destination.id.clone()),
+            mode: TransferMode::Copy,
+        })
+        .unwrap();
+    assert_eq!(batch.completed.len(), 1);
+    assert_eq!(batch.failure.unwrap().code, ErrorCode::LimitExceeded);
+    assert_eq!(
+        storage.history(query(Some(&destination.id))).unwrap().total,
+        1
+    );
+    assert!(storage.read_clip(&first).is_ok());
+    assert!(storage.read_clip(&second).is_ok());
+}
+
+#[test]
+fn edits_preserve_identity_and_pinning_and_range_queries_require_a_current_snapshot() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("edit.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    let id = storage.create_text("original".into()).unwrap();
+    storage
+        .change_clip_pin(ChangeClipPin {
+            id: id.clone(),
+            expected_revision: "0".into(),
+            pinned: true,
+        })
+        .unwrap();
+    let version = ClipVersion {
+        id: id.clone(),
+        expected_revision: "1".into(),
+    };
+    assert_eq!(
+        storage.editable_content(version.clone()).unwrap(),
+        EditableContent::Text("original".into())
+    );
+    for index in 0..30 {
+        storage.create_text(format!("range {index:02}")).unwrap();
+    }
+    let mut range = query(None);
+    assert_eq!(
+        storage
+            .history_window(range.clone(), false, Some(27))
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidInput
+    );
+    range.expected_revision = Some(storage.history_revision().unwrap());
+    range.offset = 20;
+    assert_eq!(
+        storage
+            .history_window(range.clone(), false, Some(10))
+            .unwrap()
+            .items
+            .len(),
+        10
+    );
+    storage
+        .edit_clip(EditClip {
+            clip: version.clone(),
+            content: EditableContent::Text("fresh text\n ".into()),
+        })
+        .unwrap();
+    assert_eq!(
+        storage
+            .history_window(range, false, Some(10))
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        storage
+            .edit_clip(EditClip {
+                clip: version,
+                content: EditableContent::Text("stale write".into())
+            })
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    let source_file = folder.path().join("original-file");
+    std::fs::write(&source_file, "unchanged").unwrap();
+    let original = source_file.to_str().unwrap().to_owned();
+    let replacement = folder
+        .path()
+        .join("replacement-file")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let files = storage
+        .capture(ClipPayload::Files(vec![original]))
+        .unwrap()
+        .unwrap();
+    storage
+        .edit_clip(EditClip {
+            clip: ClipVersion {
+                id: files.clone(),
+                expected_revision: "0".into(),
+            },
+            content: EditableContent::Files(vec![replacement.clone()]),
+        })
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(source_file).unwrap(), "unchanged");
+    drop(storage);
+    let storage = Storage::open(&path).unwrap();
+    assert_eq!(
+        storage.read_clip(&files).unwrap(),
+        ClipPayload::Files(vec![replacement])
+    );
+    let first = &storage.history(query(None)).unwrap().items[0];
+    assert_eq!(first.id, id);
+    assert!(first.pinned);
+    assert_eq!(
+        storage.read_clip(&id).unwrap(),
+        ClipPayload::Text("fresh text\n ".into())
     );
 }

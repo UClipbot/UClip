@@ -524,7 +524,7 @@ pub fn window_event(window: &tauri::Window, event: &WindowEvent) {
         WindowEvent::Moved(_) | WindowEvent::Resized(_)
             if !state.restoring.load(Ordering::SeqCst) =>
         {
-            let _ = crate::hover_preview::hide(app, None, false);
+            crate::hover_preview::main_geometry_changed(window);
             let epoch = state.geometry_epoch.fetch_add(1, Ordering::SeqCst) + 1;
             let app = app.clone();
             tauri::async_runtime::spawn(async move {

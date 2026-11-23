@@ -1,6 +1,6 @@
 //! One reusable, read-only preview window. Events carry hints, never clipboard content.
 use std::{collections::VecDeque, sync::Mutex, time::Duration};
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, Window, WindowEvent};
 use uclip_core::{AppError, ErrorCode, HoverPreviewRequest};
 
 pub const LABEL: &str = "hover-preview";
@@ -11,10 +11,33 @@ pub struct PreviewState {
 #[derive(Default)]
 struct Inner {
     request: Option<HoverPreviewRequest>,
+    main_geometry: Option<MainGeometry>,
     hovered: bool,
     // Dismissal can arrive while a slower async creation is still queued.
     cancelled: VecDeque<String>,
 }
+
+#[derive(Clone, Copy, PartialEq)]
+struct MainGeometry {
+    origin: Option<PhysicalPosition<i32>>,
+    size: Option<PhysicalSize<u32>>,
+    scale: Option<f64>,
+}
+
+impl MainGeometry {
+    fn read(window: &Window) -> Self {
+        Self {
+            origin: if crate::desktop::wayland() {
+                None
+            } else {
+                window.inner_position().ok()
+            },
+            size: window.inner_size().ok(),
+            scale: window.scale_factor().ok(),
+        }
+    }
+}
+
 impl Inner {
     fn remember_cancelled(&mut self, token: &str) {
         if !self.cancelled.iter().any(|value| value == token) {
@@ -29,6 +52,7 @@ impl Inner {
             return false;
         }
         self.request = Some(request);
+        self.main_geometry = None;
         self.hovered = false;
         true
     }
@@ -52,6 +76,7 @@ impl Inner {
         }
         if matches {
             self.request = None;
+            self.main_geometry = None;
             self.hovered = false;
         }
         (matches, closed)
@@ -132,16 +157,26 @@ pub async fn show(app: tauri::AppHandle, request: HoverPreviewRequest) -> Result
     if current(&app)?.is_none_or(|value| value.token != token) {
         return Ok(());
     }
-    // Wayland compositors may reject absolute positioning; retain a regular movable window.
-    if !crate::desktop::wayland() {
-        position(&main, &window, &request)?;
-    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     let handle = app.clone();
     app.run_on_main_thread(move || {
         let result = (|| {
-            if current(&handle)?.is_none_or(|value| value.token != token) {
-                return Ok(());
+            let geometry = MainGeometry::read(&main.as_ref().window());
+            {
+                let state = handle.state::<PreviewState>();
+                let mut state = state.inner.lock().map_err(|_| unavailable())?;
+                if state
+                    .request
+                    .as_ref()
+                    .is_none_or(|value| value.token != token)
+                {
+                    return Ok(());
+                }
+                state.main_geometry = Some(geometry);
+            }
+            // Wayland leaves absolute placement to the compositor.
+            if !crate::desktop::wayland() {
+                position(&main, &window, &request)?;
             }
             window
                 .set_title(title(&handle))
@@ -225,6 +260,23 @@ pub fn protects_main(app: &tauri::AppHandle) -> bool {
                     .is_ok_and(|state| state.hovered))
     })
 }
+
+pub fn main_geometry_changed(window: &Window) {
+    let app = window.app_handle();
+    let state = app.state::<PreviewState>();
+    let anchor = state
+        .inner
+        .lock()
+        .ok()
+        .and_then(|state| Some((state.request.as_ref()?.token.clone(), state.main_geometry?)));
+    // A window manager can repeat configure notifications when a preview is mapped.
+    if let Some((token, geometry)) = anchor {
+        if geometry != MainGeometry::read(window) {
+            let _ = hide(app, Some(&token), false);
+        }
+    }
+}
+
 pub fn window_event(window: &tauri::Window, event: &WindowEvent) {
     if window.label() != LABEL {
         return;

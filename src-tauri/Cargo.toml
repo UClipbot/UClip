@@ -12,12 +12,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 uclip-core = { path = "../crates/uclip-core" }
+uclip-runtime = { path = "../crates/uclip-runtime" }
 tauri = { version = "=2.12.5", features = ["tray-icon"] }
 tauri-runtime = "=2.12.2"
 tauri-plugin-single-instance = "=2.5.5"
 tauri-plugin-global-shortcut = "=2.4.1"
-serde.workspace = true
-serde_json.workspace = true
 url = "2"
 clipboard-rs = "=0.3.5"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
@@ -44,3 +43,6 @@ objc2-foundation = { version = "=0.3.2", features = ["NSArray", "NSData", "NSStr
 
 [build-dependencies]
 tauri-build = { version = "=2.7.4", features = [] }
+
+[dev-dependencies]
+serde_json.workspace = true

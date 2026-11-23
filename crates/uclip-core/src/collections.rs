@@ -1,15 +1,17 @@
 use crate::{
     history::{
-        check_change_budget, mutation_revision, now, prune_protecting, validate_save_payload,
+        allowed_by_capture_policy, check_change_budget, mutation_revision, now, prune_protecting,
+        read_capture_policy,
     },
-    AppError, ClipTransferSnapshot, CollectionItem, CollectionsSnapshot, CreateCollection,
-    ErrorCode, RenameCollection, Storage, TransferClip, TransferMode,
+    AppError, ClipTransferBatch, ClipTransferSnapshot, CollectionItem, CollectionsSnapshot,
+    CreateCollection, DeleteCollection, ErrorCode, RenameCollection, Storage, TransferClip,
+    TransferClips, TransferMode,
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 const MAX_COLLECTIONS: u32 = 64;
 
-fn collection_name(value: &str) -> Result<(String, String), AppError> {
+pub(crate) fn collection_name(value: &str) -> Result<(String, String), AppError> {
     let name = value.trim();
     if name.is_empty()
         || name.len() > 256
@@ -137,18 +139,93 @@ impl Storage {
         &mut self,
         request: TransferClip,
     ) -> Result<ClipTransferSnapshot, AppError> {
+        let protected = serde_json::to_string(&[&request.id])
+            .map_err(|_| AppError::new(ErrorCode::InvalidInput))?;
+        self.transfer_clip_protecting(request, &protected)
+    }
+
+    pub fn delete_collection(&mut self, request: DeleteCollection) -> Result<u32, AppError> {
+        let revision = mutation_revision(&request.expected_revision)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_collection(&tx, &request.id)?;
+        if tx.execute(
+            "UPDATE collections SET deleted=1,revision=revision+1 WHERE id=?1 AND revision=?2",
+            params![request.id, revision],
+        )? != 1
+        {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        let removed = tx.execute(
+            "UPDATE clips SET deleted=1,revision=revision+1 WHERE collection=?1 AND deleted=0",
+            [&request.id],
+        )?;
+        // The whole collection must remain recoverable within the retained trash budget.
+        let deleted: u32 =
+            tx.query_row("SELECT count(*) FROM clips WHERE deleted=1", [], |row| {
+                row.get(0)
+            })?;
+        if deleted > crate::history::MAX_TRASH_ITEMS {
+            return Err(AppError::new(ErrorCode::LimitExceeded));
+        }
+        check_change_budget(&tx)?;
+        tx.execute(
+            "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(removed as u32)
+    }
+
+    pub fn transfer_clips(
+        &mut self,
+        request: TransferClips,
+    ) -> Result<ClipTransferBatch, AppError> {
+        if !(1..=1000).contains(&request.clips.len()) {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let ids: std::collections::HashSet<_> = request.clips.iter().map(|clip| &clip.id).collect();
+        if ids.len() != request.clips.len() {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let protected =
+            serde_json::to_string(&ids).map_err(|_| AppError::new(ErrorCode::InvalidInput))?;
+        let mut result = ClipTransferBatch {
+            completed: vec![],
+            failure: None,
+        };
+        for clip in request.clips {
+            match self.transfer_clip_protecting(
+                TransferClip {
+                    id: clip.id,
+                    expected_revision: clip.expected_revision,
+                    collection_id: request.collection_id.clone(),
+                    mode: request.mode,
+                },
+                &protected,
+            ) {
+                Ok(transfer) => result.completed.push(transfer),
+                Err(error) => {
+                    result.failure = Some(error);
+                    break;
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    fn transfer_clip_protecting(
+        &mut self,
+        request: TransferClip,
+        protected: &str,
+    ) -> Result<ClipTransferSnapshot, AppError> {
         if uuid::Uuid::parse_str(&request.id).is_err()
             || (request.mode == TransferMode::Copy && request.collection_id.is_none())
         {
             return Err(AppError::new(ErrorCode::InvalidInput));
         }
         let revision = mutation_revision(&request.expected_revision)?;
-        let policy = self.capture_policy()?;
-        if request.mode == TransferMode::Copy
-            && !validate_save_payload(&self.read_clip(&request.id)?, &policy)?
-        {
-            return Err(AppError::new(ErrorCode::Excluded));
-        }
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -175,11 +252,17 @@ impl Storage {
                 (request.id, revision + 1)
             }
             TransferMode::Copy => {
+                let policy = read_capture_policy(&tx)?;
+                let payload = Self::read_active_clip(&tx, &request.id, Some(revision))?;
+                if !allowed_by_capture_policy(&payload, &policy)? {
+                    return Err(AppError::new(ErrorCode::Excluded));
+                }
                 let id = uuid::Uuid::new_v4().to_string();
                 tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,origin,pinned,deleted,collection,captured_at,last_used_at,sequence,revision)
                     SELECT ?1,kind,text,data,width,height,file_count,fingerprint,'manual',0,0,?2,?3,NULL,(SELECT revision+1 FROM history_meta WHERE singleton=1),0 FROM clips WHERE id=?4", params![id,request.collection_id,now(),request.id])?;
+                crate::replica::copy_file_reference(&tx, &request.id, &id)?;
                 // A copy must preserve its source even when capacity is tight.
-                prune_protecting(&tx, policy.max_items, Some(&id), Some(&request.id))?;
+                prune_protecting(&tx, policy.max_items, Some(&id), protected)?;
                 check_change_budget(&tx)?;
                 (id, 0)
             }

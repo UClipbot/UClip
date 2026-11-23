@@ -1,3 +1,5 @@
+mod common;
+
 use rusqlite::Connection;
 use tempfile::tempdir;
 use uclip_core::{CoreService, ErrorCode, Storage, Theme, UpdateSettings};
@@ -264,6 +266,7 @@ fn v8_migration_preserves_settings_and_defaults_to_system_language() {
     storage.update_settings(update(Theme::Dark, "0")).unwrap();
     drop(storage);
     let connection = Connection::open(&path).unwrap();
+    common::remove_replica_schema(&connection);
     connection
         .execute_batch("ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; ALTER TABLE settings DROP COLUMN language; PRAGMA user_version=8;")
         .unwrap();
@@ -304,6 +307,7 @@ fn search_toolbar_defaults_to_visible_and_keeps_a_saved_opt_out() {
     drop(storage);
 
     let connection = Connection::open(&path).unwrap();
+    common::remove_replica_schema(&connection);
     connection
         .execute_batch(
             "ALTER TABLE settings DROP COLUMN show_search_by_default; DROP TABLE quick_paste_preferences; DROP TABLE auxiliary_window_sizes; PRAGMA user_version=12;",

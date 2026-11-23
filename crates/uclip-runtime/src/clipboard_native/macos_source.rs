@@ -7,7 +7,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::NSString;
 
-pub(crate) enum Source {
+pub enum Source {
     Explicit(Option<String>),
     Foreground(Option<(i32, String)>),
 }
@@ -38,7 +38,7 @@ impl Source {
         Self::Foreground(foreground())
     }
 
-    pub(crate) fn finish(self) -> Option<String> {
+    pub fn finish(self) -> Option<String> {
         match self {
             Self::Explicit(name) => name,
             Self::Foreground(before) => {

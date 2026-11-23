@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, Language, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 15;
+pub const SCHEMA_VERSION: u32 = 18;
 const APPLICATION_ID: i64 = 0x434c4e58; // Stable database format ID (CLNX), independent of the product name.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -173,6 +173,25 @@ impl Storage {
             )?;
             tx.pragma_update(None, "user_version", 15)?;
         }
+        if version < 16 {
+            crate::replica::migrate(&tx)?;
+            tx.pragma_update(None, "user_version", 16)?;
+        }
+        if version < 17 {
+            if version == 16 {
+                crate::replica::validate_triggers(&tx)?;
+                crate::replica::migrate_legacy_grants(&tx)?;
+            }
+            crate::replica::migrate_frontier(&tx)?;
+            tx.pragma_update(None, "user_version", 17)?;
+        }
+        if version < 18 {
+            if version == 17 {
+                crate::replica::validate_triggers(&tx)?;
+            }
+            crate::replica::migrate_latest(&tx)?;
+            tx.pragma_update(None, "user_version", 18)?;
+        }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -208,6 +227,7 @@ impl Storage {
             return Err(AppError::new(ErrorCode::Storage));
         }
         storage.settings()?; // Fail startup on an invalid persisted setting.
+        storage.validate_replica_schema()?;
         Ok(storage)
     }
 

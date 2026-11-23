@@ -2,11 +2,12 @@
 
 English | [Simplified Chinese](README.zh-CN.md)
 
-UClip is a local-first clipboard manager. Save what you copy, then quickly search, organize, and paste it again. Your history stays on your device.
+UClip is a local-first clipboard manager. Save what you copy, then quickly search, organize, and paste it again. History is stored locally, with optional encrypted sync.
 
 ## Features
 
 - **Clipboard history**: Keep text, images, and file or folder references across restarts.
+- **Sync**: Merge history across devices on your local network or using WebDAV or SFTP storage.
 - **Quick search**: Search by content and type, with regular expression support.
 - **Copy and paste**: Copy history back to the clipboard. Linux X11 also supports pasting into the original app.
 - **Capture controls**: Pause or resume capture, set exclusion rules, and limit history capacity.
@@ -23,14 +24,23 @@ UClip is a local-first clipboard manager. Save what you copy, then quickly searc
 
 1. Launch UClip. Capture starts automatically; you can pause or resume it in **Settings → Capture**. Your choice is saved across restarts.
 2. Copy content in other apps. New copies appear in your history.
-3. Search and select a record, then press Enter or click Copy. Paste it in the target app.
-4. On Linux X11, use Ctrl+Shift+V to show UClip, then choose **Paste to original app**.
+3. Open UClip from the target app with its main-window shortcut. On Linux X11 the default is Ctrl+Shift+V.
+4. Select one record and press Enter to paste it into the original app. If automatic paste is unavailable, UClip copies the record for manual paste.
 
-In **Settings → Shortcuts**, configure the main window and Quick Paste panel under **Global shortcuts**. Edit search, copy and navigation in the **Window shortcuts** group on the same page. In Quick Paste, press **1–5** to select a recent item. Use the main-window shortcut to expand the panel. You can also press the panel shortcut's final key again if it is a letter or another non-digit key. To include pinned items, use **Settings → Desktop → Show pinned items in Quick Paste**.
+In **Settings → Shortcuts**, configure the main window and Quick Paste panel under **Global shortcuts**. Edit search, paste and navigation in the **Window shortcuts** group on the same page. In Quick Paste, press **1–5** to select a recent item. Use the main-window shortcut to expand the panel. You can also press the panel shortcut's final key again if it is a letter or another non-digit key. To include pinned items, use **Settings → Desktop → Show pinned items in Quick Paste**.
 
 File records store references. The original files must still exist when you use them.
 
 Search and filters are shown by default. Change this in Settings → Appearance.
+
+## Sync history
+
+1. In **Settings → Sync**, create a group on one device. Show the pairing code and enter it under **Join sync group** on each other device. A paired group shares all existing and future history, including its collections, pins, and Trash.
+2. Devices discover each other on the same IPv4 local network. The first established host coordinates the merge. Another online device takes over when the host leaves. Keep local network access enabled for UClip in your firewall.
+3. For devices that are online at different times, select **WebDAV** or **SFTP** under **Server storage** on both devices. Use the same pairing code and remote directory. WebDAV uses HTTPS and supports HTTP Basic authentication. SFTP uses password authentication and verifies the SSH host key against the SHA-256 fingerprint you provide. The server stores encrypted history. Leave local network sync on to use both paths at the same time.
+4. To paste a file from another device, select its item in history and copy or paste it as usual. UClip retrieves the original from the online source over the local network. Transfers support regular files and folders, up to 256 MiB per paste. UClip caches received copies locally and removes copies older than 24 hours at startup or before a later transfer.
+
+Synced items are ordered by capture or save time within the pinned and unpinned groups. A conflict keeps the latest operation, including edits, deletions, and restores. Keep all devices in the group on the same UClip version. Shared history has a 512 MiB payload limit, and synced items are retained across devices independently of the local capture count setting.
 
 ## Common shortcuts
 
@@ -38,7 +48,8 @@ Search and filters are shown by default. Change this in Settings → Appearance.
 | --- | --- |
 | Show or hide search and filters | Ctrl/Cmd+F |
 | Settings | Ctrl/Cmd+, |
-| Copy selected record | Enter |
+| Paste one selected record, with copy as a fallback | Enter |
+| Copy the selection | Ctrl/Cmd+C |
 | View full content | Space |
 | Delete selected record | Delete |
 | Go back, clear search, or hide window | Esc |
@@ -51,7 +62,35 @@ Search and filters are shown by default. Change this in Settings → Appearance.
 | Linux Wayland | Local UI and history queries verified; capture and automatic paste are not supported yet |
 | Windows / macOS | Platform adapters exist; native acceptance testing is pending |
 
-UClip is in development. Cloud sync, CLI, and migration from older data are not available yet.
+UClip is in development. Migration from older data is pending.
+
+## Command line and headless synchronization
+
+Install the standalone `uclip` command with Rust and a C build toolchain. It can run without a desktop installation or display server.
+
+```bash
+cargo install --locked --path crates/uclip-cli
+printf 'A note\n' | uclip save
+uclip list --json
+uclip search note --full
+uclip get latest --raw
+uclip copy --file ./notes.txt
+```
+
+`get` accepts a UUID, `latest`, `--position` (one-based), or `--index` (zero-based). `--raw` preserves text bytes. Images are read as PNG, and file references are read as a JSON array of paths. `list` and `search` accept `--collection` (name or UUID) and `--limit`. `--full` produces JSON Lines with complete content. Use `--image` to read an image, `--file` to read text, or repeat `--reference` to save paths. `completion bash` and `completion zsh` generate shell completion scripts. Diagnostics go to stderr. Exit codes are `0` for success, `1` for other errors, `2` for invalid input, `3` for missing data, and `4` for conflicts or a busy library. An empty query result succeeds with zero rows.
+
+The default library follows the desktop installation for the same build profile. `--dev` selects the `tauri:dev` library, `--portable` selects a profile under `uclip-data` beside the executable, and `--data-dir` or `UCLIP_DATA_DIR` selects an absolute library directory. On Unix, use a directory private to the account running UClip. History access works without a GUI. Clipboard writes require a supported desktop session, and copying a remote file reference still requires the desktop's LAN retrieval path.
+
+To keep an encrypted sync peer online, initialize a new private library and start the service in the foreground:
+
+```bash
+export UCLIP_DATA_DIR="$HOME/.local/share/uclip-server"
+uclip sync create
+uclip sync code
+uclip serve
+```
+
+Treat the pairing code like a password and enter it on other devices. To reuse an existing group, pass its code to `uclip sync join` through stdin. `uclip sync remote < profile.json` accepts a WebDAV or SFTP profile through stdin. Use `uclip sync remote --help` for the format, and `uclip sync status` to inspect saved settings without credentials. LAN discovery uses IPv4 multicast, and the headless peer follows the same host election as desktop peers. Run one sync process per library and stop it before changing sync settings. `serve` handles Ctrl+C and Unix SIGTERM, so a service manager can supervise it directly.
 
 ## Run from source
 

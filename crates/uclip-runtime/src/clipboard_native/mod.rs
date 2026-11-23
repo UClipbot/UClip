@@ -1,6 +1,8 @@
 //! Bounded native formats and checked publication. No business rule lives here.
 use std::io::Cursor;
-use uclip_core::{AppError, ClipPayload, ErrorCode, MAX_IMAGE_PIXELS, MAX_TEXT_BYTES};
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
+use uclip_core::MAX_TEXT_BYTES;
+use uclip_core::{AppError, ClipPayload, ErrorCode, MAX_IMAGE_PIXELS};
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -8,10 +10,10 @@ pub use macos::Context;
 #[cfg(target_os = "windows")]
 mod windows;
 #[cfg(target_os = "windows")]
-pub(crate) use windows::ClipboardWrite;
+pub use windows::ClipboardWrite;
 #[cfg(target_os = "windows")]
 pub use windows::Context;
-const MAX_ENCODED_IMAGE: usize = 40 * 1024 * 1024;
+pub const MAX_ENCODED_IMAGE: usize = 40 * 1024 * 1024;
 fn error() -> AppError {
     AppError::new(ErrorCode::Clipboard)
 }
@@ -34,7 +36,10 @@ fn text(bytes: Vec<u8>) -> Result<Option<ClipPayload>, AppError> {
     let value = String::from_utf8(bytes).map_err(|_| invalid())?;
     Ok((!value.is_empty()).then_some(ClipPayload::Text(value)))
 }
-fn decode_image(bytes: &[u8], format: Option<image::ImageFormat>) -> Result<ClipPayload, AppError> {
+pub fn decode_image(
+    bytes: &[u8],
+    format: Option<image::ImageFormat>,
+) -> Result<ClipPayload, AppError> {
     check_length(bytes.len(), MAX_ENCODED_IMAGE)?;
     let reader = || -> Result<image::ImageReader<Cursor<&[u8]>>, AppError> {
         let mut r = image::ImageReader::new(Cursor::new(bytes));
@@ -80,7 +85,7 @@ fn decode_image(bytes: &[u8], format: Option<image::ImageFormat>) -> Result<Clip
     payload.validate()?;
     Ok(payload)
 }
-fn png(width: u32, height: u32, rgba: Vec<u8>) -> Result<Vec<u8>, AppError> {
+pub fn png(width: u32, height: u32, rgba: Vec<u8>) -> Result<Vec<u8>, AppError> {
     let image = image::RgbaImage::from_raw(width, height, rgba).ok_or_else(invalid)?;
     let mut out = Cursor::new(Vec::new());
     image

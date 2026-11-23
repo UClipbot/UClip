@@ -1,14 +1,7 @@
 //! All clipboard reads/writes live on a bounded actor, independently of the WebView.
-#[cfg(target_os = "windows")]
-use crate::clipboard_native::ClipboardWrite;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-use crate::clipboard_native::Context as ClipboardContext;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clipboard_rs::{common::RustImage, RustImageData};
-#[cfg(target_os = "linux")]
-use clipboard_rs::{Clipboard, ClipboardContent, ClipboardContext};
 use std::{
-    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, SyncSender},
@@ -21,17 +14,19 @@ use uclip_core::{
     ErrorCode, UpdateCapturePolicy,
 };
 
-#[derive(Clone)]
-pub(super) struct Captured {
-    pub(super) payload: ClipPayload,
-    pub(super) source_app: Option<String>,
-}
 use tokio::sync::oneshot;
-pub(super) const MARKER: &str = "application/x-uclip-internal";
+pub use uclip_runtime::clipboard::normalize_files;
+#[cfg(target_os = "linux")]
+use uclip_runtime::clipboard::sensitive;
+use uclip_runtime::clipboard::{write, Captured, Context as ClipboardContext, MARKER};
 type Reply<T> = oneshot::Sender<Result<T, AppError>>;
 enum Request {
     Policy(UpdateCapturePolicy, Reply<CapturePolicy>),
-    Copy(CopyRequest, Reply<CopyResult>),
+    Copy(
+        CopyRequest,
+        Option<crate::sync::StagedFiles>,
+        Reply<CopyResult>,
+    ),
     Deletion(
         uclip_core::ChangeClipDeletion,
         Reply<uclip_core::ClipDeletionSnapshot>,
@@ -41,6 +36,7 @@ enum Request {
 enum CopyRequest {
     History {
         ids: Vec<String>,
+        history_revision: Option<String>,
         paste: bool,
         fallback: bool,
     },
@@ -63,6 +59,7 @@ pub struct ClipboardService {
     state: Arc<Mutex<State>>,
     core: CoreService,
     paste: Arc<crate::paste::PasteService>,
+    sync: Option<crate::sync::SyncService>,
 }
 fn error() -> AppError {
     AppError::new(ErrorCode::Clipboard)
@@ -72,7 +69,11 @@ fn block<T>(future: impl std::future::Future<Output = T>) -> T {
 }
 
 impl ClipboardService {
-    pub fn start(core: CoreService, app: Option<tauri::AppHandle>) -> Result<Self, AppError> {
+    pub(crate) fn start(
+        core: CoreService,
+        app: Option<tauri::AppHandle>,
+        sync: Option<crate::sync::SyncService>,
+    ) -> Result<Self, AppError> {
         #[cfg(target_os = "linux")]
         if std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s == "wayland")
             || std::env::var_os("WAYLAND_DISPLAY").is_some()
@@ -88,6 +89,7 @@ impl ClipboardService {
             state: state.clone(),
             core: core.clone(),
             paste: paste.clone(),
+            sync,
         };
         std::thread::Builder::new()
             .name("uclip-clipboard".into())
@@ -138,15 +140,25 @@ impl ClipboardService {
                             }
                             let _ = reply.send(response);
                         }
-                        Ok(Request::Copy(request, reply)) => {
+                        Ok(Request::Copy(request, mut staged, reply)) => {
+                            let replacements = staged
+                                .as_ref()
+                                .map(crate::sync::StagedFiles::replacements)
+                                .unwrap_or_default();
                             let response = (|| {
                                 let (ids, payload, prepared, active) = match request {
                                     CopyRequest::History {
                                         ids,
+                                        history_revision,
                                         paste: auto_paste,
                                         fallback,
                                     } => {
-                                        let payload = block(core.read_clips(ids.clone()))?;
+                                        let payload = block(core.clipboard_payload(
+                                            ids.clone(),
+                                            history_revision,
+                                            None,
+                                            replacements,
+                                        ))?;
                                         let prepared =
                                             match auto_paste.then(|| paste.prepare()).transpose() {
                                                 Err(error)
@@ -169,9 +181,12 @@ impl ClipboardService {
                                         target,
                                         active,
                                     } => {
-                                        let payload = block(
-                                            core.read_quick_paste_slot(id.clone(), revision),
-                                        )?;
+                                        let payload = block(core.clipboard_payload(
+                                            vec![id.clone()],
+                                            None,
+                                            Some(revision),
+                                            replacements,
+                                        ))?;
                                         let prepared = target
                                             .map(|target| paste.prepare_invocation(target, &active))
                                             .transpose()?;
@@ -187,9 +202,12 @@ impl ClipboardService {
                                     return Err(AppError::new(ErrorCode::TargetLost));
                                 }
                                 #[cfg(target_os = "windows")]
-                                let publication = write(&context, payload, &marker)?;
+                                let publication = write(&context, payload, MARKER, &marker)?;
                                 #[cfg(not(target_os = "windows"))]
-                                write(&context, payload, &marker)?;
+                                write(&context, payload, MARKER, &marker)?;
+                                if let Some(staged) = &mut staged {
+                                    staged.preserve();
+                                }
                                 #[cfg(target_os = "linux")]
                                 let selection_owner = if active.is_some() && prepared.is_some() {
                                     quick_selection_owner(&marker).map(Some)
@@ -292,6 +310,9 @@ impl ClipboardService {
                             }
                         }
                         let snapshot = &pending_payload.as_ref().expect("snapshot ready").1;
+                        if matches!(&snapshot.payload, ClipPayload::Text(text) if crate::sync::is_pairing_code(text)) {
+                            return Ok(false);
+                        }
                         block(core.capture_with_source(
                             snapshot.payload.clone(),
                             snapshot.source_app.clone(),
@@ -365,19 +386,41 @@ impl ClipboardService {
     pub fn capture_target(&self) {
         self.paste.capture_target();
     }
+    async fn stage_files(
+        &self,
+        ids: Vec<String>,
+    ) -> Result<Option<crate::sync::StagedFiles>, AppError> {
+        let tickets = self.core.remote_file_tickets(ids).await?;
+        if tickets.is_empty() {
+            return Ok(None);
+        }
+        let sync = self
+            .sync
+            .clone()
+            .ok_or_else(|| AppError::new(ErrorCode::FilePeerOffline))?;
+        tauri::async_runtime::spawn_blocking(move || sync.take_files(tickets))
+            .await
+            .map_err(|_| AppError::new(ErrorCode::Unavailable))?
+            .map(Some)
+    }
+
     pub async fn copy(
         &self,
         ids: Vec<String>,
         paste: bool,
         fallback_to_copy: bool,
+        history_revision: Option<String>,
     ) -> Result<CopyResult, AppError> {
+        let staged = self.stage_files(ids.clone()).await?;
         let (tx, rx) = oneshot::channel();
         self.submit(Request::Copy(
             CopyRequest::History {
                 ids,
+                history_revision,
                 paste,
                 fallback: fallback_to_copy,
             },
+            staged,
             tx,
         ))?;
         rx.await.map_err(|_| error())?
@@ -393,6 +436,10 @@ impl ClipboardService {
         target: Option<crate::paste::InvocationTarget>,
         active: Arc<AtomicBool>,
     ) -> Result<CopyResult, AppError> {
+        let staged = self.stage_files(vec![id.clone()]).await?;
+        if !active.load(Ordering::Acquire) {
+            return Err(AppError::new(ErrorCode::TargetLost));
+        }
         let (tx, rx) = oneshot::channel();
         self.submit(Request::Copy(
             CopyRequest::Quick {
@@ -401,6 +448,7 @@ impl ClipboardService {
                 target,
                 active,
             },
+            staged,
             tx,
         ))?;
         rx.await.map_err(|_| error())?
@@ -425,26 +473,6 @@ impl ClipboardService {
     }
 }
 
-pub(super) fn sensitive(
-    formats: &[String],
-    get_buffer: impl Fn(&str) -> Result<Vec<u8>, AppError>,
-) -> bool {
-    formats.iter().any(|format| {
-        let lower = format.to_ascii_lowercase();
-        if lower.contains("concealed")
-            || lower.contains("transient")
-            || lower.contains("passwordmanager")
-            || lower.contains("keepass")
-            || lower == "excludeclipboardcontentfrommonitorprocessing"
-        {
-            return true;
-        }
-        if lower == "canincludeinclipboardhistory" || lower == "canuploadtocloudclipboard" {
-            return get_buffer(format).map_or(true, |v| v.iter().all(|b| *b == 0));
-        }
-        false
-    })
-}
 #[cfg(not(target_os = "linux"))]
 fn stable_read(
     context: &ClipboardContext,
@@ -477,36 +505,9 @@ fn stable_read(
     Ok(captured)
 }
 
-pub fn normalize_files(files: Vec<String>) -> Result<Vec<String>, AppError> {
-    files
-        .into_iter()
-        .map(|path| {
-            if path.starts_with("file:") {
-                let uri = url::Url::parse(&path).map_err(|_| error())?;
-                if uri
-                    .host_str()
-                    .is_some_and(|h| !h.is_empty() && h != "localhost")
-                    || uri.query().is_some()
-                    || uri.fragment().is_some()
-                {
-                    return Err(AppError::new(ErrorCode::InvalidInput));
-                }
-                uri.to_file_path()
-                    .map_err(|_| error())?
-                    .into_os_string()
-                    .into_string()
-                    .map_err(|_| error())
-            } else if Path::new(&path).is_absolute() {
-                Ok(path)
-            } else {
-                Err(AppError::new(ErrorCode::InvalidInput))
-            }
-        })
-        .collect()
-}
 #[cfg(target_os = "linux")]
 fn quick_selection_owner(marker: &[u8]) -> Result<u32, AppError> {
-    let reader = crate::clipboard_x11::Reader::new()?;
+    let reader = uclip_runtime::clipboard_x11::Reader::new()?;
     let owner = reader.owner()?;
     if owner == 0 || reader.buffer(MARKER, 64)? != marker || reader.owner()? != owner {
         return Err(AppError::new(ErrorCode::TargetLost));
@@ -514,73 +515,6 @@ fn quick_selection_owner(marker: &[u8]) -> Result<u32, AppError> {
     Ok(owner)
 }
 
-#[cfg(target_os = "linux")]
-fn write(context: &ClipboardContext, payload: ClipPayload, marker: &[u8]) -> Result<(), AppError> {
-    payload.validate()?;
-    let content = match payload {
-        ClipPayload::Text(text) => ClipboardContent::Text(text),
-        ClipPayload::Image {
-            width,
-            height,
-            rgba,
-        } => ClipboardContent::Image(RustImageData::from_dynamic_image(
-            image::DynamicImage::ImageRgba8(
-                image::RgbaImage::from_raw(width, height, rgba).ok_or_else(error)?,
-            ),
-        )),
-        ClipPayload::Files(paths) => {
-            if paths
-                .iter()
-                .any(|p| !PathBuf::from(p).try_exists().unwrap_or(false))
-            {
-                return Err(AppError::new(ErrorCode::MissingFile));
-            }
-            #[cfg(target_os = "linux")]
-            let paths = paths
-                .iter()
-                .map(|p| {
-                    url::Url::from_file_path(p)
-                        .map(|u| u.to_string())
-                        .map_err(|_| error())
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            ClipboardContent::Files(paths)
-        }
-    };
-    context
-        .set(vec![
-            content,
-            ClipboardContent::Other(MARKER.into(), marker.to_vec()),
-        ])
-        .map_err(|_| error())
-}
-#[cfg(target_os = "windows")]
-fn write(
-    context: &ClipboardContext,
-    payload: ClipPayload,
-    marker: &[u8],
-) -> Result<ClipboardWrite, AppError> {
-    validate_native_write(&payload)?;
-    context.write(payload, marker)
-}
-#[cfg(target_os = "macos")]
-fn write(context: &ClipboardContext, payload: ClipPayload, marker: &[u8]) -> Result<(), AppError> {
-    validate_native_write(&payload)?;
-    context.write(payload, marker)
-}
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-fn validate_native_write(payload: &ClipPayload) -> Result<(), AppError> {
-    payload.validate()?;
-    if let ClipPayload::Files(paths) = payload {
-        if paths
-            .iter()
-            .any(|p| !PathBuf::from(p).try_exists().unwrap_or(false))
-        {
-            return Err(AppError::new(ErrorCode::MissingFile));
-        }
-    }
-    Ok(())
-}
 pub fn detail(id: String, payload: ClipPayload, thumbnail: bool) -> Result<ClipDetail, AppError> {
     let (text, image_data_url) = match payload {
         ClipPayload::Text(text) => (text, None),
@@ -626,7 +560,7 @@ fn stable_read(
     if before != expected_generation {
         return Err(AppError::new(ErrorCode::Busy));
     }
-    let reader = crate::clipboard_x11::Reader::new()?;
+    let reader = uclip_runtime::clipboard_x11::Reader::new()?;
     let owner = reader.owner()?;
     let formats = reader.formats()?;
     if sensitive(&formats, |f| reader.buffer(f, 16)) {

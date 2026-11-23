@@ -6,6 +6,33 @@ use uclip_core::{
 use crate::{paths::DATA_PROFILE, platform, AppState};
 
 #[tauri::command]
+pub async fn sync_status(state: State<'_, AppState>) -> Result<uclip_core::SyncStatus, AppError> {
+    let sync = state.sync.as_ref().map_err(Clone::clone)?.clone();
+    tauri::async_runtime::spawn_blocking(move || sync.status())
+        .await
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+}
+
+#[tauri::command]
+pub async fn update_sync(
+    state: State<'_, AppState>,
+    request: uclip_core::UpdateSync,
+) -> Result<uclip_core::SyncStatus, AppError> {
+    let sync = state.sync.as_ref().map_err(Clone::clone)?.clone();
+    tauri::async_runtime::spawn_blocking(move || sync.update(request))
+        .await
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+}
+
+#[tauri::command]
+pub async fn sync_pairing_code(state: State<'_, AppState>) -> Result<String, AppError> {
+    let sync = state.sync.as_ref().map_err(Clone::clone)?.clone();
+    tauri::async_runtime::spawn_blocking(move || sync.pairing_code())
+        .await
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+}
+
+#[tauri::command]
 pub async fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapSnapshot, AppError> {
     let core = state.core.as_ref().map_err(Clone::clone)?;
     Ok(BootstrapSnapshot {
@@ -40,12 +67,14 @@ pub async fn update_settings(
 pub async fn history_query(
     state: State<'_, AppState>,
     request: uclip_core::HistoryQuery,
+    trash: Option<bool>,
+    count: Option<u32>,
 ) -> Result<uclip_core::HistoryPage, AppError> {
     state
         .core
         .as_ref()
         .map_err(Clone::clone)?
-        .history(request)
+        .history_window(request, trash.unwrap_or(false), count)
         .await
 }
 #[tauri::command]
@@ -125,6 +154,7 @@ pub async fn copy_clip(
     state: State<'_, AppState>,
     id: String,
     ids: Option<Vec<String>>,
+    history_revision: Option<String>,
     paste: bool,
     fallback_to_copy: Option<bool>,
 ) -> Result<uclip_core::CopyResult, AppError> {
@@ -136,6 +166,7 @@ pub async fn copy_clip(
             ids.unwrap_or_else(|| vec![id]),
             paste,
             fallback_to_copy.unwrap_or(false),
+            history_revision,
         )
         .await
 }
@@ -609,6 +640,58 @@ pub async fn transfer_clip(
         .as_ref()
         .map_err(Clone::clone)?
         .transfer_clip(request)
+        .await
+}
+
+#[tauri::command]
+pub async fn delete_collection(
+    state: State<'_, AppState>,
+    request: uclip_core::DeleteCollection,
+) -> Result<u32, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .delete_collection(request)
+        .await
+}
+
+#[tauri::command]
+pub async fn transfer_clips(
+    state: State<'_, AppState>,
+    request: uclip_core::TransferClips,
+) -> Result<uclip_core::ClipTransferBatch, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .transfer_clips(request)
+        .await
+}
+
+#[tauri::command]
+pub async fn editable_content(
+    state: State<'_, AppState>,
+    request: uclip_core::ClipVersion,
+) -> Result<uclip_core::EditableContent, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .editable_content(request)
+        .await
+}
+
+#[tauri::command]
+pub async fn edit_clip(
+    state: State<'_, AppState>,
+    request: uclip_core::EditClip,
+) -> Result<(), AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .edit_clip(request)
         .await
 }
 

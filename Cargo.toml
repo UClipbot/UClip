@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/uclip-core", "src-tauri"]
+members = ["crates/uclip-core", "crates/uclip-runtime", "crates/uclip-cli", "src-tauri"]
 default-members = ["crates/uclip-core"]
 resolver = "2"
 
