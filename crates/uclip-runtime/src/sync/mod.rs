@@ -21,15 +21,15 @@ use std::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use uclip_core::{
-    AppError, CoreService, ErrorCode, FileTicket, SyncRemoteInput, SyncRemoteSettings, SyncRole,
-    SyncStatus, UpdateSync,
+    AppError, CoreService, ErrorCode, FileTicket, SyncRemoteInput, SyncRemoteProgress,
+    SyncRemoteSettings, SyncRole, SyncStatus, UpdateSync,
 };
 use uuid::Uuid;
 
 use self::{
     archive::{Archive, ArchiveStore},
     lan::{derive, Lan},
-    transport::{block, limit, reconcile, unavailable},
+    transport::{block, limit, reconcile_with_progress, unavailable},
 };
 
 fn storage() -> AppError {
@@ -164,8 +164,8 @@ impl Profile {
 
 #[derive(Default)]
 struct RemoteReport {
-    syncing: bool,
-    success: Option<u64>,
+    progress: Option<SyncRemoteProgress>,
+    success: Option<(u64, u32)>,
     error: Option<AppError>,
 }
 
@@ -188,7 +188,10 @@ impl RemoteWorker {
         );
         let key = derive(&key, b"uclip/archive/encryption/v1")?;
         let stop = Arc::new(AtomicBool::new(false));
-        let report = Arc::new(Mutex::new(RemoteReport::default()));
+        let report = Arc::new(Mutex::new(RemoteReport {
+            progress: Some(SyncRemoteProgress::Queued),
+            ..RemoteReport::default()
+        }));
         let (request, wake) = mpsc::sync_channel(1);
         let signal = stop.clone();
         let status = report.clone();
@@ -196,16 +199,22 @@ impl RemoteWorker {
             .name("uclip-sync-storage".into())
             .spawn(move || {
                 while !signal.load(Ordering::Acquire) {
-                    if let Ok(mut status) = status.lock() {
-                        status.syncing = true;
-                    }
+                    let progress = |stage| {
+                        if let Ok(mut report) = status.lock() {
+                            report.progress = Some(stage);
+                        }
+                    };
+                    progress(SyncRemoteProgress::Connecting);
+                    // An explicit request may arrive just as the automatic timer wakes.
+                    let _ = wake.try_recv();
                     let result = match &settings {
                         SyncRemoteInput::Webdav {
                             url,
                             username,
                             password,
-                        } => dav::Dav::connect(url, username, password, &name)
-                            .and_then(|store| archive_round(&core, store, key, &device, &signal)),
+                        } => dav::Dav::connect(url, username, password, &name).and_then(|store| {
+                            archive_round(&core, store, key, &device, &signal, progress)
+                        }),
                         SyncRemoteInput::Sftp {
                             host,
                             port,
@@ -216,14 +225,22 @@ impl RemoteWorker {
                         } => sftp::Ssh::connect(
                             host, *port, directory, username, password, host_key, &name,
                         )
-                        .and_then(|store| archive_round(&core, store, key, &device, &signal)),
+                        .and_then(|store| {
+                            archive_round(&core, store, key, &device, &signal, progress)
+                        }),
                     };
                     if let Ok(mut status) = status.lock() {
-                        status.syncing = false;
-                        if matches!(result, Ok(true)) {
-                            status.success = Some(lan::now());
+                        status.progress = None;
+                        match result {
+                            Ok(Some(records)) => {
+                                status.success = Some((lan::now(), records));
+                                status.error = None;
+                            }
+                            Ok(None) => {
+                                status.error = Some(AppError::new(ErrorCode::SyncData));
+                            }
+                            Err(error) => status.error = Some(error),
                         }
-                        status.error = result.err();
                     }
                     if wake.recv_timeout(Duration::from_secs(6))
                         == Err(mpsc::RecvTimeoutError::Disconnected)
@@ -241,8 +258,14 @@ impl RemoteWorker {
     }
 
     fn sync_now(&self) -> Result<(), AppError> {
+        let mut report = self.report.lock().map_err(|_| storage())?;
         match self.request.try_send(()) {
-            Ok(()) | Err(TrySendError::Full(())) => Ok(()),
+            Ok(()) | Err(TrySendError::Full(())) => {
+                if report.progress.is_none() {
+                    report.progress = Some(SyncRemoteProgress::Queued);
+                }
+                Ok(())
+            }
             Err(TrySendError::Disconnected(())) => Err(AppError::new(ErrorCode::Unavailable)),
         }
     }
@@ -254,9 +277,10 @@ fn archive_round<S: ArchiveStore>(
     key: [u8; 32],
     device: &str,
     stop: &AtomicBool,
-) -> Result<bool, AppError> {
+    progress: impl FnMut(SyncRemoteProgress),
+) -> Result<Option<u32>, AppError> {
     let mut remote = Archive::new(ActiveStore(store, stop), key, device.into());
-    reconcile(core, &mut remote)
+    reconcile_with_progress(core, &mut remote, progress)
 }
 
 struct ActiveStore<'a, S>(S, &'a AtomicBool);
@@ -412,7 +436,14 @@ impl SyncService {
             lan_error: None,
             remote: profile.view(),
             remote_syncing: false,
+            remote_progress: None,
             remote_last_sync: None,
+            remote_synced_records: None,
+            local_only_records: profile
+                .code
+                .is_some()
+                .then(|| block(core.replica_local_only_count()))
+                .transpose()?,
             remote_error: None,
         })
     }
@@ -463,19 +494,15 @@ impl SyncService {
             Some(Err(error)) => (SyncRole::Discovering, 0, None, Some(error.clone())),
             None => (SyncRole::Off, 0, None, None),
         };
-        let (remote_syncing, remote_last_sync, remote_error) = match &state.remote {
+        let (remote_progress, remote_success, remote_error) = match &state.remote {
             Some(Ok(remote)) => {
                 let report = remote.report.lock().map_err(|_| storage())?;
-                (
-                    report.syncing,
-                    report.success.map(|time| time.to_string()),
-                    report.error.clone(),
-                )
+                (report.progress, report.success, report.error.clone())
             }
-            Some(Err(error)) => (false, None, Some(error.clone())),
-            None => (false, None, None),
+            Some(Err(error)) => (None, None, Some(error.clone())),
+            None => (None, None, None),
         };
-        Ok(SyncStatus {
+        let mut status = SyncStatus {
             paired: state.profile.code.is_some(),
             lan_enabled: state.profile.lan,
             role,
@@ -483,10 +510,18 @@ impl SyncService {
             lan_last_sync: last_sync,
             lan_error,
             remote: state.profile.view(),
-            remote_syncing,
-            remote_last_sync,
+            remote_syncing: remote_progress.is_some(),
+            remote_progress,
+            remote_last_sync: remote_success.map(|(time, _)| time.to_string()),
+            remote_synced_records: remote_success.map(|(_, records)| records),
+            local_only_records: None,
             remote_error,
-        })
+        };
+        drop(state);
+        if status.paired {
+            status.local_only_records = Some(block(self.core.replica_local_only_count())?);
+        }
+        Ok(status)
     }
 
     pub fn update(&self, action: UpdateSync) -> Result<SyncStatus, AppError> {
@@ -695,6 +730,17 @@ fn cache_size(path: &Path, depth: usize) -> Result<u64, AppError> {
 mod tests {
     use super::*;
 
+    fn archive_round<S: ArchiveStore>(
+        core: &CoreService,
+        store: S,
+        key: [u8; 32],
+        device: &str,
+        stop: &AtomicBool,
+    ) -> Result<bool, AppError> {
+        super::archive_round(core, store, key, device, stop, |_| {})
+            .map(|records| records.is_some())
+    }
+
     #[test]
     fn remote_sync_requests_are_coalesced_and_never_block_the_caller() {
         let (request, wake) = mpsc::sync_channel(1);
@@ -705,6 +751,10 @@ mod tests {
         };
         worker.sync_now().unwrap();
         worker.sync_now().unwrap();
+        assert_eq!(
+            worker.report.lock().unwrap().progress,
+            Some(SyncRemoteProgress::Queued)
+        );
         assert_eq!(wake.try_recv(), Ok(()));
         assert_eq!(wake.try_recv(), Err(mpsc::TryRecvError::Empty));
         drop(wake);

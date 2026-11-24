@@ -982,6 +982,14 @@ body.settings-window .modal > .settings-feedback {
 .sync-settings h3:not(:first-child) {
   margin-top: 20px;
 }
+.sync-form #sync-dav-folder-hint {
+  margin: 0;
+}
+.sync-progress {
+  display: block;
+  width: 100%;
+  accent-color: var(--accent);
+}
 .new-form label {
   color: var(--muted);
   font-size: 12px;

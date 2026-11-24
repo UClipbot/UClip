@@ -218,12 +218,16 @@ impl<S: ArchiveStore> ReplicaTransport for Archive<S> {
 
     fn publish(&mut self, entry: ReplicaEntry) -> Result<(), AppError> {
         let name = object_name(&entry.stamp);
-        let body = self.seal(&name, &encode(&entry, MAX_RECORD)?)?;
-        if !self.store.create(Area::Objects, &name, body)? {
-            let existing = self.fetch(&entry.stamp)?.ok_or_else(invalid)?;
-            if existing.stamp != entry.stamp || existing.body != entry.body {
-                return Err(invalid());
+        if !self.contains_body(&entry.stamp)? {
+            let body = self.seal(&name, &encode(&entry, MAX_RECORD)?)?;
+            if self.store.create(Area::Objects, &name, body)? {
+                return Ok(());
             }
+        }
+        // An earlier round may have uploaded the body without committing its manifest.
+        let existing = self.fetch(&entry.stamp)?.ok_or_else(invalid)?;
+        if existing.stamp != entry.stamp || existing.body != entry.body {
+            return Err(invalid());
         }
         Ok(())
     }
@@ -279,18 +283,22 @@ impl<S: ArchiveStore> ReplicaTransport for Archive<S> {
 mod tests {
     use std::collections::btree_map::Entry;
 
-    use uclip_core::{ChangeClipPin, ClipPayload, CoreService};
+    use uclip_core::{ChangeClipPin, ClipPayload, CoreService, SyncRemoteProgress};
 
     use super::*;
-    use crate::sync::transport::{block, reconcile};
+    use crate::sync::transport::{block, reconcile, reconcile_with_progress};
 
     #[derive(Default)]
-    struct MemoryStore(BTreeMap<String, Vec<u8>>);
+    struct MemoryStore {
+        entries: BTreeMap<String, Vec<u8>>,
+        rejected: Option<String>,
+        writes: Vec<String>,
+    }
 
     impl ArchiveStore for &mut MemoryStore {
         fn list(&mut self, area: Area) -> Result<Vec<String>, AppError> {
             Ok(self
-                .0
+                .entries
                 .keys()
                 .filter(|name| name.ends_with(area.suffix()))
                 .cloned()
@@ -298,11 +306,11 @@ mod tests {
         }
 
         fn object_exists(&mut self, name: &str) -> Result<bool, AppError> {
-            Ok(self.0.contains_key(name))
+            Ok(self.entries.contains_key(name))
         }
 
         fn read(&mut self, _: Area, name: &str, bound: usize) -> Result<Option<Vec<u8>>, AppError> {
-            let data = self.0.get(name);
+            let data = self.entries.get(name);
             if data.is_some_and(|data| data.len() > bound) {
                 return Err(limit());
             }
@@ -310,7 +318,11 @@ mod tests {
         }
 
         fn create(&mut self, _: Area, name: &str, data: Vec<u8>) -> Result<bool, AppError> {
-            match self.0.entry(name.into()) {
+            self.writes.push(name.into());
+            if self.rejected.as_deref() == Some(name) {
+                return Err(limit());
+            }
+            match self.entries.entry(name.into()) {
                 Entry::Occupied(_) => Ok(false),
                 Entry::Vacant(slot) => {
                     slot.insert(data);
@@ -320,8 +332,76 @@ mod tests {
         }
 
         fn remove_manifest(&mut self, name: &str) {
-            self.0.remove(name);
+            self.entries.remove(name);
         }
+    }
+
+    #[test]
+    fn resumes_unindexed_objects_and_commits_independent_uploads_when_a_record_is_rejected() {
+        use SyncRemoteProgress::*;
+
+        let directory = tempfile::tempdir().unwrap();
+        let core = block(CoreService::open(directory.path().join("local"))).unwrap();
+        block(core.enroll_replica()).unwrap();
+        for text in ["first", "second", "third"] {
+            block(core.create_text(text.into())).unwrap();
+        }
+        let device = block(core.replica_device()).unwrap();
+        let stamps = block(core.replica_inventory()).unwrap();
+        let rejected = object_name(&stamps[0]);
+        let existing = object_name(&stamps[1]);
+        let mut store = MemoryStore::default();
+        let mut archive = Archive::new(&mut store, [23; 32], device.clone());
+        let unindexed = block(core.replica_entry(stamps[1].clone()))
+            .unwrap()
+            .unwrap();
+        archive.publish(unindexed).unwrap();
+        store.writes.clear();
+        store.rejected = Some(rejected.clone());
+
+        let mut phases = Vec::new();
+        let mut archive = Archive::new(&mut store, [23; 32], device.clone());
+        let result = reconcile_with_progress(&core, &mut archive, |phase| phases.push(phase));
+        assert!(matches!(result, Err(error) if error.code == ErrorCode::LimitExceeded));
+        assert_eq!(
+            phases,
+            [
+                Checking,
+                Uploading {
+                    processed: 0,
+                    total: 3
+                },
+                Uploading {
+                    processed: 1,
+                    total: 3
+                },
+                Uploading {
+                    processed: 2,
+                    total: 3
+                },
+                Finalizing,
+            ],
+        );
+        assert!(archive.inventory().unwrap() == stamps[1..]);
+        assert!(!store.writes.contains(&existing));
+        assert!(store.writes.contains(&object_name(&stamps[2])));
+
+        store.writes.clear();
+        store.rejected = None;
+        let mut archive = Archive::new(&mut store, [23; 32], device);
+        assert_eq!(
+            reconcile_with_progress(&core, &mut archive, |_| {}).unwrap(),
+            Some(3)
+        );
+        assert_eq!(
+            store
+                .writes
+                .iter()
+                .filter(|name| name.ends_with(".clip"))
+                .collect::<Vec<_>>(),
+            [&rejected],
+        );
+        block(core.shutdown()).unwrap();
     }
 
     #[test]
@@ -367,8 +447,8 @@ mod tests {
         .unwrap();
         let successor = block(a.replica_inventory()).unwrap().remove(0);
         assert!(round(&a, &mut store).unwrap());
-        assert!(store.0.remove(&object_name(&predecessor)).is_some());
-        assert!(store.0.remove(&object_name(&successor)).is_some());
+        assert!(store.entries.remove(&object_name(&predecessor)).is_some());
+        assert!(store.entries.remove(&object_name(&successor)).is_some());
         let independent = block(b.create_text("independent update".into())).unwrap();
 
         assert!(matches!(round(&b, &mut store), Err(error) if error.code == ErrorCode::SyncData));
@@ -383,7 +463,7 @@ mod tests {
         );
 
         assert!(round(&a, &mut store).unwrap());
-        assert!(store.0.contains_key(&object_name(&successor)));
+        assert!(store.entries.contains_key(&object_name(&successor)));
         for peer in [b, c] {
             assert!(round(&peer, &mut store).unwrap());
             let inventory = block(peer.replica_inventory()).unwrap();

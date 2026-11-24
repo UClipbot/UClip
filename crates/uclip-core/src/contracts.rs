@@ -594,6 +594,17 @@ pub enum SyncRemoteSettings {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum SyncRemoteProgress {
+    Queued,
+    Connecting,
+    Checking,
+    Downloading { processed: u32, total: u32 },
+    Uploading { processed: u32, total: u32 },
+    Finalizing,
+}
+
 #[derive(Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
@@ -605,7 +616,10 @@ pub struct SyncStatus {
     pub lan_error: Option<AppError>,
     pub remote: Option<SyncRemoteSettings>,
     pub remote_syncing: bool,
+    pub remote_progress: Option<SyncRemoteProgress>,
     pub remote_last_sync: Option<String>,
+    pub remote_synced_records: Option<u32>,
+    pub local_only_records: Option<u32>,
     pub remote_error: Option<AppError>,
 }
 

@@ -144,6 +144,10 @@ impl CoreService {
         self.operation(|s| s.replica_inventory()).await
     }
 
+    pub async fn replica_local_only_count(&self) -> Result<u32, AppError> {
+        self.operation(|s| s.replica_local_only_count()).await
+    }
+
     pub async fn replica_entry(
         &self,
         stamp: crate::ReplicaStamp,

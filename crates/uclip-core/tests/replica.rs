@@ -98,6 +98,7 @@ fn oversized_history_can_create_a_group_with_new_records_only() {
         Some("new-only")
     );
     assert!(store.replica_inventory().unwrap().is_empty());
+    assert_eq!(store.replica_local_only_count().unwrap(), 25_001);
     let shared = store
         .capture(ClipPayload::Text("Existing clipboard content".into()))
         .unwrap()
@@ -159,6 +160,7 @@ fn oversized_history_can_create_a_group_with_new_records_only() {
         1
     );
     assert!(store.replica_inventory().unwrap() == [stamp]);
+    assert_eq!(store.replica_local_only_count().unwrap(), 25_000);
 }
 
 fn entries(store: &mut Storage) -> Vec<ReplicaEntry> {

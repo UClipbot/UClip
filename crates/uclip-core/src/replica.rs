@@ -1109,6 +1109,14 @@ impl Storage {
         Ok(entries)
     }
 
+    pub fn replica_local_only_count(&self) -> Result<u32, AppError> {
+        Ok(self.connection.query_row(
+            "SELECT count(*) FROM replica_local_clips l JOIN clips c USING(id) WHERE c.deleted=0",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn replica_entry(
         &mut self,
         stamp: &ReplicaStamp,

@@ -57,6 +57,7 @@ fn main() {
         SyncRole::decl(&config),
         SyncRemoteInput::decl(&config),
         SyncRemoteSettings::decl(&config),
+        SyncRemoteProgress::decl(&config),
         SyncStatus::decl(&config),
         UpdateSync::decl(&config),
         ErrorCode::decl(&config),

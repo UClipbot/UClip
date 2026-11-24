@@ -1,10 +1,32 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef, useState } from 'react';
-import type { SyncRemoteInput, SyncStatus, UpdateSync } from '../generated/contracts';
+import type {
+  SyncRemoteInput,
+  SyncRemoteProgress,
+  SyncStatus,
+  UpdateSync,
+} from '../generated/contracts';
 import { formatTimestamp, t } from '../i18n';
 import { safeError } from '../platform/client';
 
 type RemoteKind = 'off' | SyncRemoteInput['kind'];
+
+function remoteProgressLabel(progress: SyncRemoteProgress) {
+  switch (progress.stage) {
+    case 'queued':
+      return t('sync_storage_requested');
+    case 'connecting':
+      return t('sync_storage_connecting');
+    case 'checking':
+      return t('sync_storage_checking');
+    case 'downloading':
+      return t('sync_storage_downloading_0_1', { 0: progress.processed, 1: progress.total });
+    case 'uploading':
+      return t('sync_storage_uploading_0_1', { 0: progress.processed, 1: progress.total });
+    case 'finalizing':
+      return t('sync_storage_finalizing');
+  }
+}
 
 export function SyncSettings() {
   const [status, setStatus] = useState<SyncStatus | null>(null);
@@ -13,7 +35,6 @@ export function SyncSettings() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [historyOverLimit, setHistoryOverLimit] = useState<'create' | 'join' | null>(null);
-  const [remoteRequested, setRemoteRequested] = useState(false);
   const [loadingError, setLoadingError] = useState('');
   const [kind, setKind] = useState<RemoteKind>('off');
   const [initialized, setInitialized] = useState(false);
@@ -31,7 +52,6 @@ export function SyncSettings() {
         if (current()) {
           setStatus(next);
           setLoadingError('');
-          setRemoteRequested(false);
         }
       } catch (failure) {
         if (current()) setLoadingError(safeError(failure).message);
@@ -58,7 +78,6 @@ export function SyncSettings() {
     generation.current++;
     setBusy(true);
     setError('');
-    setRemoteRequested(false);
     try {
       await operation();
     } catch (failure) {
@@ -79,10 +98,11 @@ export function SyncSettings() {
     perform(async () => {
       setStatus(await invoke<SyncStatus>('update_sync', { request }));
       if (request.action === 'join' || request.action === 'join_from_now') setCode('');
-      if (request.action === 'sync_remote_now') setRemoteRequested(true);
     }, request.action);
 
   const remote = status?.remote;
+  const progress = status?.remoteProgress;
+  const countedProgress = progress && 'total' in progress ? progress : null;
   const roleMessage = {
     off: 'sync_lan_off',
     discovering: 'sync_lan_discovering',
@@ -253,12 +273,16 @@ export function SyncSettings() {
                 <label htmlFor="sync-dav-url">{t('sync_dav_url')}</label>
                 <input
                   id="sync-dav-url"
+                  aria-describedby="sync-dav-folder-hint"
                   name="url"
                   type="url"
                   defaultValue={remote?.kind === kind ? remote.url : ''}
                   maxLength={2048}
                   required
                 />
+                <p id="sync-dav-folder-hint" className="settings-feedback">
+                  {t('sync_dav_folder_hint')}
+                </p>
               </>
             )}
             {kind === 'sftp' && (
@@ -330,21 +354,42 @@ export function SyncSettings() {
             <>
               <button
                 className="secondary-button"
-                disabled={busy || remoteRequested || status.remoteSyncing}
+                disabled={busy || status.remoteSyncing}
                 onClick={() => void update({ action: 'sync_remote_now' })}
               >
                 {t('sync_storage_now')}
               </button>
-              <p className="settings-feedback" role="status">
-                {status.remoteSyncing
-                  ? t('sync_storage_running')
-                  : remoteRequested
-                    ? t('sync_storage_requested')
-                    : status.remoteError
-                      ? t(safeError(status.remoteError).message)
-                      : lastSync(status.remoteLastSync) || t('sync_storage_pending')}
+              <p id="sync-storage-progress-label" className="settings-feedback" role="status">
+                {progress
+                  ? remoteProgressLabel(progress)
+                  : status.remoteError
+                    ? t(safeError(status.remoteError).message)
+                    : status.remoteSyncedRecords === null
+                      ? t('sync_storage_pending')
+                      : t('sync_storage_confirmed_0', { 0: status.remoteSyncedRecords })}
               </p>
+              {progress && (
+                <progress
+                  className="sync-progress"
+                  aria-labelledby="sync-storage-progress-label"
+                  value={countedProgress?.processed}
+                  max={countedProgress?.total}
+                />
+              )}
+              {status.remoteLastSync && (
+                <p className="settings-feedback">
+                  {lastSync(status.remoteLastSync)}
+                  {(progress || status.remoteError) && status.remoteSyncedRecords !== null
+                    ? ` · ${t('sync_storage_confirmed_0', { 0: status.remoteSyncedRecords })}`
+                    : ''}
+                </p>
+              )}
             </>
+          )}
+          {!!status.localOnlyRecords && (
+            <p className="settings-feedback">
+              {t('sync_existing_history_local_only_0', { 0: status.localOnlyRecords })}
+            </p>
           )}
         </>
       )}

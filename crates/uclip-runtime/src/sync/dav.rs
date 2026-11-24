@@ -104,6 +104,8 @@ impl Dav {
 fn status_error(status: StatusCode) -> AppError {
     if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
         AppError::new(ErrorCode::SyncAuthentication)
+    } else if status == StatusCode::PAYLOAD_TOO_LARGE {
+        limit()
     } else {
         unavailable()
     }

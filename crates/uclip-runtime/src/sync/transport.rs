@@ -4,7 +4,10 @@ use std::{
 };
 
 use serde::{de::DeserializeOwned, Serialize};
-use uclip_core::{AppError, CoreService, ErrorCode, ReplicaEntry, ReplicaId, ReplicaStamp};
+use uclip_core::{
+    AppError, CoreService, ErrorCode, ReplicaEntry, ReplicaId, ReplicaStamp, ReplicaType,
+    SyncRemoteProgress,
+};
 
 pub(super) const MAX_RECORD: usize = 52 * 1024 * 1024;
 pub(super) const MAX_INVENTORY: usize = 48 * 1024 * 1024;
@@ -64,8 +67,17 @@ pub(super) fn reconcile(
     core: &CoreService,
     transport: &mut impl ReplicaTransport,
 ) -> Result<bool, AppError> {
+    reconcile_with_progress(core, transport, |_| {}).map(|records| records.is_some())
+}
+
+pub(super) fn reconcile_with_progress(
+    core: &CoreService,
+    transport: &mut impl ReplicaTransport,
+    mut progress: impl FnMut(SyncRemoteProgress),
+) -> Result<Option<u32>, AppError> {
     let mut pending = false;
     let mut failed = None;
+    progress(SyncRemoteProgress::Checking);
     let mut remote = transport.inventory()?;
     // Try the latest first. A missing body cannot suppress an available predecessor.
     remote.sort_by(|a, b| a.id.cmp(&b.id).then_with(|| b.compare_version(a)));
@@ -81,53 +93,88 @@ pub(super) fn reconcile(
         .into_iter()
         .map(|stamp| (stamp.id.clone(), stamp))
         .collect::<BTreeMap<_, _>>();
-    for (id, stamps) in &remote_by_id {
-        for remote in stamps {
-            if known.get(*id).is_some_and(|local| local.supersedes(remote)) {
+    let to_pull = remote_by_id
+        .into_values()
+        .flatten()
+        .filter(|stamp| {
+            !known
+                .get(&stamp.id)
+                .is_some_and(|local| local.supersedes(stamp))
+        })
+        .collect::<Vec<_>>();
+    let total = to_pull.len() as u32;
+    for (index, remote) in to_pull.into_iter().enumerate() {
+        progress(SyncRemoteProgress::Downloading {
+            processed: index as u32,
+            total,
+        });
+        if known
+            .get(&remote.id)
+            .is_some_and(|local| local.supersedes(remote))
+        {
+            continue;
+        }
+        let applied = match transport.fetch(remote) {
+            Ok(Some(entry)) if entry.stamp == *remote => block(core.apply_replica_entry(entry))
+                .map(|_| {
+                    known.insert(remote.id.clone(), remote.clone());
+                }),
+            Ok(Some(_)) => Err(invalid()),
+            Ok(None) => {
+                pending = true;
                 continue;
             }
-            let applied = match transport.fetch(remote) {
-                Ok(Some(entry)) if entry.stamp == **remote => {
-                    block(core.apply_replica_entry(entry)).map(|_| {
-                        known.insert((*id).clone(), (*remote).clone());
-                    })
+            Err(error) => Err(error),
+        };
+        if let Err(error) = applied {
+            match error.code {
+                ErrorCode::SyncData | ErrorCode::InvalidInput | ErrorCode::LimitExceeded => {
+                    failed.get_or_insert(error);
                 }
-                Ok(Some(_)) => Err(invalid()),
-                Ok(None) => {
-                    pending = true;
-                    continue;
-                }
-                Err(error) => Err(error),
-            };
-            if let Err(error) = applied {
-                match error.code {
-                    ErrorCode::SyncData | ErrorCode::InvalidInput | ErrorCode::LimitExceeded => {
-                        failed.get_or_insert(error);
-                    }
-                    _ => return Err(error),
-                }
+                _ => return Err(error),
             }
         }
     }
     let mut available = Vec::new();
-    for stamp in block(core.replica_inventory())? {
-        if keys.contains(&stamp.key()) && transport.contains_body(&stamp)? {
-            available.push(stamp);
-            continue;
-        }
-        match block(core.replica_entry(stamp.clone()))? {
-            Some(entry) => {
-                transport.publish(entry)?;
-                available.push(stamp);
+    let local = block(core.replica_inventory())?;
+    let total = local.len() as u32;
+    for (index, stamp) in local.into_iter().enumerate() {
+        progress(SyncRemoteProgress::Uploading {
+            processed: index as u32,
+            total,
+        });
+        let published = (|| {
+            if keys.contains(&stamp.key()) && transport.contains_body(&stamp)? {
+                return Ok(true);
             }
-            None => pending = true,
+            let Some(entry) = block(core.replica_entry(stamp.clone()))? else {
+                return Ok(false);
+            };
+            transport.publish(entry)?;
+            Ok::<_, AppError>(true)
+        })();
+        match published {
+            Ok(true) => available.push(stamp),
+            Ok(false) => pending = true,
+            Err(error) if matches!(error.code, ErrorCode::SyncData | ErrorCode::LimitExceeded) => {
+                failed.get_or_insert(error);
+            }
+            Err(error) => {
+                failed = Some(error);
+                break;
+            }
         }
     }
     let complete = !pending && failed.is_none();
-    transport.commit(available, complete)?;
+    let records = available
+        .iter()
+        .filter(|stamp| stamp.id.kind == ReplicaType::Clip && !stamp.removed)
+        .count() as u32;
+    progress(SyncRemoteProgress::Finalizing);
+    let committed = transport.commit(available, complete);
     match failed {
         Some(error) => Err(error),
-        None => Ok(complete),
+        None => committed.map(|_| complete.then_some(records)),
     }
 }
 
