@@ -28,7 +28,14 @@ import { emit } from '@tauri-apps/api/event';
 import '/src/style.css';
 globalThis.isTauri = true;
 const id = '10000000-0000-4000-8000-000000000001';
+const secondId = '10000000-0000-4000-8000-000000000002';
 window.fixture = { calls: [], requests: [], mode: 'deferred', language: 'en', theme: 'light', emit, id,
+ activeToken: undefined,
+ async closePreview() {
+   const token = this.activeToken;
+   this.activeToken = undefined;
+   await emit('hover-preview-closed', token);
+ },
  current: { token: crypto.randomUUID(), id, kind: 'text', source: 'Fixture source', savedAt: '1794647289000', size: null, anchor: {x:0,y:20,width:600,height:56} } };
 mockIPC((command, args) => {
  fixture.calls.push({command, args});
@@ -38,7 +45,16 @@ mockIPC((command, args) => {
    if(fixture.mode === 'error') return Promise.reject({code:'not_found', message:'secret'});
    return new Promise((resolve) => fixture.requests.push({ id:args.id, resolve }));
  }
- if(command === 'show_hover_preview' || command === 'hide_hover_preview' || command === 'hover_preview_presence') return;
+ if(command === 'show_hover_preview') {
+   if(args.previousToken && args.previousToken !== fixture.activeToken) return false;
+   fixture.activeToken = args.request.token;
+   return true;
+ }
+ if(command === 'hide_hover_preview') {
+   if(args.token === fixture.activeToken) return fixture.closePreview();
+   return;
+ }
+ if(command === 'hover_preview_presence') return;
  throw new Error('Unexpected command: ' + command);
 }, {shouldMockEvents:true});
 const { HoverPreview } = await import('/src/components/HoverPreview');
@@ -48,7 +64,8 @@ function Controller() {
  const [enabled,setEnabled]=useState(true);
  fixture.setEnabled=setEnabled;
  const clip={ id, revision:'1', type:'text', title:'Fixture', content:'PRIVATE SUMMARY', source:'Fixture', time:'17:08',day:'today', savedAt:'1794647289000',pinned:false,collection:null };
- return <><div className="history-scroll" style={{height:500}} ref={list}><article className="clip-row" data-clip-id={id}><button className="row-main">Fixture row</button></article></div>{enabled && <HoverPreview listRef={list} clips={[clip]} native onError={(error)=>{fixture.error=error;}} />}</>;
+ const clips = [clip, { ...clip, id: secondId }];
+ return <><div className="history-scroll" style={{height:500}} ref={list}>{clips.map((item) => <article key={item.id} className="clip-row" data-clip-id={item.id}><button className="row-main">Fixture row</button></article>)}</div>{enabled && <HoverPreview listRef={list} clips={clips} native onError={(error)=>{fixture.error=error;}} />}</>;
 }
 createRoot(document.getElementById('root')).render(<StrictMode>{new URLSearchParams(location.search).get('mode')==='controller' ? <Controller/> : <HoverPreviewWindow/>}</StrictMode>);
 `,
@@ -57,31 +74,61 @@ createRoot(document.getElementById('root')).render(<StrictMode>{new URLSearchPar
   page.setDefaultTimeout(8000);
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
+  await page.clock.install();
   await page.goto(`${url}/${base}.html?mode=controller`);
-  const row = page.locator('.row-main');
-  const show = async () => {
-    await page.mouse.move(635, 620);
-    await row.hover();
-    await page.waitForFunction(() =>
-      fixture.calls.some((call) => call.command === 'show_hover_preview'),
-    );
+  const row = page.locator('.row-main').first();
+  const otherRow = page.locator('.row-main').last();
+  const shows = () =>
+    page.evaluate(() => fixture.calls.filter((call) => call.command === 'show_hover_preview'));
+  const showAfterDelay = async (anchor) => {
+    const count = (await shows()).length;
+    await anchor.hover();
+    await page.clock.runFor(2000);
+    assert.equal((await shows()).length, count);
+    await page.clock.runFor(550);
+    const calls = await shows();
+    assert.equal(calls.length, count + 1);
+    assert.equal(calls.at(-1).args.previousToken, undefined);
+    return calls.at(-1).args.request;
   };
-  await show();
+  const request = await showAfterDelay(row);
   assert.equal(await page.locator('.hover-preview').count(), 0);
-  const request = await page.evaluate(
-    () => fixture.calls.find((c) => c.command === 'show_hover_preview').args.request,
-  );
   assert.equal(request.id, await page.evaluate(() => fixture.id));
   assert.equal(request.anchor.height, 54);
   assert.doesNotMatch(JSON.stringify(request), /PRIVATE SUMMARY/);
+  await otherRow.hover();
+  await page.clock.runFor(180);
+  const switched = await shows();
+  assert.equal(switched.length, 2);
+  assert.equal(switched[1].args.previousToken, request.token);
+  assert.notEqual(switched[1].args.request.id, request.id);
+
+  await page.evaluate(() => fixture.closePreview());
+  await showAfterDelay(row);
+
+  // Simulate closure reaching the backend before the main WebView receives its event.
+  await page.evaluate(() => {
+    fixture.activeToken = undefined;
+  });
+  await otherRow.hover();
+  await page.clock.runFor(180);
+  assert.equal((await shows()).length, 4);
+  assert.ok((await shows())[3].args.previousToken);
+  await page.clock.runFor(1800);
+  assert.equal((await shows()).length, 4);
+  await page.clock.runFor(570);
+  assert.equal((await shows()).length, 5);
+  assert.equal((await shows())[4].args.previousToken, undefined);
+
   await page.mouse.move(635, 620);
+  await page.clock.runFor(500);
   await page.waitForFunction(() =>
-    fixture.calls.some((call) => call.command === 'hide_hover_preview' && !call.args.unlessHovered),
+    fixture.calls.some((call) => call.command === 'hide_hover_preview' && call.args.unlessHovered),
   );
   await page.evaluate(() => {
     fixture.calls = [];
   });
-  await show();
+  await showAfterDelay(row);
   await page.keyboard.press('Escape');
   await page.waitForFunction(() =>
     fixture.calls.some((c) => c.command === 'hide_hover_preview' && !c.args.unlessHovered),
@@ -89,7 +136,13 @@ createRoot(document.getElementById('root')).render(<StrictMode>{new URLSearchPar
   await page.evaluate(() => {
     fixture.calls = [];
   });
-  await show();
+  await page.mouse.move(635, 620);
+  await row.hover();
+  await page.clock.runFor(1200);
+  await page.mouse.move(635, 620);
+  await page.clock.runFor(1500);
+  assert.equal((await shows()).length, 0);
+  await showAfterDelay(row);
   await page.evaluate(() => fixture.setEnabled(false));
   await page.waitForFunction(() =>
     fixture.calls.some((c) => c.command === 'hide_hover_preview' && !c.args.unlessHovered),
@@ -198,7 +251,7 @@ createRoot(document.getElementById('root')).render(<StrictMode>{new URLSearchPar
   await page.waitForFunction(() => fixture.calls.some((c) => c.command === 'hide_hover_preview'));
   assert.deepEqual(errors, []);
   console.log(
-    'Detached preview adapters passed: native-only dispatch, metadata-only requests, cleanup, standalone layout, full/stale text, safe errors, timeout/retry, image, themes/languages and Escape. IPC mocked; OS windows require native acceptance.',
+    'Detached preview adapters passed: delayed opening, fast switching, dismissal, metadata-only requests, standalone layout, full/stale text, safe errors, timeout/retry, image, themes/languages and Escape. IPC mocked; OS windows require native acceptance.',
   );
   await page.close();
 } finally {

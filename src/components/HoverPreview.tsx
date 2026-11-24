@@ -8,6 +8,14 @@ import { hideHoverPreview, onHoverPreviewClosed, showHoverPreview } from '../pla
 import { safeError } from '../platform/client';
 
 type Target = { id: string; revision?: string; anchor: HTMLElement };
+type HoveredRow = { id: string; anchor: HTMLElement; enteredAt: number };
+
+const OPEN_DELAY_MS = 2500;
+const SWITCH_DELAY_MS = 100;
+
+function sameRow(first: HoveredRow | null, second: HoveredRow) {
+  return first?.id === second.id && first.anchor === second.anchor;
+}
 
 export function HoverPreview({
   listRef,
@@ -32,43 +40,91 @@ export function HoverPreview({
     const list = listRef.current;
     if (!list) return;
     let openTimer: ReturnType<typeof setTimeout> | undefined;
-    let closeTimer: ReturnType<typeof setTimeout>;
-    let shown = false;
-    let nativeToken: string | undefined;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    let candidate: HoveredRow | null = null;
+    let displayed: { row: HoveredRow; token?: string } | null = null;
+    let opening: { row: HoveredRow; token: string } | null = null;
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    const scheduleOpen = () => {
+      clearTimeout(openTimer);
+      const row = candidate;
+      if (!row || opening || (displayed && sameRow(row, displayed.row))) return;
+      const delay = (native ? displayed : panel.current) ? SWITCH_DELAY_MS : OPEN_DELAY_MS;
+      openTimer = setTimeout(
+        () => {
+          const { anchor, id } = row;
+          const clip = currentClips.current.find((item) => item.id === id);
+          if (
+            !clip ||
+            !list.contains(anchor) ||
+            anchor.closest('[data-clip-id]')?.getAttribute('data-clip-id') !== id
+          )
+            return;
+          if (!native) {
+            displayed = { row };
+            setTarget({ id, revision: clip.revision, anchor });
+            return;
+          }
+          const token = crypto.randomUUID();
+          const previousToken = displayed?.token;
+          opening = { row, token };
+          void showHoverPreview(clip, anchor, token, previousToken)
+            .then((visible) => {
+              if (disposed || opening?.token !== token) return;
+              opening = null;
+              displayed = visible ? { row, token } : null;
+              // The native window may have closed just before a quick switch reached it.
+              if (!visible && !previousToken && sameRow(candidate, row)) candidate = null;
+              scheduleOpen();
+            })
+            .catch((error) => {
+              if (disposed || opening?.token !== token) return;
+              opening = null;
+              if (sameRow(candidate, row)) candidate = null;
+              report.current?.(safeError(error).message);
+              scheduleOpen();
+            });
+        },
+        Math.max(0, delay - (performance.now() - row.enteredAt)),
+      );
+    };
+    const hideNative = (unlessHovered = false) => {
+      if (displayed?.token) void hideHoverPreview(displayed.token, unlessHovered).catch(() => {});
+      if (opening) void hideHoverPreview(opening.token, unlessHovered).catch(() => {});
+    };
+    const dismiss = (force = true) => {
+      clearTimeout(openTimer);
+      clearTimeout(closeTimer);
+      candidate = null;
+      if (!force && native) {
+        // The preview can keep this request alive while it has the pointer or focus.
+        hideNative(true);
+        return;
+      }
+      hideNative();
+      displayed = null;
+      opening = null;
+      setTarget(null);
+    };
     if (native)
       void onHoverPreviewClosed((token) => {
-        if (token === nativeToken) {
-          nativeToken = undefined;
-          candidate = null;
-          shown = false;
-        }
+        const closed = opening?.token === token ? opening : displayed;
+        if (disposed || closed?.token !== token) return;
+        if (closed === opening) opening = null;
+        displayed = null;
+        if (sameRow(candidate, closed.row)) candidate = null;
+        scheduleOpen();
       })
         .then((stop) => {
           if (disposed) stop();
           else unlisten = stop;
         })
         .catch(() => {});
-    let candidate: HTMLElement | null = null;
-    const dismiss = (force = true) => {
-      clearTimeout(openTimer);
-      clearTimeout(closeTimer);
-      openTimer = undefined;
-      if (!force && nativeToken) {
-        // The preview can keep this request alive while it has the pointer or focus.
-        void hideHoverPreview(nativeToken, true).catch(() => {});
-        return;
-      }
-      shown = false;
-      candidate = null;
-      setTarget(null);
-      if (nativeToken) void hideHoverPreview(nativeToken).catch(() => {});
-    };
     keep.current = () => clearTimeout(closeTimer);
     leave.current = () => {
       clearTimeout(openTimer);
-      openTimer = undefined;
+      candidate = null;
       clearTimeout(closeTimer);
       closeTimer = setTimeout(() => dismiss(false), native ? 450 : 180);
     };
@@ -76,40 +132,28 @@ export function HoverPreview({
       if (event.pointerType === 'touch') return;
       const anchor = (event.target as Element).closest<HTMLElement>('.row-main');
       if (!anchor || !list.contains(anchor)) return;
+      if (event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget)) return;
+      const id = anchor.closest<HTMLElement>('[data-clip-id]')?.dataset.clipId;
+      if (!id) return;
       clearTimeout(closeTimer);
-      if (candidate === anchor && (shown || openTimer !== undefined)) return;
-      clearTimeout(openTimer);
-      candidate = anchor;
-      shown = false;
-      setTarget(null);
-      openTimer = setTimeout(() => {
-        openTimer = undefined;
-        shown = true;
-        const id = anchor.closest<HTMLElement>('[data-clip-id]')?.dataset.clipId;
-        const clip = currentClips.current.find((item) => item.id === id);
-        if (clip && anchor.isConnected) {
-          if (native) {
-            const token = crypto.randomUUID();
-            nativeToken = token;
-            void showHoverPreview(clip, anchor, token).catch((error) => {
-              if (!disposed && token === nativeToken) report.current?.(safeError(error).message);
-            });
-          } else setTarget({ id: clip.id, revision: clip.revision, anchor });
-        }
-      }, 400);
+      if (candidate?.anchor === anchor && candidate.id === id) return;
+      candidate = { id, anchor, enteredAt: performance.now() };
+      scheduleOpen();
     };
     const exit = (event: PointerEvent) => {
+      if (event.pointerType === 'touch' || !candidate) return;
       const next = event.relatedTarget as Node | null;
-      if (next && (candidate?.contains(next) || panel.current?.contains(next))) return;
+      if (next && candidate.anchor.contains(next)) return;
       leave.current();
+      if (next && panel.current?.contains(next)) keep.current();
     };
     const scroll = (event: Event) => {
       if (!panel.current?.contains(event.target as Node)) dismiss();
     };
     const key = (event: KeyboardEvent) => {
       if (event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
-      if (event.key === 'Escape' && (candidate || nativeToken)) {
-        if (shown) event.stopPropagation();
+      if (event.key === 'Escape' && (candidate || displayed || opening)) {
+        if (displayed) event.stopPropagation();
         dismiss();
       }
     };
@@ -128,7 +172,7 @@ export function HoverPreview({
     return () => {
       disposed = true;
       unlisten?.();
-      if (nativeToken) void hideHoverPreview(nativeToken).catch(() => {});
+      hideNative();
       clearTimeout(openTimer);
       clearTimeout(closeTimer);
       list.removeEventListener('pointerover', enter);

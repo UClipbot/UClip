@@ -3,7 +3,12 @@ import { listen } from '@tauri-apps/api/event';
 import type { Clip } from '../demo/clips';
 import type { HoverPreviewRequest } from '../generated/contracts';
 
-export function showHoverPreview(clip: Clip, anchor: HTMLElement, token: string) {
+export function showHoverPreview(
+  clip: Clip,
+  anchor: HTMLElement,
+  token: string,
+  previousToken?: string,
+) {
   const box = anchor.getBoundingClientRect();
   const request: HoverPreviewRequest = {
     token,
@@ -14,7 +19,7 @@ export function showHoverPreview(clip: Clip, anchor: HTMLElement, token: string)
     size: clip.size ?? null,
     anchor: { x: box.x, y: box.y, width: box.width, height: box.height },
   };
-  return invoke<void>('show_hover_preview', { request });
+  return invoke<boolean>('show_hover_preview', { request, previousToken });
 }
 export const hideHoverPreview = (token: string, unlessHovered = false) =>
   invoke<void>('hide_hover_preview', { token, unlessHovered });

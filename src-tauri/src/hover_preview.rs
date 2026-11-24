@@ -15,6 +15,7 @@ struct Inner {
     hovered: bool,
     // Dismissal can arrive while a slower async creation is still queued.
     cancelled: VecDeque<String>,
+    dismiss_generation: u64,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -47,8 +48,14 @@ impl Inner {
             }
         }
     }
-    fn accept(&mut self, request: HoverPreviewRequest) -> bool {
-        if self.cancelled.contains(&request.token) {
+    fn accept(&mut self, request: HoverPreviewRequest, previous_token: Option<&str>) -> bool {
+        if self.cancelled.contains(&request.token)
+            || previous_token.is_some_and(|token| {
+                self.request
+                    .as_ref()
+                    .is_none_or(|current| current.token != token)
+            })
+        {
             return false;
         }
         self.request = Some(request);
@@ -75,6 +82,9 @@ impl Inner {
             self.remember_cancelled(token);
         }
         if matches {
+            if token.is_none() {
+                self.dismiss_generation = self.dismiss_generation.wrapping_add(1);
+            }
             self.request = None;
             self.main_geometry = None;
             self.hovered = false;
@@ -114,29 +124,28 @@ fn validate(request: &HoverPreviewRequest) -> Result<(), AppError> {
     Ok(())
 }
 
-pub async fn show(app: tauri::AppHandle, request: HoverPreviewRequest) -> Result<(), AppError> {
+pub async fn show(
+    app: tauri::AppHandle,
+    request: HoverPreviewRequest,
+    previous_token: Option<String>,
+) -> Result<bool, AppError> {
     validate(&request)?;
-    let token = request.token.clone();
-    {
-        let state = app.state::<PreviewState>();
-        let mut state = state.inner.lock().map_err(|_| unavailable())?;
-        if !state.accept(request.clone()) {
-            return Ok(());
-        }
-    }
-    // Construction remains async and serialized; no business/state lock spans a window API.
+    let generation = app
+        .state::<PreviewState>()
+        .inner
+        .lock()
+        .map_err(|_| unavailable())?
+        .dismiss_generation;
+    // Construction remains async and serialized. Visibility and request changes run together on the UI thread.
     static OPENING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _opening = OPENING.lock().await;
-    if current(&app)?.is_none_or(|value| value.token != token) {
-        return Ok(());
-    }
     let main = app.get_webview_window("main").ok_or_else(unavailable)?;
-    if !main.is_visible().unwrap_or(false) || main.is_minimized().unwrap_or(true) {
-        return hide(&app, Some(&token), false);
-    }
     let window = if let Some(window) = app.get_webview_window(LABEL) {
         window
     } else {
+        if previous_token.is_some() {
+            return Ok(false);
+        }
         crate::local_window(&app, LABEL, "index.html?window=hover-preview")
             .title(title(&app))
             .inner_size(560.0, 640.0)
@@ -149,23 +158,24 @@ pub async fn show(app: tauri::AppHandle, request: HoverPreviewRequest) -> Result
             .build()
             .map_err(|_| unavailable())?
     };
-    if current(&app)?.is_none_or(|value| value.token != token) {
-        return Ok(());
-    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     let handle = app.clone();
     app.run_on_main_thread(move || {
         let result = (|| {
+            if !main.is_visible().unwrap_or(false)
+                || main.is_minimized().unwrap_or(true)
+                || (previous_token.is_some() && !window.is_visible().unwrap_or(false))
+            {
+                return Ok(false);
+            }
             let geometry = MainGeometry::read(&main.as_ref().window());
             {
                 let state = handle.state::<PreviewState>();
                 let mut state = state.inner.lock().map_err(|_| unavailable())?;
-                if state
-                    .request
-                    .as_ref()
-                    .is_none_or(|value| value.token != token)
+                if generation != state.dismiss_generation
+                    || !state.accept(request.clone(), previous_token.as_deref())
                 {
-                    return Ok(());
+                    return Ok(false);
                 }
                 state.main_geometry = Some(geometry);
             }
@@ -189,7 +199,8 @@ pub async fn show(app: tauri::AppHandle, request: HoverPreviewRequest) -> Result
                     .map_err(|_| unavailable())?
                     .set_focus_on_map(false);
             }
-            crate::desktop::show_without_focus(&window)
+            crate::desktop::show_without_focus(&window)?;
+            Ok(true)
         })();
         let _ = tx.send(result);
     })
@@ -214,9 +225,25 @@ pub fn hide(
     token: Option<&str>,
     unless_hovered: bool,
 ) -> Result<(), AppError> {
-    let focused = app
-        .get_webview_window(LABEL)
-        .is_some_and(|window| window.is_focused().unwrap_or(false));
+    let handle = app.clone();
+    let token = token.map(str::to_owned);
+    app.run_on_main_thread(move || {
+        if hide_on_main_thread(&handle, token.as_deref(), unless_hovered).is_err() {
+            eprintln!("hover_preview_hide_failed");
+        }
+    })
+    .map_err(|_| unavailable())
+}
+
+fn hide_on_main_thread(
+    app: &tauri::AppHandle,
+    token: Option<&str>,
+    unless_hovered: bool,
+) -> Result<(), AppError> {
+    let focused = unless_hovered
+        && app
+            .get_webview_window(LABEL)
+            .is_some_and(|window| window.is_focused().unwrap_or(false));
     let (should_hide, closed_token) = {
         let state = app.state::<PreviewState>();
         let mut state = state.inner.lock().map_err(|_| unavailable())?;
@@ -224,6 +251,18 @@ pub fn hide(
     };
     if should_hide {
         if let Some(window) = app.get_webview_window(LABEL) {
+            #[cfg(target_os = "windows")]
+            {
+                use windows::Win32::{
+                    Foundation::HWND,
+                    UI::WindowsAndMessaging::{ShowWindow, SW_HIDE},
+                };
+                let handle = window.hwnd().map_err(|_| unavailable())?;
+                // Showing without activation bypasses Tao's cached visibility flag.
+                // SAFETY: the live HWND is accessed on its owning UI thread.
+                let _ = unsafe { ShowWindow(HWND(handle.0), SW_HIDE) };
+            }
+            #[cfg(not(target_os = "windows"))]
             window.hide().map_err(|_| unavailable())?;
             let _ = window.emit("hover-preview-changed", ());
         }
@@ -448,8 +487,8 @@ mod tests {
         };
         let mut state = Inner::default();
         state.dismiss(Some("old"), false, false);
-        assert!(!state.accept(request("old")));
-        assert!(state.accept(request("current")));
+        assert!(!state.accept(request("old"), None));
+        assert!(state.accept(request("current"), None));
         assert!(!state.dismiss(Some("old"), false, false).0);
         assert_eq!(state.request.as_ref().unwrap().token, "current");
         state.hovered = true;
@@ -458,7 +497,12 @@ mod tests {
         assert!(!state.dismiss(Some("current"), true, true).0);
         assert!(state.dismiss(Some("current"), false, true).0);
         assert!(state.request.is_none());
-        assert!(!state.accept(request("current")));
+        assert!(!state.accept(request("current"), None));
+        assert!(!state.accept(request("next"), Some("current")));
+        assert!(state.accept(request("next"), None));
+        assert!(state.accept(request("switch"), Some("next")));
+        assert!(!state.accept(request("stale switch"), Some("next")));
+        assert_eq!(state.request.as_ref().unwrap().token, "switch");
     }
     #[test]
     fn preview_rejects_unbounded_metadata_and_invalid_geometry() {

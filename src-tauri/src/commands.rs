@@ -758,7 +758,7 @@ pub fn set_ui_language(
         uclip_core::Language::ZhCn => 2,
         uclip_core::Language::En => 1,
         uclip_core::Language::System => {
-            return Err(AppError::new(uclip_core::ErrorCode::InvalidInput))
+            return Err(AppError::new(uclip_core::ErrorCode::InvalidInput));
         }
     };
     app.state::<crate::desktop::DesktopState>()
@@ -771,9 +771,10 @@ pub fn set_ui_language(
 pub async fn show_hover_preview(
     app: tauri::AppHandle,
     request: uclip_core::HoverPreviewRequest,
-) -> Result<(), AppError> {
+    previous_token: Option<String>,
+) -> Result<bool, AppError> {
     let token = request.token.clone();
-    let result = crate::hover_preview::show(app.clone(), request).await;
+    let result = crate::hover_preview::show(app.clone(), request, previous_token).await;
     if result.is_err() {
         let _ = crate::hover_preview::hide(&app, Some(&token), false);
     }

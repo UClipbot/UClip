@@ -116,7 +116,6 @@ def run(invoke, invoke_current, execute, switch_window, wait, env):
     wait_closed('preview closed by native close or Escape')
     if session == 'x11':
         wait(lambda: execute('return document.hasFocus()'), 'main focus restored')
-        time.sleep(0.45)  # Match the normal hover delay before reopening.
     assert open_preview(clip) == handle, 'preview WebView must be reused'
 
     if session == 'x11':
