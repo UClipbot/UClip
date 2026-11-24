@@ -232,6 +232,8 @@ fn copy_uses_shared_exclusion_capacity_and_change_tracking_without_evicting_sour
         .capture(ClipPayload::Text("private content".into()))
         .unwrap()
         .unwrap();
+    s.create_text_in_collection("existing tab item".into(), Some(a.id.clone()))
+        .unwrap();
     let before = s.history_revision().unwrap();
     assert_eq!(
         transfer(&mut s, &source, "0", Some(&a.id), TransferMode::Copy)
@@ -259,7 +261,7 @@ fn copy_uses_shared_exclusion_capacity_and_change_tracking_without_evicting_sour
         ErrorCode::Storage
     );
     assert_eq!(s.history_revision().unwrap(), before);
-    assert_eq!(s.history(query(None)).unwrap().total, 1);
+    assert_eq!(s.history(query(None)).unwrap().total, 2);
     c.execute_batch("DROP TRIGGER fail_clip_change").unwrap();
     assert!(transfer(&mut s, &source, "0", Some(&a.id), TransferMode::Copy).is_ok());
     assert!(s.read_clip(&source).is_ok());
@@ -463,7 +465,10 @@ fn batch_copy_preserves_unprocessed_sources_and_reports_the_confirmed_prefix() {
         .capture(ClipPayload::Text("second".into()))
         .unwrap()
         .unwrap();
-    policy(&mut storage, 3, "");
+    storage
+        .create_text_in_collection("existing copy".into(), Some(destination.id.clone()))
+        .unwrap();
+    policy(&mut storage, 2, "");
     let batch = storage
         .transfer_clips(TransferClips {
             clips: vec![
@@ -484,10 +489,96 @@ fn batch_copy_preserves_unprocessed_sources_and_reports_the_confirmed_prefix() {
     assert_eq!(batch.failure.unwrap().code, ErrorCode::LimitExceeded);
     assert_eq!(
         storage.history(query(Some(&destination.id))).unwrap().total,
-        1
+        2
     );
     assert!(storage.read_clip(&first).is_ok());
     assert!(storage.read_clip(&second).is_ok());
+}
+
+#[test]
+fn tab_capacity_is_independent_for_capture_move_copy_and_restore() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut storage = Storage::open(&folder.path().join("tab-capacity.sqlite3")).unwrap();
+    assert_eq!(
+        storage.capture_policy().unwrap().max_items,
+        MAX_HISTORY_ITEMS_PER_TAB
+    );
+    policy(&mut storage, u32::MAX, "");
+    assert_eq!(
+        storage.capture_policy().unwrap().max_items,
+        MAX_HISTORY_ITEMS_PER_TAB
+    );
+    policy(&mut storage, 1, "");
+    let first_tab = category(&mut storage, "First");
+    let second_tab = category(&mut storage, "Second");
+    let captured = storage
+        .capture(ClipPayload::Text("captured".into()))
+        .unwrap()
+        .unwrap();
+    let first = transfer(
+        &mut storage,
+        &captured,
+        "0",
+        Some(&first_tab.id),
+        TransferMode::Copy,
+    )
+    .unwrap();
+    let second = transfer(
+        &mut storage,
+        &captured,
+        "0",
+        Some(&second_tab.id),
+        TransferMode::Copy,
+    )
+    .unwrap();
+    assert_eq!(storage.history(query(None)).unwrap().total, 3);
+
+    let before = storage.history_revision().unwrap();
+    assert_eq!(
+        transfer(
+            &mut storage,
+            &first.id,
+            "0",
+            Some(&second_tab.id),
+            TransferMode::Move
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::LimitExceeded
+    );
+    assert_eq!(storage.history_revision().unwrap(), before);
+    let deleted = storage
+        .change_clip_deletion(ChangeClipDeletion {
+            id: second.id.clone(),
+            expected_revision: "0".into(),
+            deleted: true,
+        })
+        .unwrap();
+    storage
+        .create_text_in_collection("replacement".into(), Some(second_tab.id.clone()))
+        .unwrap();
+    assert_eq!(
+        storage
+            .change_clip_deletion(ChangeClipDeletion {
+                id: second.id,
+                expected_revision: deleted.revision,
+                deleted: false,
+            })
+            .unwrap_err()
+            .code,
+        ErrorCode::LimitExceeded
+    );
+
+    storage
+        .capture(ClipPayload::Text("new capture".into()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        storage.read_clip(&captured).unwrap_err().code,
+        ErrorCode::NotFound
+    );
+    assert!(storage.read_clip(&first.id).is_ok());
+    assert_eq!(storage.history(query(None)).unwrap().total, 3);
 }
 
 #[test]

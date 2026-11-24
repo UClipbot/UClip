@@ -23,11 +23,24 @@ def run(c):
         wait(lambda:c.execute('return [...document.querySelectorAll(".clip-row")].some(e=>e.textContent.includes(arguments[0]))',[label]),'capture visible in real native UI')
         visible.append((time.monotonic()-started)*1000)
     wake=measure_wake(c)
-    c.execute('window.__frameSamples=[];window.__frameDone=false;window.__frameIds=[...document.querySelectorAll(".clip-row")].map(e=>e.dataset.clipId);const list=document.querySelector(".history-scroll");let previous=performance.now(),end=previous+5000,direction=1;function frame(now){window.__frameSamples.push(now-previous);previous=now;list.scrollTop+=direction*8;if(list.scrollTop+list.clientHeight>=list.scrollHeight)direction=-1;if(list.scrollTop<=0)direction=1;if(now<end)requestAnimationFrame(frame);else window.__frameDone=true;}requestAnimationFrame(frame);return true')
+    c.execute('''
+      window.__frameSamples=[];window.__frameDone=false;window.__frameStable=true;
+      const list=document.querySelector(".history-scroll"), height=list.scrollHeight;
+      let previous=performance.now(),end=previous+5000,direction=1;
+      function frame(now){
+        window.__frameSamples.push(now-previous);previous=now;
+        window.__frameStable &&= list.scrollHeight===height;
+        list.scrollTop+=direction*8;
+        if(list.scrollTop+list.clientHeight>=list.scrollHeight)direction=-1;
+        if(list.scrollTop<=0)direction=1;
+        if(now<end)requestAnimationFrame(frame);else window.__frameDone=true;
+      }
+      requestAnimationFrame(frame);return true
+    ''')
     wait(lambda:c.execute('return window.__frameDone'),'native frame sample')
-    frames=c.execute('const now=[...document.querySelectorAll(".clip-row")].map(e=>e.dataset.clipId);return {samples:window.__frameSamples,stable:JSON.stringify(now)===JSON.stringify(window.__frameIds),unique:new Set(now).size===now.length}')
+    frames=c.execute('const now=[...document.querySelectorAll(".clip-row")].map(e=>e.dataset.clipId);return {samples:window.__frameSamples,stable:window.__frameStable,unique:new Set(now).size===now.length}')
     assert frames['stable'] and frames['unique'],frames
-    c.execute('delete window.__frameSamples;delete window.__frameDone;delete window.__frameIds;return true')
+    c.execute('delete window.__frameSamples;delete window.__frameDone;delete window.__frameStable;return true')
     window=c.window('^UClip$')
     root=int(subprocess.check_output(['xdotool','getwindowpid',window],env=c.env,text=True).strip())
     seen=set()

@@ -41,20 +41,29 @@ export function translate(language: Locale, key: string, values: Values = {}): s
 }
 export const t = (key: string, values?: Values) => translate(locale, key, values);
 
+const historyFormats = new Map<Locale, { date: Intl.DateTimeFormat; time: Intl.DateTimeFormat }>();
+function historyFormatters() {
+  let formats = historyFormats.get(locale);
+  if (!formats) {
+    formats = {
+      date: new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric' }),
+      time: new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }),
+    };
+    historyFormats.set(locale, formats);
+  }
+  return formats;
+}
+
 export function formatHistoryDate(timestamp: number, now = new Date()): string {
   const date = new Date(timestamp);
   if (date.toDateString() === now.toDateString()) return t('today');
   const yesterday = new Date(now);
   yesterday.setDate(yesterday.getDate() - 1);
   if (date.toDateString() === yesterday.toDateString()) return t('yesterday');
-  return new Intl.DateTimeFormat(locale, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  }).format(date);
+  return historyFormatters().date.format(date);
 }
 export function formatHistoryTime(timestamp: number): string {
-  return new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }).format(timestamp);
+  return historyFormatters().time.format(timestamp);
 }
 
 export function formatTimestamp(timestamp: number): string {

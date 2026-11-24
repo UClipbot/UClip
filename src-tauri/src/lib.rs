@@ -4,6 +4,8 @@ pub mod clipboard;
 mod clipboard_watch;
 mod commands;
 mod desktop;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod graphics;
 mod hover_preview;
 mod paste;
 mod paths;
@@ -40,7 +42,24 @@ fn local_navigation(url: &url::Url) -> bool {
     (local || development) && url.username().is_empty() && url.password().is_none()
 }
 
+pub(crate) fn local_window<'a>(
+    app: &'a tauri::AppHandle,
+    label: &str,
+    page: &str,
+) -> WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle> {
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
+        .on_navigation(local_navigation);
+    #[cfg(target_os = "windows")]
+    if let Some(arguments) = app.state::<graphics::Preferences>().webview2_browser_args() {
+        return builder.additional_browser_args(arguments);
+    }
+    builder
+}
+
 pub fn run() {
+    let context = tauri::generate_context!();
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let graphics = graphics::Preferences::initialize(&context.config().identifier);
     let mut builder = tauri::Builder::default()
         // Upstream requires single-instance to be registered before every other plugin.
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
@@ -87,6 +106,7 @@ pub fn run() {
             commands::editable_content,
             commands::edit_clip,
             commands::desktop_status,
+            commands::set_hardware_acceleration,
             commands::update_desktop_preferences,
             desktop::set_global_shortcut_recording,
             commands::quick_paste_settings,
@@ -202,17 +222,12 @@ pub fn run() {
                     .state::<desktop::DesktopState>()
                     .preferences()
                     .is_none_or(|p| p.native_titlebar);
-                let window = WebviewWindowBuilder::new(
-                    &handle,
-                    "main",
-                    WebviewUrl::App("index.html".into()),
-                )
-                .title("UClip")
-                .always_on_top(true)
-                .decorations(cfg!(target_os = "macos") || native_titlebar)
-                .inner_size(640.0, 650.0)
-                .min_inner_size(480.0, 390.0)
-                .on_navigation(local_navigation);
+                let window = local_window(&handle, "main", "index.html")
+                    .title("UClip")
+                    .always_on_top(true)
+                    .decorations(cfg!(target_os = "macos") || native_titlebar)
+                    .inner_size(640.0, 650.0)
+                    .min_inner_size(480.0, 390.0);
                 #[cfg(target_os = "macos")]
                 let window = window
                     .visible(false)
@@ -282,6 +297,10 @@ pub fn run() {
             });
             Ok(())
         });
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        builder = builder.manage(graphics);
+    }
     #[cfg(not(target_os = "linux"))]
     {
         builder = builder.plugin(
@@ -298,7 +317,7 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
     }
     let app = builder
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to initialize desktop runtime");
 
     app.run(|handle, event| {

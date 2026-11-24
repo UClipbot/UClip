@@ -458,7 +458,15 @@ pub struct DesktopStatus {
     pub tray_available: bool,
     pub shortcut_available: bool,
     pub autostart_enabled: Option<bool>,
+    pub hardware_acceleration: Option<HardwareAcceleration>,
     pub error: Option<AppError>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HardwareAcceleration {
+    pub enabled: bool,
+    pub enabled_at_startup: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

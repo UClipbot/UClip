@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, Language, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 18;
+pub const SCHEMA_VERSION: u32 = 19;
 const APPLICATION_ID: i64 = 0x434c4e58; // Stable database format ID (CLNX), independent of the product name.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -191,6 +191,28 @@ impl Storage {
             }
             crate::replica::migrate_latest(&tx)?;
             tx.pragma_update(None, "user_version", 18)?;
+        }
+        if version < 19 {
+            let max = crate::MAX_HISTORY_ITEMS_PER_TAB;
+            let bump_revision = i64::from(version != 0);
+            tx.execute_batch(&format!(
+                "CREATE TABLE capture_policy_v19(
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+                    exclude_pattern TEXT NOT NULL,
+                    max_items INTEGER NOT NULL CHECK(max_items BETWEEN 1 AND {max}),
+                    revision INTEGER NOT NULL CHECK(revision>=0)
+                 ) STRICT;
+                 INSERT INTO capture_policy_v19 SELECT singleton,enabled,exclude_pattern,
+                    CASE WHEN max_items=500 THEN {max} ELSE max_items END,
+                    revision+{bump_revision}*(max_items=500)
+                    FROM capture_policy;
+                 DROP TABLE capture_policy;
+                 ALTER TABLE capture_policy_v19 RENAME TO capture_policy;
+                 CREATE INDEX IF NOT EXISTS clips_local_history_order
+                    ON clips(deleted,pinned DESC,sequence DESC,id);"
+            ))?;
+            tx.pragma_update(None, "user_version", 19)?;
         }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;

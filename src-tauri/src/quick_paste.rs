@@ -7,10 +7,7 @@ use std::{
     },
     time::Duration,
 };
-use tauri::{
-    Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, WindowEvent,
-};
+use tauri::{Emitter, LogicalSize, Manager, PhysicalPosition, WebviewWindow, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use uclip_core::{
     AppError, AuxiliaryWindow, ClipKind, CopyResult, ErrorCode, QuickPastePreferences,
@@ -123,23 +120,18 @@ pub fn prepare_window(app: &tauri::AppHandle) -> Result<WebviewWindow, AppError>
         .fit(kind, monitor.as_ref());
     let minimum = kind.minimum_size();
     let maximum = f64::from(AuxiliaryWindow::MAXIMUM_DIMENSION);
-    let builder = WebviewWindowBuilder::new(
-        app,
-        LABEL,
-        WebviewUrl::App("index.html?window=quick-paste".into()),
-    )
-    .title("UClip")
-    .inner_size(f64::from(size.width), f64::from(size.height))
-    .min_inner_size(f64::from(minimum.width), f64::from(minimum.height))
-    .max_inner_size(maximum, maximum)
-    .visible(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .minimizable(false)
-    .maximizable(false)
-    .resizable(true)
-    .decorations(cfg!(target_os = "macos"))
-    .on_navigation(crate::local_navigation);
+    let builder = crate::local_window(app, LABEL, "index.html?window=quick-paste")
+        .title("UClip")
+        .inner_size(f64::from(size.width), f64::from(size.height))
+        .min_inner_size(f64::from(minimum.width), f64::from(minimum.height))
+        .max_inner_size(maximum, maximum)
+        .visible(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .minimizable(false)
+        .maximizable(false)
+        .resizable(true)
+        .decorations(cfg!(target_os = "macos"));
     #[cfg(target_os = "macos")]
     let builder = builder
         .hidden_title(true)

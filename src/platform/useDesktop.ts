@@ -77,6 +77,8 @@ export function useDesktop(native: boolean, interaction: boolean, manageInteract
     error,
     busy,
     save: (request: UpdateDesktopPreferences) => change('update_desktop_preferences', { request }),
+    saveHardwareAcceleration: (enabled: boolean) =>
+      change('set_hardware_acceleration', { enabled }),
     saveKeys: (request: UpdateKeyBindings) => change('update_key_bindings', { request }),
     autostart: (enabled: boolean) => change('set_autostart', { enabled }),
     hide: () => invoke('hide_main_window'),

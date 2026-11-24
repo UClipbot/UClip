@@ -55,17 +55,22 @@ export function HoverPreview({
       clearTimeout(openTimer);
       clearTimeout(closeTimer);
       openTimer = undefined;
+      if (!force && nativeToken) {
+        // The preview can keep this request alive while it has the pointer or focus.
+        void hideHoverPreview(nativeToken, true).catch(() => {});
+        return;
+      }
       shown = false;
       candidate = null;
       setTarget(null);
-      if (nativeToken) void hideHoverPreview(nativeToken, !force).catch(() => {});
+      if (nativeToken) void hideHoverPreview(nativeToken).catch(() => {});
     };
     keep.current = () => clearTimeout(closeTimer);
     leave.current = () => {
       clearTimeout(openTimer);
       openTimer = undefined;
       clearTimeout(closeTimer);
-      closeTimer = setTimeout(() => dismiss(), native ? 450 : 180);
+      closeTimer = setTimeout(() => dismiss(false), native ? 450 : 180);
     };
     const enter = (event: PointerEvent) => {
       if (event.pointerType === 'touch') return;

@@ -1,5 +1,5 @@
-import { t, formatHistoryDate, formatHistoryTime } from '../i18n';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { t, formatHistoryDate, formatHistoryTime, getLocale } from '../i18n';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { safeError } from './client';
 import { useClipDetail } from './useClipDetail';
@@ -13,6 +13,7 @@ import type {
   ClipDetail,
   CopyResult,
   HistoryPage,
+  HistoryQuery,
   PurgeTrash,
   CollectionItem,
   CollectionsSnapshot,
@@ -29,6 +30,57 @@ import type {
 } from '../generated/contracts';
 import type { Clip, ClipType } from '../demo/clips';
 
+const HISTORY_BATCH = 100;
+const MAX_CACHED_ROWS = 4000;
+
+export type HistoryRange = { start: number; end: number };
+
+type HistorySnapshot = {
+  scope: string;
+  key: string;
+  revision: string;
+  total: number;
+  rows: ReadonlyMap<number, HistoryPage['items'][number]>;
+};
+
+function firstMissing(snapshot: HistorySnapshot, range: HistoryRange) {
+  for (let index = range.start; index < Math.min(range.end, snapshot.total); index++) {
+    if (!snapshot.rows.has(index)) return Math.floor(index / HISTORY_BATCH) * HISTORY_BATCH;
+  }
+  return undefined;
+}
+
+function cacheRows(
+  existing: HistorySnapshot['rows'] | undefined,
+  page: HistoryPage,
+  offset: number,
+) {
+  const rows = new Map(existing);
+  page.items.forEach((item, index) => rows.set(offset + index, item));
+  if (rows.size > MAX_CACHED_ROWS) {
+    const center = offset + page.items.length / 2;
+    const evictable = [...rows.keys()]
+      .filter((index) => index >= HISTORY_BATCH)
+      .sort((a, b) => Math.abs(b - center) - Math.abs(a - center));
+    for (const index of evictable.slice(0, rows.size - MAX_CACHED_ROWS)) rows.delete(index);
+  }
+  return rows;
+}
+
+async function readHistory(request: HistoryQuery, trash: boolean, count?: number) {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      invoke<HistoryPage>('history_query', { request, trash, count }),
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(safeError({ code: 'query_timeout' })), 5000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(deadline);
+  }
+}
+
 export function useHistory(
   native: boolean,
   query: string,
@@ -40,43 +92,51 @@ export function useHistory(
   previewId?: string,
   settingsOnly = false,
 ) {
+  const queryScope = JSON.stringify([query, regex, type, pinnedOnly, collectionId, trash]);
   const [status, setStatus] = useState<ClipboardStatus | null>(null);
-  const [page, setPage] = useState<HistoryPage | null>(null);
+  const [result, setResult] = useState<HistorySnapshot>();
   const [collections, setCollections] = useState<CollectionsSnapshot | null>(null);
-  const [offset, setOffset] = useState(0);
+  const [range, setRange] = useState({ scope: queryScope, start: 0, end: 0 });
   const [queryEpoch, setQueryEpoch] = useState(0);
-  const [loading, setPending] = useState(native);
-  const [error, setError] = useState('');
+  const [failure, setFailure] = useState<{ key: string; message: string }>();
+  if (range.scope !== queryScope) {
+    setRange({ scope: queryScope, start: 0, end: 0 });
+    setResult(undefined);
+    setFailure(undefined);
+  }
   const [statusError, setStatusError] = useState('');
   const { detail, detailError } = useClipDetail(native, previewId);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  const [visibleImages, setVisibleImages] = useState<readonly string[]>([]);
   const [mutating, setMutating] = useState(false);
   const statusGeneration = useRef(0);
   const mutation = useRef(false);
   const mounted = useRef(true);
   const cache = useRef(new Map<string, string>());
-  const pageRevision = useRef<string | null>(null);
   const historyRevision = status?.historyRevision;
-  const requestKey = JSON.stringify([
-    query,
-    regex,
-    type,
-    pinnedOnly,
-    collectionId,
-    trash,
-    offset,
-    historyRevision,
-    queryEpoch,
-  ]);
-  const [settledKey, setSettledKey] = useState('');
-  const pending = native && (loading || settledKey !== requestKey);
-  const queryScope = {
-    query,
-    regex,
-    pinnedOnly,
-    collectionId,
-    kind: type === 'all' ? null : type === 'image' ? 'image' : type === 'file' ? 'files' : 'text',
-  };
+  const requestKey = JSON.stringify([queryScope, historyRevision, queryEpoch]);
+  const page = result?.scope === queryScope ? result : undefined;
+  const current = page?.key === requestKey ? page : undefined;
+  const windowOffset = current ? firstMissing(current, range) : undefined;
+  const refreshStart = current || !page ? 0 : range.start;
+  const refreshEnd = current || !page ? 0 : range.end;
+  const loadKey = JSON.stringify([requestKey, windowOffset]);
+  const queryError = failure?.key === loadKey ? failure.message : '';
+  const pending = native && !settingsOnly && (mutating || (!current && !queryError));
+  const requestRange = useCallback(
+    ({ start, end }: HistoryRange) => setRange({ scope: queryScope, start, end }),
+    [queryScope],
+  );
+  const queryFields = useMemo<Omit<HistoryQuery, 'offset' | 'expectedRevision'>>(
+    () => ({
+      query,
+      regex,
+      pinnedOnly,
+      collectionId,
+      kind: type === 'all' ? null : type === 'image' ? 'image' : type === 'file' ? 'files' : 'text',
+    }),
+    [query, regex, pinnedOnly, collectionId, type],
+  );
   const refresh = useCallback(async () => {
     if (!native || mutation.current) return;
     const generation = ++statusGeneration.current;
@@ -113,88 +173,93 @@ export function useHistory(
     };
   }, [native, refresh]);
   useEffect(() => {
-    setOffset(0);
-  }, [query, regex, type, pinnedOnly, collectionId, trash]);
-  useEffect(() => {
-    if (!native || settingsOnly) return;
+    if (
+      !native ||
+      settingsOnly ||
+      mutating ||
+      queryError ||
+      (current && windowOffset === undefined)
+    )
+      return;
     let active = true;
-    setPending(true);
-    setError('');
-    let deadline: ReturnType<typeof setTimeout>;
-    const timer = setTimeout(() => {
-      deadline = setTimeout(() => {
+    const load = async () => {
+      try {
+        if (current && windowOffset !== undefined) {
+          const next = await readHistory(
+            { ...queryFields, offset: windowOffset, expectedRevision: current.revision },
+            trash,
+            Math.min(HISTORY_BATCH, current.total - windowOffset),
+          );
+          if (!next.items.length) throw safeError({ code: 'conflict' });
+          if (active) setResult({ ...current, rows: cacheRows(current.rows, next, windowOffset) });
+          return;
+        }
+        const head = await readHistory(
+          { ...queryFields, offset: 0, expectedRevision: null },
+          trash,
+        );
         if (!active) return;
-        active = false;
-        setSettledKey(requestKey);
-        setError(safeError({ code: 'query_timeout' }).message);
-        setPending(false);
-      }, 5000);
-      invoke<HistoryPage>('history_query', {
-        trash,
-        request: {
-          ...queryScope,
-          offset,
-          expectedRevision: offset ? pageRevision.current : null,
-        },
-      }).then(
-        (value) => {
-          clearTimeout(deadline);
-          if (active) {
-            setSettledKey(requestKey);
-            if (!value.items.length && offset > 0) {
-              setOffset(Math.max(0, offset - 25));
-              return;
-            }
-            pageRevision.current = value.revision;
-            setPage(value);
-            setPending(false);
-          }
-        },
-        (failure) => {
-          clearTimeout(deadline);
-          if (!active) return;
-          if (safeError(failure).code === 'conflict' && offset) {
-            setOffset(0);
-            void refresh();
-          } else {
-            setSettledKey(requestKey);
-            setError(safeError(failure).message);
-            setPending(false);
-          }
-        },
-      );
-    }, 80);
+        let rows = cacheRows(undefined, head, 0);
+        // Refresh the region being read together with the new total, so a
+        // recently captured record does not displace the reader's anchor.
+        if (refreshEnd > head.items.length && head.total > head.items.length) {
+          const span = Math.min(1000, refreshEnd - refreshStart);
+          const offset = Math.max(0, Math.min(refreshStart, head.total - span));
+          const next = await readHistory(
+            { ...queryFields, offset, expectedRevision: head.revision },
+            trash,
+            Math.min(span, head.total - offset),
+          );
+          rows = cacheRows(rows, next, offset);
+        }
+        if (active)
+          setResult({
+            scope: queryScope,
+            key: requestKey,
+            revision: head.revision,
+            total: head.total,
+            rows,
+          });
+      } catch (error) {
+        if (!active) return;
+        const reason = safeError(error);
+        setFailure({ key: loadKey, message: reason.message });
+        if (reason.code === 'conflict') void refresh();
+      }
+    };
+    const timer = setTimeout(() => void load(), current ? 40 : 80);
     return () => {
       active = false;
       clearTimeout(timer);
-      clearTimeout(deadline);
     };
   }, [
     native,
-    query,
-    regex,
-    type,
-    pinnedOnly,
-    collectionId,
     trash,
-    offset,
-    historyRevision,
+    current,
+    windowOffset,
+    refreshStart,
+    refreshEnd,
+    mutating,
+    queryError,
+    queryFields,
+    queryScope,
     refresh,
     requestKey,
+    loadKey,
     settingsOnly,
   ]);
   useEffect(() => {
-    if (!native || !page || trash) return;
+    if (!native || !page || trash || !visibleImages.length) return;
     let active = true;
     void (async () => {
-      for (const item of page.items) {
-        if (!active) break;
-        if (item.kind !== 'image' || cache.current.has(item.id)) continue;
+      for (const id of visibleImages) {
+        if (!active) return;
+        if (cache.current.has(id)) continue;
         try {
-          const image = await invoke<ClipDetail>('clip_detail', { id: item.id, thumbnail: true });
-          if (!active) break;
+          const image = await invoke<ClipDetail>('clip_detail', { id, thumbnail: true });
+          if (!active) return;
           if (image.imageDataUrl) {
-            cache.current.set(item.id, image.imageDataUrl);
+            cache.current.set(id, image.imageDataUrl);
             if (cache.current.size > 50) cache.current.delete(cache.current.keys().next().value!);
             setThumbnails(Object.fromEntries(cache.current));
           }
@@ -206,7 +271,7 @@ export function useHistory(
     return () => {
       active = false;
     };
-  }, [native, page, trash]);
+  }, [native, page, trash, visibleImages]);
   async function updatePolicy(request: UpdateCapturePolicy) {
     if (mutation.current) throw safeError({ code: 'busy' });
     mutation.current = true;
@@ -241,7 +306,6 @@ export function useHistory(
     mutation.current = true;
     statusGeneration.current++;
     setMutating(true);
-    setPending(true);
     try {
       return await invoke<ClipDeletionSnapshot>('change_clip_deletion', { request });
     } finally {
@@ -258,7 +322,6 @@ export function useHistory(
     mutation.current = true;
     statusGeneration.current++;
     setMutating(true);
-    setPending(true);
     const completed: ClipDeletionSnapshot[] = [];
     let failure: unknown;
     try {
@@ -296,7 +359,6 @@ export function useHistory(
     mutation.current = true;
     statusGeneration.current++;
     setMutating(true);
-    setPending(true);
     try {
       return await invoke<T>(command, { request });
     } finally {
@@ -308,8 +370,9 @@ export function useHistory(
       await refresh();
     }
   }
-  const mapItems = (items: HistoryPage['items']): Clip[] =>
-    items.map((item) => ({
+  const locale = getLocale();
+  const mapItem = useCallback(
+    (item: HistoryPage['items'][number]): Clip => ({
       id: item.id,
       revision: item.revision,
       savedAt: item.capturedAt,
@@ -335,39 +398,47 @@ export function useHistory(
             ? t('0_items', { 0: item.fileCount })
             : undefined,
       image: trash ? undefined : thumbnails[item.id],
-    }));
-  async function readRange(offset: number, count: number) {
-    if (!page || pending || error) throw safeError({ code: 'conflict' });
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const range = await Promise.race([
-        invoke<HistoryPage>('history_query', {
-          trash,
-          count,
-          request: { ...queryScope, offset, expectedRevision: page.revision },
-        }),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(safeError({ code: 'query_timeout' })), 5000);
-        }),
-      ]);
-      return mapItems(range.items);
-    } finally {
-      clearTimeout(timer);
-    }
+    }),
+    [trash, thumbnails, locale],
+  );
+  const itemsByPosition = useMemo(
+    () =>
+      new Map(
+        [...(page?.rows ?? [])]
+          .sort(([a], [b]) => a - b)
+          .map(([index, item]) => [index, mapItem(item)]),
+      ),
+    [page, mapItem],
+  );
+  const items = useMemo(() => [...itemsByPosition.values()], [itemsByPosition]);
+  async function readRange(start: number, count: number) {
+    if (!current || pending) throw safeError({ code: 'conflict' });
+    if (count > 1000) throw safeError({ code: 'limit_exceeded' });
+    const window = await readHistory(
+      { ...queryFields, offset: start, expectedRevision: current.revision },
+      trash,
+      count,
+    );
+    return window.items.map(mapItem);
   }
   return {
     status,
     collections: collections?.items ?? [],
-    items: mapItems(page?.items ?? []),
+    items,
+    itemsByPosition,
     pending,
-    error,
+    error: current ? '' : queryError,
+    moreError: current ? queryError : '',
+    loadingWindow: windowOffset !== undefined && !pending && !queryError,
+    requestRange,
+    readRange,
+    retryMore: () => setFailure(undefined),
+    setVisibleImages,
     statusError,
     detail,
     detailError,
     total: page?.total ?? 0,
     revision: page?.revision,
-    offset,
-    setOffset,
     updatePolicy,
     changeDeletion,
     createCollection: (name: string) =>
@@ -392,8 +463,10 @@ export function useHistory(
     mutating,
     copy,
     changeDeletions,
-    readRange,
     refresh,
-    retryQuery: () => setQueryEpoch((epoch) => epoch + 1),
+    retryQuery: () => {
+      setFailure(undefined);
+      setQueryEpoch((epoch) => epoch + 1);
+    },
   };
 }

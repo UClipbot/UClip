@@ -137,22 +137,17 @@ pub async fn show(app: tauri::AppHandle, request: HoverPreviewRequest) -> Result
     let window = if let Some(window) = app.get_webview_window(LABEL) {
         window
     } else {
-        tauri::WebviewWindowBuilder::new(
-            &app,
-            LABEL,
-            tauri::WebviewUrl::App("index.html?window=hover-preview".into()),
-        )
-        .title(title(&app))
-        .inner_size(560.0, 640.0)
-        .min_inner_size(320.0, 240.0)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .minimizable(false)
-        .focused(false)
-        .visible(false)
-        .on_navigation(crate::local_navigation)
-        .build()
-        .map_err(|_| unavailable())?
+        crate::local_window(&app, LABEL, "index.html?window=hover-preview")
+            .title(title(&app))
+            .inner_size(560.0, 640.0)
+            .min_inner_size(320.0, 240.0)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .minimizable(false)
+            .focused(false)
+            .visible(false)
+            .build()
+            .map_err(|_| unavailable())?
     };
     if current(&app)?.is_none_or(|value| value.token != token) {
         return Ok(());
@@ -184,6 +179,16 @@ pub async fn show(app: tauri::AppHandle, request: HoverPreviewRequest) -> Result
             window
                 .emit("hover-preview-changed", ())
                 .map_err(|_| unavailable())?;
+            #[cfg(target_os = "linux")]
+            {
+                use gtk::prelude::*;
+                // Tao restores accept-focus after the first draw. The map policy
+                // still needs to prevent activation when a preview is shown again.
+                window
+                    .gtk_window()
+                    .map_err(|_| unavailable())?
+                    .set_focus_on_map(false);
+            }
             crate::desktop::show_without_focus(&window)
         })();
         let _ = tx.send(result);

@@ -2,12 +2,16 @@ name: Build installers
 
 on:
   workflow_dispatch:
+  push:
+    branches: ['package/v*']
+    tags: ['v*']
 
 permissions:
   contents: read
 
 jobs:
   package:
+    if: github.ref_type == 'branch' || github.event_name == 'workflow_dispatch'
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -32,6 +36,48 @@ jobs:
       - run: npm run package
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
+      - name: Verify CLI in Linux installers
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bundle="$PWD/target/release/bundle"
+          scratch="$(mktemp -d)"
+          expected="uclip $(node -p 'require("./package.json").version')"
+          dpkg-deb -x "$bundle"/deb/*.deb "$scratch/deb"
+          [[ "$("$scratch/deb/usr/bin/uclip" --version)" == "$expected" ]]
+          cd "$scratch"
+          "$bundle"/appimage/*.AppImage --appimage-extract usr/bin/uclip
+          [[ "$(squashfs-root/usr/bin/uclip --version)" == "$expected" ]]
+          UCLIP_LANG=zh-CN squashfs-root/usr/bin/uclip --help | grep -F "$(printf '\347\224\250\346\263\225')"
+      - name: Verify CLI in Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem target/release/bundle/nsis -Filter *.exe)
+          if ($installer.Count -ne 1) { throw 'Expected one NSIS installer' }
+          $scratch = Join-Path $env:RUNNER_TEMP uclip-nsis
+          & "$env:ProgramFiles\7-Zip\7z.exe" x $installer[0].FullName "-o$scratch" '-ir!uclip.exe' -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $cli = @(Get-ChildItem $scratch -Recurse -Filter uclip.exe)
+          if ($cli.Count -ne 1) { throw 'Expected one bundled uclip.exe' }
+          $binary = $cli[0].FullName
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $expected = "uclip $version"
+          if ((& $binary --version) -ne $expected) { throw 'Bundled CLI version mismatch' }
+          [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+          $env:UCLIP_LANG = 'zh-CN'
+          $heading = [string][char]0x7528 + [char]0x6cd5
+          if ((& $binary --help | Out-String) -notmatch $heading) { throw 'Missing localized CLI help' }
+      - name: Verify CLI in macOS disk image
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          mount="$(mktemp -d)"
+          hdiutil attach target/release/bundle/dmg/*.dmg -readonly -nobrowse -mountpoint "$mount"
+          trap 'hdiutil detach "$mount"' EXIT
+          cli="$mount/UClip.app/Contents/MacOS/uclip"
+          [[ "$("$cli" --version)" == "uclip $(node -p 'require("./package.json").version')" ]]
+          UCLIP_LANG=zh-CN "$cli" --help | grep -F "$(printf '\347\224\250\346\263\225')"
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
@@ -43,3 +89,53 @@ jobs:
             target/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download installers from the verified build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          [[ "$GITHUB_REF_NAME" == "v$(node -p 'require("./package.json").version')" ]]
+          run="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/package.yml/runs" \
+            -f branch="package/$GITHUB_REF_NAME" -f event=push -f status=success \
+            -f head_sha="$GITHUB_SHA" -f per_page=1 --jq '.workflow_runs[0].id // empty')"
+          [[ -n "$run" ]]
+          gh run download "$run" --dir artifacts
+          shopt -s globstar nullglob
+          deb=(artifacts/uclip-ubuntu-22.04/**/*.deb)
+          appimage=(artifacts/uclip-ubuntu-22.04/**/*.AppImage)
+          windows=(artifacts/uclip-windows-latest/**/*.exe)
+          mac_arm=(artifacts/uclip-macos-latest/**/*.dmg)
+          mac_intel=(artifacts/uclip-macos-15-intel/**/*.dmg)
+          [[ ${#deb[@]} = 1 && ${#appimage[@]} = 1 && ${#windows[@]} = 1 && ${#mac_arm[@]} = 1 && ${#mac_intel[@]} = 1 ]]
+          mkdir release-files
+          cp -- "${deb[@]}" "${appimage[@]}" "${windows[@]}" "${mac_arm[@]}" "${mac_intel[@]}" release-files/
+          cd release-files
+          files=(*)
+          [[ ${#files[@]} = 5 ]]
+          sha256sum -- "${files[@]}" > SHA256SUMS.txt
+      - name: Publish preview installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if existing="$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+            [[ "$existing" == true ]]
+            gh release upload "$tag" release-files/* --clobber
+          else
+            gh release create "$tag" release-files/* --draft --prerelease --verify-tag \
+              --title "UClip $tag Preview" \
+              --notes "Preview installers for Windows, macOS (Apple Silicon and Intel), and Linux. Every installer includes the uclip CLI. Verify downloads with SHA256SUMS.txt."
+          fi
+          gh release edit "$tag" --draft=false

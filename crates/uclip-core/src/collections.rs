@@ -1,7 +1,7 @@
 use crate::{
     history::{
-        allowed_by_capture_policy, check_change_budget, mutation_revision, now, prune_protecting,
-        read_capture_policy,
+        allowed_by_capture_policy, check_change_budget, ensure_tab_capacity, mutation_revision,
+        now, prune_protecting, read_capture_policy, trash_count,
     },
     AppError, ClipTransferBatch, ClipTransferSnapshot, CollectionItem, CollectionsSnapshot,
     CreateCollection, DeleteCollection, ErrorCode, RenameCollection, Storage, TransferClip,
@@ -9,7 +9,7 @@ use crate::{
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
-const MAX_COLLECTIONS: u32 = 64;
+pub(crate) const MAX_COLLECTIONS: u32 = 64;
 
 pub(crate) fn collection_name(value: &str) -> Result<(String, String), AppError> {
     let name = value.trim();
@@ -162,10 +162,7 @@ impl Storage {
             [&request.id],
         )?;
         // The whole collection must remain recoverable within the retained trash budget.
-        let deleted: u32 =
-            tx.query_row("SELECT count(*) FROM clips WHERE deleted=1", [], |row| {
-                row.get(0)
-            })?;
+        let deleted = trash_count(&tx)?;
         if deleted > crate::history::MAX_TRASH_ITEMS {
             return Err(AppError::new(ErrorCode::LimitExceeded));
         }
@@ -243,16 +240,17 @@ impl Storage {
         if let Some(id) = &request.collection_id {
             ensure_collection(&tx, id)?;
         }
+        let policy = read_capture_policy(&tx)?;
         let (id, next_revision) = match request.mode {
             TransferMode::Move => {
                 if collection == request.collection_id {
                     return Err(AppError::new(ErrorCode::Conflict));
                 }
                 tx.execute("UPDATE clips SET collection=?1,revision=revision+1 WHERE id=?2 AND revision=?3", params![request.collection_id,request.id,revision])?;
+                ensure_tab_capacity(&tx, policy.max_items, request.collection_id.as_deref())?;
                 (request.id, revision + 1)
             }
             TransferMode::Copy => {
-                let policy = read_capture_policy(&tx)?;
                 let payload = Self::read_active_clip(&tx, &request.id, Some(revision))?;
                 if !allowed_by_capture_policy(&payload, &policy)? {
                     return Err(AppError::new(ErrorCode::Excluded));
@@ -262,11 +260,12 @@ impl Storage {
                     SELECT ?1,kind,text,data,width,height,file_count,fingerprint,'manual',0,0,?2,?3,NULL,(SELECT revision+1 FROM history_meta WHERE singleton=1),0 FROM clips WHERE id=?4", params![id,request.collection_id,now(),request.id])?;
                 crate::replica::copy_file_reference(&tx, &request.id, &id)?;
                 // A copy must preserve its source even when capacity is tight.
+                ensure_tab_capacity(&tx, policy.max_items, request.collection_id.as_deref())?;
                 prune_protecting(&tx, policy.max_items, Some(&id), protected)?;
-                check_change_budget(&tx)?;
                 (id, 0)
             }
         };
+        check_change_budget(&tx)?;
         tx.execute(
             "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
             [],

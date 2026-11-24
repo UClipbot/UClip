@@ -140,6 +140,85 @@ fn capacity_never_deletes_the_just_saved_record_and_rolls_back_when_protected() 
     assert_eq!(s.read_clip(&a).unwrap_err().code, ErrorCode::NotFound);
     assert!(s.read_clip(&b).is_ok());
 }
+
+#[test]
+fn history_can_page_past_thirty_thousand_across_tabs() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("large-history.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    let collection = storage
+        .create_collection(CreateCollection {
+            name: "Separate tab".into(),
+        })
+        .unwrap();
+    storage
+        .create_text_in_collection("category entry".into(), Some(collection.id))
+        .unwrap();
+
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<?1)
+         INSERT INTO clips(id,kind,text,data,fingerprint,captured_at,sequence,revision)
+         SELECT printf('00000000-0000-4000-8000-%012x', n),'text',
+             CASE WHEN n=1 THEN 'oldest match' ELSE 'fixture' END,x'',x'',n,n+2,0 FROM numbers",
+            [MAX_HISTORY_ITEMS_PER_TAB],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE history_meta SET revision=?1",
+            [MAX_HISTORY_ITEMS_PER_TAB + 2],
+        )
+        .unwrap();
+    let last = storage
+        .history(HistoryQuery {
+            offset: MAX_HISTORY_ITEMS_PER_TAB,
+            ..query("")
+        })
+        .unwrap();
+    assert_eq!(last.total, MAX_HISTORY_ITEMS_PER_TAB + 1);
+    assert_eq!(last.items[0].preview, "category entry");
+    assert_eq!(storage.history(query("oldest match")).unwrap().total, 1);
+
+    storage
+        .capture(ClipPayload::Text("extra record".into()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(storage.history(query("oldest match")).unwrap().total, 0);
+    assert_eq!(
+        storage.history(query("")).unwrap().total,
+        MAX_HISTORY_ITEMS_PER_TAB + 1
+    );
+}
+
+#[test]
+fn capacity_upgrade_replaces_the_old_default_and_preserves_other_preferences() {
+    for (old, expected) in [(500, MAX_HISTORY_ITEMS_PER_TAB), (725, 725)] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("v18.sqlite3");
+        let mut storage = Storage::open(&path).unwrap();
+        let clip = storage.create_text("existing item".into()).unwrap();
+        drop(storage);
+        let connection = Connection::open(&path).unwrap();
+        connection.execute(
+            "UPDATE capture_policy SET max_items=?1,revision=9,enabled=0,exclude_pattern='excluded'",
+            [old],
+        ).unwrap();
+        connection.pragma_update(None, "user_version", 18).unwrap();
+        drop(connection);
+
+        let storage = Storage::open(&path).unwrap();
+        let policy = storage.capture_policy().unwrap();
+        assert_eq!(policy.max_items, expected);
+        assert_eq!(policy.exclude_pattern, "excluded");
+        assert!(!policy.enabled);
+        assert_eq!(
+            storage.read_clip(&clip).unwrap(),
+            ClipPayload::Text("existing item".into())
+        );
+    }
+}
 #[test]
 fn paused_filtered_invalid_and_oversize_data_never_land() {
     let dir = tempfile::tempdir().unwrap();

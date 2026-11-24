@@ -1,6 +1,6 @@
 import { t, formatHistoryTime } from './i18n';
 import { selectionRange } from './platform/selection';
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { WindowResizeGrip } from './components/WindowResizeGrip';
 import { GlobalShortcutSettings } from './components/GlobalShortcutSettings';
 import { onQuickPasteUnavailable } from './platform/quickPaste';
@@ -37,6 +37,7 @@ import { useDesktop } from './platform/useDesktop';
 import { useQuickPastePreferences } from './platform/useQuickPastePreferences';
 import { safeError } from './platform/client';
 import { useAppearance } from './platform/useAppearance';
+import { MAX_HISTORY_ITEMS_PER_TAB } from './generated/contracts';
 import type {
   Theme,
   Language,
@@ -131,6 +132,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const settingsWindow =
     appearance.native && new URLSearchParams(window.location.search).get('window') === 'settings';
   const desktop = useDesktop(appearance.native, !!(modal || menu || preview), !settingsWindow);
+  const hardwareAcceleration = desktop.status?.hardwareAcceleration;
   const quickPaste = useQuickPastePreferences(settingsWindow);
   const customChrome =
     appearance.native && !settingsWindow && desktop.status?.preferences.nativeTitlebar === false;
@@ -166,6 +168,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const modalFocus = useRef<HTMLElement | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const viewport = useRef<HistoryViewport>(null);
   const nativeCollectionId =
     appearance.native && view.startsWith('collection:') ? view.slice(11) : null;
   const live = useHistory(
@@ -199,12 +202,26 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const result = appearance.native
     ? { items: live.items, pending: live.pending, error: live.error }
     : demoResult;
+  const itemsByPosition = useMemo(
+    () =>
+      appearance.native
+        ? live.itemsByPosition
+        : new Map(demoResult.items.map((clip, index) => [index, clip])),
+    [appearance.native, live.itemsByPosition, demoResult.items],
+  );
+  const positions = useMemo(
+    () => new Map([...itemsByPosition].map(([index, clip]) => [clip.id, index])),
+    [itemsByPosition],
+  );
+  const total = appearance.native ? live.total : result.items.length;
   const [policyPattern, setPolicyPattern] = useState('');
-  const [policyMax, setPolicyMax] = useState(500);
+  const [policyMax, setPolicyMax] = useState<number | ''>(MAX_HISTORY_ITEMS_PER_TAB);
+  const [policyMaxAdjusted, setPolicyMaxAdjusted] = useState(false);
   useEffect(() => {
     if (live.status) {
       setPolicyPattern(live.status.policy.excludePattern);
       setPolicyMax(live.status.policy.maxItems);
+      setPolicyMaxAdjusted(false);
     }
   }, [live.status?.policy.revision]);
   const selected = result.items.find((clip) => clip.id === selectedId) ?? result.items[0];
@@ -233,49 +250,47 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
         ? selection.entries[0]?.clip
         : undefined;
     // Refresh the position of a single unchanged row after a background history update.
-    const index = previous
-      ? result.items.findIndex(
-          (clip) => clip.id === previous.id && clip.revision === previous.revision,
-        )
-      : -1;
-    anchorIndex.current = index < 0 ? null : live.offset + index;
-    replaceSelection(index < 0 ? [] : [{ clip: result.items[index]!, index: live.offset + index }]);
+    const index = previous ? positions.get(previous.id) : undefined;
+    const clip = index === undefined ? undefined : itemsByPosition.get(index);
+    const preserved =
+      clip && index !== undefined && clip.revision === previous?.revision ? { clip, index } : null;
+    anchorIndex.current = preserved?.index ?? null;
+    replaceSelection(preserved ? [preserved] : []);
   }, [
     selection,
     selectionQuery,
     selectionScope,
-    result.items,
+    positions,
+    itemsByPosition,
     result.pending,
     result.error,
-    live.offset,
   ]);
   const selectionEntries = selection.scope === selectionScope ? selection.entries : [];
   const selectedClips = appearance.native
     ? selectionEntries.map(({ clip }) => clip)
     : result.items.filter((clip) => selectionEntries.some((entry) => entry.clip.id === clip.id));
+  const selectedIds = new Set(selectedClips.map(({ id }) => id));
   function selectClip(id: string, extend = false, toggle = false) {
     if (!ready || batchLock.current) return;
-    const localIndex = result.items.findIndex((clip) => clip.id === id);
-    if (localIndex === -1) return;
-    const index = live.offset + localIndex;
+    const index = positions.get(id);
+    if (index === undefined) return;
     setSelectedId(id);
     if (extend && anchorIndex.current !== null) {
       const { start, end } = selectionRange(anchorIndex.current, index);
-      const applyRange = (clips: Clip[]) =>
-        replaceSelection(clips.map((clip, offset) => ({ clip, index: start + offset })));
-      if (!appearance.native || (start >= live.offset && end < live.offset + result.items.length)) {
-        applyRange(result.items.slice(start - live.offset, end - live.offset + 1));
-      } else {
+      const entries: SelectionEntry[] = [];
+      for (const [index, clip] of itemsByPosition) {
+        if (index >= start && index <= end) entries.push({ clip, index });
+      }
+      const count = end - start + 1;
+      if (entries.length === count) replaceSelection(entries);
+      else if (appearance.native) {
         batchLock.current = true;
         setBatchBusy(true);
         void live
-          .readRange(start, end - start + 1)
+          .readRange(start, count)
           .then((clips) => {
-            if (
-              currentSelectionScope.current === selectionScope &&
-              clips.length === end - start + 1
-            )
-              applyRange(clips);
+            if (currentSelectionScope.current === selectionScope && clips.length === count)
+              replaceSelection(clips.map((clip, index) => ({ clip, index: start + index })));
           })
           .catch((error) => {
             if (currentSelectionScope.current === selectionScope)
@@ -289,7 +304,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       return;
     }
     anchorIndex.current = index;
-    const entry = { clip: result.items[localIndex]!, index };
+    const entry = { clip: itemsByPosition.get(index)!, index };
     const withoutCurrent = selectionEntries.filter(({ clip }) => clip.id !== id);
     const entries = toggle
       ? withoutCurrent.length === selectionEntries.length
@@ -457,6 +472,9 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
         }
       : previewBase;
   const menuClip = menu?.clipId ? result.items.find((clip) => clip.id === menu.clipId) : undefined;
+  useEffect(() => {
+    if (menu && !menu.anchor.isConnected) setMenu(null);
+  });
   const modifier =
     appearance.snapshot?.platform.os === 'macos' ||
     (!appearance.native && /Mac|iPhone|iPad/.test(navigator.platform))
@@ -541,8 +559,11 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   }
   async function deleteNativeClip(clip: Clip) {
     if (!ready || live.mutating || !clip.revision) return;
-    const index = result.items.findIndex((item) => item.id === clip.id);
-    const nextId = (result.items[index + 1] ?? result.items[index - 1])?.id ?? '';
+    const index = positions.get(clip.id);
+    const nextId =
+      index === undefined
+        ? ''
+        : ((itemsByPosition.get(index + 1) ?? itemsByPosition.get(index - 1))?.id ?? '');
     try {
       const deleted = await live.changeDeletion({
         id: clip.id,
@@ -633,11 +654,13 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   async function saveCapture(enabled: boolean, draft = false) {
     if (!live.status) return;
     const policy = live.status.policy;
+    const maxItems = draft ? policyMax : policy.maxItems;
+    if (maxItems === '') return;
     try {
       await live.updatePolicy({
         enabled,
         excludePattern: draft ? policyPattern : policy.excludePattern,
-        maxItems: draft ? policyMax : policy.maxItems,
+        maxItems,
         expectedRevision: policy.revision,
       });
       setToast({
@@ -960,30 +983,27 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       if (inList && (event.ctrlKey || event.metaKey) && !event.altKey && event.code === 'KeyA') {
         event.preventDefault();
         if (ready && !batchLock.current)
-          replaceSelection(
-            result.items.map((clip, index) => ({ clip, index: live.offset + index })),
-          );
+          replaceSelection([...itemsByPosition].map(([index, clip]) => ({ clip, index })));
         return;
       }
       if (isHistoryAction('down') || isHistoryAction('up')) {
-        if (!ready || !result.items.length) return;
+        if (!ready || !total) return;
         event.preventDefault();
-        const index = result.items.findIndex((clip) => clip.id === selected?.id);
-        const next =
-          result.items[
-            Math.max(
-              0,
-              Math.min(result.items.length - 1, index + (isHistoryAction('down') ? 1 : -1)),
-            )
-          ];
+        const direction = isHistoryAction('down') ? 1 : -1;
+        const position = selected ? positions.get(selected.id) : undefined;
+        const index =
+          position !== undefined &&
+          (target === search.current || viewport.current?.isRendered(position))
+            ? position + direction
+            : (viewport.current?.firstVisible() ?? 0);
+        const nextIndex = Math.max(0, Math.min(total - 1, index));
+        const next = itemsByPosition.get(nextIndex);
+        viewport.current?.scrollToIndex(nextIndex);
         if (next) {
           selectClip(next.id, event.shiftKey);
-          list.current
-            ?.querySelector(`[data-clip-id="${next.id}"]`)
-            ?.scrollIntoView({ block: 'nearest' });
           if (inList && target !== list.current)
             list.current
-              ?.querySelector<HTMLElement>(`[data-clip-id="${next.id}"] [data-row-main]`)
+              ?.querySelector<HTMLElement>(`[data-history-index="${nextIndex}"] [data-row-main]`)
               ?.focus({ preventScroll: true });
         }
       }
@@ -1279,9 +1299,138 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
             </span>
             <HistoryViewport
               listRef={list}
-              resetKey={JSON.stringify([query, regex, type, view, live.offset, oldest, grid])}
-              className={`history-scroll ${grid ? 'clip-grid' : ''}`}
+              viewportRef={viewport}
+              resetKey={JSON.stringify([selectionQuery, grid])}
+              grid={grid}
               pending={result.pending}
+              hidden={!!previewClip}
+              total={total}
+              revision={live.revision}
+              items={itemsByPosition}
+              onRangeChange={appearance.native ? live.requestRange : undefined}
+              onVisibleImages={appearance.native ? live.setVisibleImages : undefined}
+              renderRow={(clip, index) => (
+                <article
+                  key={clip.id}
+                  data-clip-id={clip.id}
+                  data-history-index={index}
+                  data-clip-type={clip.type}
+                  data-clip-revision={clip.revision}
+                  className={`clip-row ${selectedIds.has(clip.id) ? 'selected' : ''} ${index % 2 ? 'striped' : ''}`}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    openMenu(event.currentTarget.querySelector<HTMLElement>('.row-more')!, clip);
+                  }}
+                >
+                  <button
+                    className="row-main"
+                    data-row-main
+                    aria-pressed={selectedIds.has(clip.id)}
+                    aria-label={t('history_item_label', {
+                      0: index + 1,
+                      1: t(typeNames[clip.type]),
+                      2:
+                        clip.type === 'text'
+                          ? clip.content.slice(0, 60)
+                          : clip.type === 'image'
+                            ? (clip.size ?? '')
+                            : clip.title,
+                    })}
+                    onFocus={() => {
+                      setSelectedId(clip.id);
+                    }}
+                    onClick={(event) =>
+                      selectClip(clip.id, event.shiftKey, event.ctrlKey || event.metaKey)
+                    }
+                    onDoubleClick={(event) => {
+                      if (
+                        (!appearance.native || !clip.deleted) &&
+                        !event.ctrlKey &&
+                        !event.metaKey &&
+                        !event.shiftKey
+                      )
+                        void copySelected(true, true);
+                    }}
+                  >
+                    <span
+                      className="row-leading"
+                      style={{ minInlineSize: `${String(total).length}ch` }}
+                      aria-hidden="true"
+                    >
+                      <span className="row-position">{index + 1}</span>
+                      <Icon name={clip.type} size={12} />
+                    </span>
+                    {clip.type === 'image' &&
+                      (clip.image ? (
+                        <img
+                          className="row-thumbnail"
+                          src={clip.image}
+                          width={72}
+                          height={40}
+                          loading="lazy"
+                          decoding="async"
+                          alt=""
+                        />
+                      ) : (
+                        <span
+                          className="row-thumbnail row-thumbnail-placeholder"
+                          aria-hidden="true"
+                        >
+                          <Icon name="image" size={24} />
+                        </span>
+                      ))}
+                    <span className="row-content">
+                      <span className="clip-excerpt">
+                        {clip.type === 'image' ? (
+                          clip.size
+                        ) : appearance.native ? (
+                          <Highlighted
+                            text={clip.type === 'file' ? clip.title : clip.content}
+                            ranges={clip.matchRanges}
+                          />
+                        ) : clip.type === 'file' ? (
+                          clip.title
+                        ) : (
+                          clip.content.replace(/\n\s*\n/g, '\n')
+                        )}
+                      </span>
+                      <span className="clip-row-meta">
+                        {clip.source}
+                        <span>·</span>
+                        {clip.time}
+                        {clip.collectionId && (
+                          <>
+                            <span>·</span>
+                            <span className="clip-collection">
+                              {live.collections.find((item) => item.id === clip.collectionId)
+                                ?.name ?? t('collection_unavailable')}
+                            </span>
+                          </>
+                        )}
+                        {clip.pinned && (
+                          <>
+                            <Icon name="pin" size={12} />
+                            <span className="sr-only">{t('pinned')}</span>
+                          </>
+                        )}
+                      </span>
+                    </span>
+                  </button>
+                  <div className="row-actions">
+                    <button
+                      className="icon-button row-more"
+                      aria-label={t('more_actions_0', {
+                        0: clip.title || clip.content.slice(0, 20),
+                      })}
+                      aria-haspopup="menu"
+                      aria-expanded={menu?.clipId === clip.id}
+                      onClick={(event) => openMenu(event.currentTarget, clip)}
+                    >
+                      <Icon name="more" size={17} />
+                    </button>
+                  </div>
+                </article>
+              )}
             >
               {result.pending && !result.items.length ? (
                 <div className="empty-state" role="status">
@@ -1320,120 +1469,28 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                     </button>
                   )}
                 </div>
-              ) : (
-                result.items.map((clip) => (
-                  <article
-                    key={clip.id}
-                    data-clip-id={clip.id}
-                    data-clip-type={clip.type}
-                    data-clip-revision={clip.revision}
-                    className={`clip-row ${selectedClips.some((item) => item.id === clip.id) ? 'selected' : ''} ${clip.type === 'image' ? 'image-row' : ''}`}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      openMenu(event.currentTarget.querySelector<HTMLElement>('.row-more')!, clip);
-                    }}
-                  >
-                    <button
-                      className="row-main"
-                      data-row-main
-                      aria-pressed={selectedClips.some((item) => item.id === clip.id)}
-                      aria-label={`${t(typeNames[clip.type])}：${clip.type === 'text' ? clip.content.slice(0, 60) : clip.title}`}
-                      onFocus={() => {
-                        setSelectedId(clip.id);
-                      }}
-                      onClick={(event) =>
-                        selectClip(clip.id, event.shiftKey, event.ctrlKey || event.metaKey)
-                      }
-                      onDoubleClick={(event) => {
-                        if (
-                          (!appearance.native || !clip.deleted) &&
-                          !event.ctrlKey &&
-                          !event.metaKey &&
-                          !event.shiftKey
-                        )
-                          void copySelected(true, true);
-                      }}
-                    >
-                      {clip.type === 'image' ? (
-                        clip.image ? (
-                          <img
-                            className="row-thumbnail"
-                            src={clip.image}
-                            width={104}
-                            height={76}
-                            loading="lazy"
-                            decoding="async"
-                            alt=""
-                          />
-                        ) : (
-                          <span
-                            className="row-thumbnail row-thumbnail-placeholder"
-                            aria-hidden="true"
-                          >
-                            <Icon name="image" size={24} />
-                          </span>
-                        )
-                      ) : (
-                        <span className="row-icon">
-                          <Icon name={clip.type} size={19} />
-                        </span>
-                      )}
-                      <span className="row-content">
-                        <span
-                          className={`clip-excerpt ${clip.type === 'image' || clip.type === 'file' ? 'file-title' : ''}`}
-                        >
-                          {clip.type === 'image' ? (
-                            clip.size
-                          ) : appearance.native ? (
-                            <Highlighted
-                              text={clip.type === 'file' ? clip.title : clip.content}
-                              ranges={clip.matchRanges}
-                            />
-                          ) : clip.type === 'file' ? (
-                            clip.title
-                          ) : (
-                            clip.content.replace(/\n\s*\n/g, '\n')
-                          )}
-                        </span>
-                        <span className="clip-row-meta">
-                          {clip.source}
-                          <span>·</span>
-                          {clip.time}
-                          {clip.collectionId && (
-                            <>
-                              <span>·</span>
-                              <span className="clip-collection">
-                                {live.collections.find((item) => item.id === clip.collectionId)
-                                  ?.name ?? t('collection_unavailable')}
-                              </span>
-                            </>
-                          )}
-                          {clip.pinned && (
-                            <>
-                              <Icon name="pin" size={12} />
-                              <span className="sr-only">{t('pinned')}</span>
-                            </>
-                          )}
-                        </span>
-                      </span>
-                    </button>
-                    <div className="row-actions">
-                      <button
-                        className="icon-button row-more"
-                        aria-label={t('more_actions_0', {
-                          0: clip.title || clip.content.slice(0, 20),
-                        })}
-                        aria-haspopup="menu"
-                        aria-expanded={menu?.clipId === clip.id}
-                        onClick={(event) => openMenu(event.currentTarget, clip)}
-                      >
-                        <Icon name="more" size={17} />
-                      </button>
-                    </div>
-                  </article>
-                ))
-              )}
+              ) : null}
             </HistoryViewport>
+            {live.loadingWindow && (
+              <span className="sr-only" role="status">
+                {t('loading_more_history')}
+              </span>
+            )}
+            {!!total && (live.moreError || result.error) && (
+              <div
+                className="history-load-error"
+                role="alert"
+                id={result.error ? 'search-error' : undefined}
+              >
+                <span>{t(live.moreError || result.error)}</span>
+                <button
+                  className="text-button"
+                  onClick={result.error ? live.retryQuery : live.retryMore}
+                >
+                  {t('retry_loading_history')}
+                </button>
+              </div>
+            )}
           </section>
           {previewClip && (
             <ClipPreview
@@ -1459,7 +1516,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
             !settingsWindow &&
             (!appearance.native || view !== 'trash') && (
               <HoverPreview
-                key={JSON.stringify([query, regex, type, view, live.offset, oldest, grid])}
+                key={JSON.stringify([selectionQuery, grid])}
                 listRef={list}
                 clips={result.items}
                 native={appearance.native}
@@ -1486,25 +1543,6 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               {result.pending ? '…' : appearance.native ? live.total : result.items.length}
             </span>
           </button>
-          {appearance.native && live.total > 25 && (
-            <div className="pagination">
-              <button
-                className="text-button"
-                disabled={live.pending || batchBusy || !live.offset}
-                onClick={() => live.setOffset(Math.max(0, live.offset - 25))}
-              >
-                {t('previous_page')}
-              </button>
-              <span>{Math.floor(live.offset / 25) + 1}</span>
-              <button
-                className="text-button"
-                disabled={live.pending || batchBusy || live.offset + 25 >= live.total}
-                onClick={() => live.setOffset(live.offset + 25)}
-              >
-                {t('next_page')}
-              </button>
-            </div>
-          )}
           <div className="footer-tools">
             {appearance.native && (
               <button
@@ -2071,7 +2109,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
             if (!live.mutating) closeModal();
           }}
           description={t(
-            'delete_unpinned_records_whose_content_exactly_matches_any_pinned_record_across_all_history_all_pinned_records_are_kept_search_type_filters_and_pagination_do_not_limit_the_scope',
+            'delete_unpinned_records_whose_content_exactly_matches_any_pinned_record_across_all_history_all_pinned_records_are_kept_search_and_type_filters_do_not_limit_the_scope',
           )}
         >
           {dedupError && (
@@ -2227,22 +2265,42 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                     {t('maximum_records')}
                     <input
                       aria-label={t('maximum_records')}
+                      aria-describedby="history-tab-capacity-hint"
                       type="number"
                       min={1}
-                      max={1000}
+                      max={MAX_HISTORY_ITEMS_PER_TAB}
+                      step={1}
                       value={policyMax}
-                      onChange={(event) => setPolicyMax(Number(event.target.value))}
+                      onChange={(event) => {
+                        const { value, valueAsNumber } = event.currentTarget;
+                        if (value === '' || Number.isNaN(valueAsNumber)) {
+                          setPolicyMax('');
+                          setPolicyMaxAdjusted(false);
+                          return;
+                        }
+                        const clamped = Math.min(
+                          MAX_HISTORY_ITEMS_PER_TAB,
+                          Math.max(1, Math.trunc(valueAsNumber)),
+                        );
+                        setPolicyMax(clamped);
+                        setPolicyMaxAdjusted(clamped !== valueAsNumber);
+                      }}
                     />
                   </label>
+                  <p id="history-tab-capacity-hint" className="settings-feedback" role="status">
+                    {policyMaxAdjusted && policyMax !== ''
+                      ? t('history_tab_capacity_adjusted', {
+                          0: new Intl.NumberFormat(appearance.locale).format(policyMax),
+                        })
+                      : t('history_tab_capacity_hint', {
+                          0: new Intl.NumberFormat(appearance.locale).format(
+                            MAX_HISTORY_ITEMS_PER_TAB,
+                          ),
+                        })}
+                  </p>
                   <button
                     className="secondary-button"
-                    disabled={
-                      !live.status ||
-                      live.mutating ||
-                      !Number.isInteger(policyMax) ||
-                      policyMax < 1 ||
-                      policyMax > 1000
-                    }
+                    disabled={!live.status || live.mutating || policyMax === ''}
                     onClick={() => void saveCapture(!!live.status?.policy.enabled, true)}
                   >
                     {t('save_capture_rules')}
@@ -2355,6 +2413,37 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                       )}
                     </p>
                   </>
+                )}
+                {settingsWindow && hardwareAcceleration && (
+                  <>
+                    <label className="setting-row">
+                      {t('hardware_acceleration')}
+                      <input
+                        id="hardware-acceleration"
+                        type="checkbox"
+                        aria-describedby="hardware-acceleration-hint"
+                        checked={hardwareAcceleration.enabled}
+                        disabled={desktop.busy}
+                        onChange={(event) => {
+                          const enabled = event.currentTarget.checked;
+                          void windowAction(() => desktop.saveHardwareAcceleration(enabled));
+                        }}
+                      />
+                    </label>
+                    <p id="hardware-acceleration-hint" className="settings-feedback" role="status">
+                      {t(
+                        hardwareAcceleration.enabled === hardwareAcceleration.enabledAtStartup
+                          ? 'hardware_acceleration_hint'
+                          : 'hardware_acceleration_restart',
+                      )}
+                    </p>
+                  </>
+                )}
+                {settingsWindow && appearance.snapshot?.platform.os === 'macos' && (
+                  <div className="setting-row">
+                    <span>{t('hardware_acceleration')}</span>
+                    <span>{t('hardware_acceleration_system_managed')}</span>
+                  </div>
                 )}
                 <label className="setting-row" htmlFor="language">
                   {t('language')}

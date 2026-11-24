@@ -3,9 +3,10 @@ use crate::{
     HistoryQuery, Storage, UpdateCapturePolicy,
 };
 use regex::{Regex, RegexBuilder};
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, params_from_iter, types::Value, OptionalExtension, TransactionBehavior};
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -18,9 +19,12 @@ pub struct QuickPasteSlot {
 
 pub const MAX_TEXT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_IMAGE_PIXELS: u64 = 8_388_608;
-pub const MAX_HISTORY_BYTES: i64 = 128 * 1024 * 1024;
+pub const MAX_HISTORY_ITEMS_PER_TAB: u32 = 30_000;
+pub const MAX_HISTORY_ITEMS: u32 =
+    MAX_HISTORY_ITEMS_PER_TAB * (crate::collections::MAX_COLLECTIONS + 1);
 pub const PAGE_SIZE: usize = 25;
-pub(crate) const MAX_TRASH_ITEMS: u32 = 1000;
+pub(crate) const MAX_TRASH_ITEMS: u32 = MAX_HISTORY_ITEMS_PER_TAB;
+const MAX_FULL_HISTORY_RESPONSE_BYTES: i64 = 128 * 1024 * 1024;
 
 /// Only Rust platform adapters construct capture payloads. There is no arbitrary-payload IPC.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,9 +166,7 @@ impl Storage {
         request: UpdateCapturePolicy,
     ) -> Result<CapturePolicy, AppError> {
         pattern(&request.exclude_pattern, false)?;
-        if !(1..=1000).contains(&request.max_items) {
-            return Err(AppError::new(ErrorCode::InvalidInput));
-        }
+        let max_items = request.max_items.clamp(1, MAX_HISTORY_ITEMS_PER_TAB);
         let revision: i64 = request
             .expected_revision
             .parse()
@@ -176,11 +178,21 @@ impl Storage {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let changed = tx.execute("UPDATE capture_policy SET enabled=?1,exclude_pattern=?2,max_items=?3,revision=revision+1 WHERE singleton=1 AND revision=?4", params![request.enabled, request.exclude_pattern, request.max_items, revision])?;
+        let changed = tx.execute("UPDATE capture_policy SET enabled=?1,exclude_pattern=?2,max_items=?3,revision=revision+1 WHERE singleton=1 AND revision=?4", params![request.enabled, request.exclude_pattern, max_items, revision])?;
         if changed != 1 {
             return Err(AppError::new(ErrorCode::Conflict));
         }
-        prune(&tx, request.max_items, None)?;
+        if !crate::replica::enrolled(&tx)?
+            && tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM clips WHERE deleted=0 AND collection IS NOT NULL
+             GROUP BY collection HAVING count(*)>?1)",
+                [max_items],
+                |row| row.get::<_, bool>(0),
+            )?
+        {
+            return Err(AppError::new(ErrorCode::LimitExceeded));
+        }
+        prune(&tx, max_items, None)?;
         tx.execute(
             "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
             [],
@@ -294,6 +306,9 @@ impl Storage {
             params![id, kind_name(kind), text, data, width, height, count, fingerprint, now(), sequence, if captured {"capture"} else {"manual"}, collection_id, source_app],
             |row| row.get(0),
         )?;
+        if let Some(collection) = collection_id.as_deref() {
+            ensure_tab_capacity(&tx, policy.max_items, Some(collection))?;
+        }
         prune(&tx, policy.max_items, Some(&id))?;
         check_change_budget(&tx)?;
         tx.execute(
@@ -330,9 +345,19 @@ impl Storage {
     ) -> Result<Vec<(HistoryItem, ClipPayload)>, AppError> {
         let snapshot = self.connection.unchecked_transaction()?;
         let page = self.history_in_snapshot(query, false, Some(count))?;
+        let mut remaining = MAX_FULL_HISTORY_RESPONSE_BYTES;
         page.items
             .into_iter()
             .map(|item| {
+                let size: i64 = snapshot.query_row(
+                    "SELECT length(CAST(text AS BLOB))+length(data) FROM clips WHERE id=?1",
+                    [&item.id],
+                    |row| row.get(0),
+                )?;
+                if size > remaining {
+                    return Err(AppError::new(ErrorCode::LimitExceeded));
+                }
+                remaining -= size;
                 let payload = Self::read_active_clip(&snapshot, &item.id, None)?;
                 Ok((item, payload))
             })
@@ -364,7 +389,7 @@ impl Storage {
         let max_offset = if synchronized {
             crate::replica::MAX_ENTITIES
         } else {
-            1000
+            MAX_HISTORY_ITEMS
         };
         if query.offset > max_offset {
             return Err(AppError::new(ErrorCode::InvalidInput));
@@ -374,45 +399,72 @@ impl Storage {
         } else {
             "sequence"
         };
-        let matcher = pattern(&query.query, !query.regex)?;
+        let matcher = (!query.query.is_empty())
+            .then(|| pattern(&query.query, !query.regex))
+            .transpose()?;
+        let mut filter = String::from("deleted=?");
+        let mut values = vec![Value::Integer(i64::from(trash))];
+        if query.pinned_only {
+            filter.push_str(" AND pinned=1");
+        }
         if let Some(id) = &query.collection_id {
             crate::collections::ensure_collection(&self.connection, id)?;
+            filter.push_str(" AND collection=?");
+            values.push(Value::Text(id.clone()));
         }
+        if let Some(kind) = query.kind {
+            filter.push_str(" AND kind=?");
+            values.push(Value::Text(kind_name(kind).into()));
+        }
+        let mut total = 0;
+        let paging = if matcher.is_none() {
+            total = self.connection.query_row(
+                &format!("SELECT count(*) FROM clips WHERE {filter}"),
+                params_from_iter(&values),
+                |row| row.get(0),
+            )?;
+            values.push(Value::Integer(limit as i64));
+            values.push(Value::Integer(i64::from(query.offset)));
+            "LIMIT ? OFFSET ?"
+        } else {
+            ""
+        };
         let mut statement = self.connection.prepare(&format!(
             "SELECT id,kind,text,captured_at,last_used_at,width,height,file_count,revision,origin,pinned,collection,source_app
-             FROM clips WHERE deleted=?3 AND (?1=0 OR pinned=1) AND (?2 IS NULL OR collection=?2)
-             ORDER BY pinned DESC,{order} DESC,id"
+             FROM clips WHERE {filter} ORDER BY pinned DESC,{order} DESC,id {paging}"
         ))?;
-        let mut rows = statement.query(params![query.pinned_only, query.collection_id, trash])?;
-        let mut total = 0;
+        let mut rows = statement.query(params_from_iter(&values))?;
         let mut items = vec![];
         while let Some(row) = rows.next()? {
             if started.elapsed() > std::time::Duration::from_secs(2) {
                 return Err(AppError::new(ErrorCode::QueryTimeout));
             }
             let kind = parse_kind(&row.get::<_, String>(1)?)?;
-            if query.kind.is_some_and(|k| k != kind) {
-                continue;
-            }
             let text: String = row.get(2)?;
             let width: Option<u32> = row.get(5)?;
             let height: Option<u32> = row.get(6)?;
-            let searchable = if kind == ClipKind::Image {
-                format!("图片 {} × {}", width.unwrap_or(0), height.unwrap_or(0))
-            } else if kind == ClipKind::Files {
-                serde_json::from_str::<Vec<String>>(&text)
-                    .map_err(|_| AppError::new(ErrorCode::Storage))?
-                    .join("\n")
-            } else {
-                text.clone()
+            let paths = (kind == ClipKind::Files)
+                .then(|| serde_json::from_str::<Vec<String>>(&text))
+                .transpose()
+                .map_err(|_| AppError::new(ErrorCode::Storage))?;
+            let searchable = match (kind, paths.as_ref(), matcher.is_some()) {
+                (ClipKind::Image, _, _) => Cow::Owned(format!(
+                    "图片 {} × {}",
+                    width.unwrap_or(0),
+                    height.unwrap_or(0)
+                )),
+                (_, Some(paths), true) => Cow::Owned(paths.join("\n")),
+                _ => Cow::Borrowed(text.as_str()),
             };
-            if !matcher.is_match(&searchable) {
+            if matcher
+                .as_ref()
+                .is_some_and(|regex| !regex.is_match(&searchable))
+            {
                 continue;
             }
-            if total >= query.offset && items.len() < limit {
-                let preview: String = if kind == ClipKind::Files {
-                    serde_json::from_str::<Vec<String>>(&text)
-                        .map_err(|_| AppError::new(ErrorCode::Storage))?
+            if matcher.is_none() || (total >= query.offset && items.len() < limit) {
+                let preview: String = if let Some(paths) = paths {
+                    paths
                         .iter()
                         .map(|path| {
                             if path.starts_with('/') {
@@ -437,10 +489,8 @@ impl Storage {
                     source_app: row.get(12)?,
                     pinned: row.get(10)?,
                     collection_id: row.get(11)?,
-                    match_ranges: if query.query.is_empty() {
-                        vec![]
-                    } else {
-                        matcher
+                    match_ranges: matcher.as_ref().map_or_else(Vec::new, |regex| {
+                        regex
                             .find_iter(&preview)
                             .filter(|m| !m.is_empty())
                             .take(30)
@@ -451,7 +501,7 @@ impl Storage {
                                 )
                             })
                             .collect()
-                    },
+                    }),
                     preview,
                     captured_at: row.get::<_, i64>(3)?.to_string(),
                     last_used_at: row.get::<_, Option<i64>>(4)?.map(|v| v.to_string()),
@@ -461,7 +511,9 @@ impl Storage {
                     revision: row.get::<_, i64>(8)?.to_string(),
                 });
             }
-            total += 1;
+            if matcher.is_some() {
+                total += 1;
+            }
         }
         Ok(HistoryPage {
             items,
@@ -750,20 +802,14 @@ impl Storage {
         )?;
         if !request.deleted && !crate::replica::enrolled(&tx)? {
             // Undo must never evict another active record to make room.
-            let count: u32 =
-                tx.query_row("SELECT count(*) FROM clips WHERE deleted=0", [], |r| {
-                    r.get(0)
-                })?;
-            let bytes: i64 = tx.query_row(
-                "SELECT coalesce(sum(length(CAST(text AS BLOB))+length(data)),0) FROM clips",
-                [],
-                |r| r.get(0),
+            let collection: Option<String> = tx.query_row(
+                "SELECT collection FROM clips WHERE id=?1",
+                [&request.id],
+                |row| row.get(0),
             )?;
-            if count > policy.max_items || bytes > MAX_HISTORY_BYTES {
-                return Err(AppError::new(ErrorCode::LimitExceeded));
-            }
+            ensure_tab_capacity(&tx, policy.max_items, collection.as_deref())?;
         }
-        // Retained deleted payloads share the byte budget and have a bounded count.
+        // Retained deleted payloads have a bounded count.
         // Keep the record just changed so a successful delete always starts undoable.
         prune(&tx, policy.max_items, Some(&request.id))?;
         tx.execute(
@@ -959,6 +1005,37 @@ pub(crate) fn mutation_revision(value: &str) -> Result<i64, AppError> {
 fn prune(tx: &rusqlite::Transaction<'_>, max: u32, keep: Option<&str>) -> Result<(), AppError> {
     prune_protecting(tx, max, keep, "[]")
 }
+
+fn tab_over_capacity(
+    tx: &rusqlite::Transaction<'_>,
+    max: u32,
+    collection: Option<&str>,
+) -> Result<bool, AppError> {
+    Ok(tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM clips WHERE collection IS ?1 AND deleted=0 LIMIT 1 OFFSET ?2)",
+        params![collection, max],
+        |row| row.get(0),
+    )?)
+}
+
+pub(crate) fn ensure_tab_capacity(
+    tx: &rusqlite::Transaction<'_>,
+    max: u32,
+    collection: Option<&str>,
+) -> Result<(), AppError> {
+    if !crate::replica::enrolled(tx)? && tab_over_capacity(tx, max, collection)? {
+        return Err(AppError::new(ErrorCode::LimitExceeded));
+    }
+    Ok(())
+}
+
+pub(crate) fn trash_count(tx: &rusqlite::Connection) -> Result<u32, AppError> {
+    Ok(
+        tx.query_row("SELECT count(*) FROM clips WHERE deleted=1", [], |row| {
+            row.get(0)
+        })?,
+    )
+}
 pub(crate) fn prune_protecting(
     tx: &rusqlite::Transaction<'_>,
     max: u32,
@@ -968,27 +1045,40 @@ pub(crate) fn prune_protecting(
     if crate::replica::enrolled(tx)? {
         return crate::replica::check_capacity(tx);
     }
-    loop {
-        let (count, bytes, deleted): (i64,i64,i64) = tx.query_row("SELECT count(*) FILTER(WHERE deleted=0),coalesce(sum(length(CAST(text AS BLOB))+length(data)),0),count(*) FILTER(WHERE deleted<>0) FROM clips", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-        if count <= i64::from(max)
-            && bytes <= MAX_HISTORY_BYTES
-            && deleted <= i64::from(MAX_TRASH_ITEMS)
-        {
-            return Ok(());
-        }
-        let removed_deleted = if bytes > MAX_HISTORY_BYTES || deleted > i64::from(MAX_TRASH_ITEMS) {
-            tx.execute("DELETE FROM clips WHERE id=(SELECT id FROM clips WHERE deleted<>0 AND (?1 IS NULL OR id<>?1) ORDER BY sequence LIMIT 1)",[keep])?
-        } else {
-            0
-        };
-        if removed_deleted > 0 {
-            continue;
-        }
-        let changed = tx.execute("DELETE FROM clips WHERE id=(SELECT id FROM clips WHERE origin='capture' AND deleted=0 AND pinned=0 AND collection IS NULL AND (?1 IS NULL OR id<>?1) AND id NOT IN (SELECT value FROM json_each(?2)) ORDER BY sequence LIMIT 1)", params![keep,protected])?;
-        if changed == 0 {
+    let unclassified: u32 = tx.query_row(
+        "SELECT count(*) FROM clips WHERE collection IS NULL AND deleted=0",
+        [],
+        |row| row.get(0),
+    )?;
+    let trash_excess = trash_count(tx)?.saturating_sub(MAX_TRASH_ITEMS);
+    if trash_excess > 0 {
+        let removed = tx.execute(
+            "DELETE FROM clips WHERE id IN (
+                SELECT id FROM clips WHERE deleted=1 AND (?1 IS NULL OR id<>?1)
+                ORDER BY sequence,id LIMIT ?2
+            )",
+            params![keep, trash_excess],
+        )?;
+        if removed != trash_excess as usize {
             return Err(AppError::new(ErrorCode::LimitExceeded));
         }
     }
+    let excess = unclassified.saturating_sub(max);
+    if excess > 0 {
+        let removed = tx.execute(
+            "DELETE FROM clips WHERE id IN (
+                SELECT id FROM clips WHERE origin='capture' AND deleted=0 AND pinned=0
+                AND collection IS NULL AND (?1 IS NULL OR id<>?1)
+                AND id NOT IN (SELECT value FROM json_each(?2))
+                ORDER BY sequence,id LIMIT ?3
+            )",
+            params![keep, protected, excess],
+        )?;
+        if removed != excess as usize {
+            return Err(AppError::new(ErrorCode::LimitExceeded));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn check_change_budget(tx: &rusqlite::Transaction<'_>) -> Result<(), AppError> {
@@ -997,7 +1087,7 @@ pub(crate) fn check_change_budget(tx: &rusqlite::Transaction<'_>) -> Result<(), 
         [],
         |r| r.get(0),
     )?;
-    if pending > 100_000 {
+    if pending > MAX_HISTORY_ITEMS + MAX_TRASH_ITEMS + 100_000 {
         return Err(AppError::new(ErrorCode::LimitExceeded));
     }
     Ok(())

@@ -130,19 +130,29 @@ def run(c,capture,close_settings):
         c.type_copies.append((new_id,kind,payload))
     assert all(Path(path).exists() for path in c.files)
 
-    # Only protected records remain: a failed extra copy cannot evict a source or another record.
-    c.policy(maxItems=page(c)['total']);settled(c)
-    target=c.type_copies[-1][0];transfer_form(c,target,'copy');c.click('.new-form .primary-button')
+    # A full destination tab cannot evict one of its records to make room for a copy.
+    c.policy(maxItems=page(c,b['id'])['total']);settled(c)
+    target=c.type_copies[-1][0];transfer_form(c,target,'copy')
+    select_value(c,'#transfer-collection',b['id']);c.click('.new-form .primary-button')
     wait(lambda:c.execute('return document.querySelector("[role=alert]")?.textContent.includes("容量超出限制")'),'native copy capacity refusal')
     assert c.execute('return !!document.querySelector("#transfer-collection")')
     c.click('[aria-label="关闭面板"]');c.policy(maxItems=500)
     print('PASS: actual text/image/files move and independent copy, exact OS writeback, source files preserved and capacity failure retains form/source',flush=True)
 
     for n in range(27):c.action('create_text',text=f'分页分类 fixture {n:02}',collectionId=b['id'])
-    scope(c,'collection:'+b['id']);settled(c,25)
-    c.click('.pagination button:last-child');settled(c,6)
-    scope(c,'collection:'+a['id']);settled(c,3)
+    scope(c,'collection:'+b['id'])
+    wait(lambda:c.execute('return document.querySelector(".row-position")?.textContent==="1" && document.querySelector(".history-scroll").getAttribute("aria-busy")==="false"'), 'first rows with the full scroll extent')
     assert not c.execute('return !!document.querySelector(".pagination")')
+    c.click('.clip-row:first-child .row-main')
+    height, bottom = c.execute('const list=document.querySelector(".history-scroll"); const height=list.scrollHeight; list.scrollTop=height; return [height,list.scrollTop]')
+    assert bottom > 0
+    wait(lambda:c.execute('return [...document.querySelectorAll(".row-position")].at(-1)?.textContent==="31"'), 'direct scroll to the last category item')
+    assert c.execute('const list=document.querySelector(".history-scroll");return [list.scrollHeight,list.scrollTop]') == [height,bottom]
+    c.execute('document.querySelector(".history-scroll").scrollTop=0')
+    wait(lambda:c.execute('return document.querySelector(".clip-row:first-child .row-position")?.textContent==="1"'), 'return to the first record')
+    assert c.execute('return document.querySelector(".clip-row:first-child")?.classList.contains("selected")')
+    scope(c,'collection:'+a['id']);settled(c,3)
+    assert c.execute('return document.querySelector(".history-scroll").scrollTop===0 && document.querySelector(".row-position").textContent==="1"')
     c.enter('#history-search','分页分类 fixture 00');settled(c,0)
     scope(c,'all');settled(c,1)
     c.set('text',text='public wrong-selection sentinel');c.click('#history-search');c.key('key','--clearmodifiers','Return')
@@ -150,7 +160,7 @@ def run(c,capture,close_settings):
     c.enter('#history-search', '');scope(c,'collection:'+a['id']);settled(c,3)
     c.key('windowsize',c.window('^UClip$'),'480','650')
     for theme in ['light','dark']:
-        c.click('[data-testid="open-settings"]');c.click(f'#theme option[value="{theme}"]')
+        c.click('[data-testid="footer-settings"]');c.click(f'#theme option[value="{theme}"]')
         wait(lambda:c.execute('return document.documentElement.dataset.theme===arguments[0]',[theme]),'collection theme')
         close_settings();capture('collections-'+theme)
         assert c.execute('return document.documentElement.scrollWidth<=innerWidth')
@@ -182,7 +192,7 @@ def run(c,capture,close_settings):
     print('PASS: permanent Trash deletion and clearing hidden results, active history preserved', flush=True)
 
     c.expected_total=page(c)['total']
-    print('PASS: real category pagination, scope change resets page/selection, category-to-global search, correct Enter action and both themes at 480px',flush=True)
+    print('PASS: fixed category scroll extent through a direct jump, continuous numbering, scope change, category-to-global search, correct Enter action and both themes at 480px',flush=True)
 
 
 def verify_restart(c):

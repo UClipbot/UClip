@@ -27,6 +27,7 @@ fn main() {
             "editable_content",
             "edit_clip",
             "desktop_status",
+            "set_hardware_acceleration",
             "update_desktop_preferences",
             "set_global_shortcut_recording",
             "quick_paste_settings",

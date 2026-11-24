@@ -149,8 +149,9 @@ export const english = {
   clipboard_history: 'Clipboard history',
   '0_records': '{0} records',
   searching_2: 'Searching',
-  previous_page: 'Previous page',
-  next_page: 'Next page',
+  history_item_label: 'Item {0} · {1} · {2}',
+  loading_more_history: 'Loading more records…',
+  retry_loading_history: 'Retry loading',
   settings: 'Settings',
   settings_0: 'Settings {0}',
   switch_to_dark_theme: 'Switch to dark theme',
@@ -236,8 +237,8 @@ export const english = {
     ' Close this panel, refresh, and check the scope again.',
   delete_unpinned_duplicates: 'Delete unpinned duplicates',
   deduplicating: 'Deduplicating…',
-  delete_unpinned_records_whose_content_exactly_matches_any_pinned_record_across_all_history_all_pinned_records_are_kept_search_type_filters_and_pagination_do_not_limit_the_scope:
-    'Delete unpinned records whose content exactly matches any pinned record across all history. All pinned records are kept. Search, type filters, and pagination do not limit the scope.',
+  delete_unpinned_records_whose_content_exactly_matches_any_pinned_record_across_all_history_all_pinned_records_are_kept_search_and_type_filters_do_not_limit_the_scope:
+    'Delete unpinned records whose content exactly matches any pinned record across all history. All pinned records are kept. Search and type filters do not limit the scope.',
   capture: 'Capture',
   desktop: 'Desktop',
   shortcuts: 'Shortcuts',
@@ -249,10 +250,13 @@ export const english = {
     'Only copies made after enabling capture are recorded. Existing clipboard content is not imported. Unreliable sources are marked unknown.',
   exclude_regex_text_and_file_paths: 'Exclude regex (text and file paths)',
   exclude_regex: 'Exclude regex',
-  maximum_records: 'Maximum records',
+  maximum_records: 'Local history limit per tab',
+  history_tab_capacity_hint:
+    'Each collection and unfiled history have a separate limit of up to {0} records.',
+  history_tab_capacity_adjusted: 'The limit was adjusted to {0} records per tab.',
   save_capture_rules: 'Save capture rules',
   capture_payload_limits:
-    'Each item can contain up to 4 MiB of text, 8 million image pixels, or 256 file references. History stores up to 128 MiB locally, or 512 MiB when in a sync group.',
+    'Each item can contain up to 4 MiB of text, 8 million image pixels, or 256 file references. Sync groups have a shared limit of 25,000 entities and 512 MiB.',
   '0_to_show_the_window': ' {0} to show the window.',
   keep_running_after_closing: 'Keep running after closing',
   hide_on_blur: 'Hide on blur',
@@ -267,6 +271,12 @@ export const english = {
   window_pin_behavior:
     'The window always stays on top. Pinning prevents hiding on blur. Menus, settings, and previews keep the window open. On Linux, closing quits if there is no reliable way to restore the window.',
   use_system_title_bar: 'Use system title bar',
+  hardware_acceleration: 'Hardware acceleration',
+  hardware_acceleration_system_managed: 'Managed by macOS',
+  hardware_acceleration_hint:
+    'Turn off to use software rendering. Changes apply at the next launch.',
+  hardware_acceleration_restart:
+    'Quit and reopen UClip to apply the saved hardware acceleration setting.',
   turn_off_to_use_the_custom_title_bar_with_dragging_minimize_maximize_and_close_controls_applies_immediately_and_persists_after_restart:
     'Turn off to use the custom title bar with dragging, minimize, maximize, and close controls. Applies immediately and persists after restart.',
   theme: 'Theme',
@@ -555,8 +565,9 @@ export const chinese: Record<keyof typeof english, string> = {
   clipboard_history: '剪贴板历史',
   '0_records': '{0} 条记录',
   searching_2: '搜索中',
-  previous_page: '上一页',
-  next_page: '下一页',
+  history_item_label: '第 {0} 条 · {1} · {2}',
+  loading_more_history: '正在加载更多记录…',
+  retry_loading_history: '重试加载',
   settings: '设置',
   settings_0: '设置 {0}',
   switch_to_dark_theme: '切换为深色主题',
@@ -640,8 +651,8 @@ export const chinese: Record<keyof typeof english, string> = {
   close_this_panel_refresh_and_check_the_scope_again: ' 请关闭此面板，刷新后重新检查范围。',
   delete_unpinned_duplicates: '删除非置顶重复项',
   deduplicating: '正在去重…',
-  delete_unpinned_records_whose_content_exactly_matches_any_pinned_record_across_all_history_all_pinned_records_are_kept_search_type_filters_and_pagination_do_not_limit_the_scope:
-    '以全部置顶记录为依据，删除全部历史中内容完全相同的非置顶记录。所有置顶记录都会保留；当前搜索、类型筛选和页码不限制去重范围。',
+  delete_unpinned_records_whose_content_exactly_matches_any_pinned_record_across_all_history_all_pinned_records_are_kept_search_and_type_filters_do_not_limit_the_scope:
+    '以全部置顶记录为依据，删除全部历史中内容完全相同的非置顶记录。所有置顶记录都会保留。当前搜索和类型筛选不限制去重范围。',
   capture: '采集',
   desktop: '桌面',
   shortcuts: '快捷键',
@@ -653,10 +664,12 @@ export const chinese: Record<keyof typeof english, string> = {
     '只记录开启后的新复制，不补采已有剪贴板。来源无法可靠获取时标为未知。',
   exclude_regex_text_and_file_paths: '排除正则（文本与文件路径）',
   exclude_regex: '排除正则',
-  maximum_records: '最多保留条数',
+  maximum_records: '每个标签页的本地历史上限',
+  history_tab_capacity_hint: '各分类与未分类历史分别计数，每个最多可设为 {0} 条。',
+  history_tab_capacity_adjusted: '已将每个标签页的上限调整为 {0} 条。',
   save_capture_rules: '保存采集规则',
   capture_payload_limits:
-    '每条最多可保存 4 MiB 文本、约 800 万图片像素或 256 条文件引用。本机历史上限为 128 MiB，加入同步组后为 512 MiB。',
+    '每条最多可保存 4 MiB 文本、约 800 万图片像素或 256 条文件引用。同步组的独立限制为 25,000 个对象和 512 MiB。',
   '0_to_show_the_window': ' {0} 唤起窗口。',
   keep_running_after_closing: '关闭窗口后常驻',
   hide_on_blur: '失焦自动隐藏',
@@ -670,6 +683,10 @@ export const chinese: Record<keyof typeof english, string> = {
   window_pin_behavior:
     '窗口始终置顶；固定后失焦不自动隐藏。菜单、设置和预览打开时保留窗口。Linux 无可靠恢复入口时关闭会退出。',
   use_system_title_bar: '使用系统原生标题栏',
+  hardware_acceleration: '硬件加速',
+  hardware_acceleration_system_managed: '由 macOS 管理',
+  hardware_acceleration_hint: '关闭后使用软件渲染。更改将在下次启动时生效。',
+  hardware_acceleration_restart: '请退出并重新打开 UClip，使新的硬件加速设置生效。',
   turn_off_to_use_the_custom_title_bar_with_dragging_minimize_maximize_and_close_controls_applies_immediately_and_persists_after_restart:
     '关闭后使用自定义标题栏，可拖动、最小化、最大化和关闭窗口。立即生效，重启后保留。',
   theme: '主题',

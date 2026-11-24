@@ -1,5 +1,6 @@
 mod clipboard;
 mod history;
+mod i18n;
 mod library;
 mod server;
 
@@ -8,21 +9,21 @@ use std::{io, path::PathBuf, process::ExitCode};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use uclip_core::{AppError, ErrorCode};
 
+use i18n::{messages, text};
+
 #[derive(Parser)]
 #[command(
     name = "uclip",
     version,
-    about = "UClip clipboard history and synchronization"
+    about = text(messages::ABOUT),
+    after_help = text(messages::LANGUAGE_OVERRIDE)
 )]
 struct Cli {
-    /// Explicit UClip library directory (also supported via UCLIP_DATA_DIR).
-    #[arg(long, global = true, conflicts_with_all = ["dev", "portable"])]
+    #[arg(help = text(messages::DATA_DIR), long, global = true, conflicts_with_all = ["dev", "portable"])]
     data_dir: Option<PathBuf>,
-    /// Use the library of npm run tauri:dev.
-    #[arg(long, global = true, conflicts_with = "portable")]
+    #[arg(help = text(messages::DEV), long, global = true, conflicts_with = "portable")]
     dev: bool,
-    /// Use uclip-data beside this executable.
-    #[arg(long, global = true)]
+    #[arg(help = text(messages::PORTABLE), long, global = true)]
     portable: bool,
     #[command(subcommand)]
     command: Command,
@@ -30,30 +31,34 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Read a record by UUID, or the newest record in history.
+    #[command(about = text(messages::GET))]
     Get(history::Get),
-    /// List active history in desktop order.
+    #[command(about = text(messages::LIST))]
     List(history::Listing),
-    /// Search text in active history.
+    #[command(about = text(messages::SEARCH))]
     Search {
+        #[arg(help = text(messages::QUERY))]
         query: String,
-        #[arg(long)]
+        #[arg(long, help = text(messages::REGEX))]
         regex: bool,
         #[command(flatten)]
         listing: history::Listing,
     },
-    /// Write to the system clipboard.
+    #[command(about = text(messages::COPY))]
     Copy(history::Copy),
-    /// Save text, an image, or explicit file references.
+    #[command(about = text(messages::SAVE))]
     Save(history::Save),
-    /// Generate shell completions.
-    Completion { shell: CompletionShell },
-    /// Configure a synchronization group.
+    #[command(about = text(messages::COMPLETION))]
+    Completion {
+        #[arg(help = text(messages::SHELL))]
+        shell: CompletionShell,
+    },
+    #[command(about = text(messages::SYNC))]
     Sync {
         #[command(subcommand)]
         command: server::SyncCommand,
     },
-    /// Run encrypted synchronization without a desktop.
+    #[command(about = text(messages::SERVE))]
     Serve,
     #[cfg(target_os = "linux")]
     #[command(name = "__clipboard-owner", hide = true)]
@@ -149,15 +154,17 @@ fn run(cli: Cli) -> Result<(), AppError> {
 }
 
 fn main() -> ExitCode {
-    match run(Cli::parse()) {
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            let _ = i18n::print_parse_error(&error);
+            return ExitCode::from(if error.use_stderr() { 2 } else { 0 });
+        }
+    };
+    match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            let code = serde_json::to_value(error.code).ok();
-            let name = code
-                .as_ref()
-                .and_then(|code| code.as_str())
-                .unwrap_or("unavailable");
-            eprintln!("uclip: {name}");
+            i18n::app_error(&error);
             ExitCode::from(match error.code {
                 ErrorCode::InvalidInput | ErrorCode::InvalidPattern => 2,
                 ErrorCode::NotFound => 3,

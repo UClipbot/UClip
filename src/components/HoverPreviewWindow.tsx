@@ -16,7 +16,7 @@ export function HoverPreviewWindow() {
   const [request, setRequest] = useState<HoverPreviewRequest | null>(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
-  const panel = useRef<HTMLElement>(null);
+  const pointerInside = useRef(false);
   const refreshRequest = useRef<() => void>(() => {});
   const current = useRef(request);
   current.current = request;
@@ -30,6 +30,7 @@ export function HoverPreviewWindow() {
       try {
         const next = await readHoverPreview();
         if (!disposed && own === generation) {
+          if (!next) pointerInside.current = false;
           setRequest(next);
           setError('');
         }
@@ -67,20 +68,21 @@ export function HoverPreviewWindow() {
     };
   }, []);
   useEffect(() => {
-    if (request && panel.current?.matches(':hover'))
+    if (request && pointerInside.current)
       void hoverPreviewPresence(request.token, true).catch(() => {});
   }, [request?.token]);
   const loading = !!request && !detail && !detailError;
   const failure = error || appearance.error || detailError;
   return (
     <section
-      ref={panel}
       className="native-hover-preview"
       aria-label={t('content_preview')}
       onPointerEnter={() => {
+        pointerInside.current = true;
         if (request) void hoverPreviewPresence(request.token, true).catch(() => {});
       }}
       onPointerLeave={() => {
+        pointerInside.current = false;
         if (request) void hoverPreviewPresence(request.token, false).catch(() => {});
       }}
     >

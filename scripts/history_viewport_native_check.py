@@ -4,7 +4,9 @@
 def run(invoke, execute, click, wait, capture):
     for index in range(24):
         assert invoke('create_text', {'text': f'滚动稳定性合成记录 {index}', 'collectionId': None})['ok']
-    wait(lambda: execute('return document.querySelectorAll(".clip-row").length===25 && document.querySelector(".history-scroll").getAttribute("aria-busy")==="false"'), 'full history page')
+    wait(lambda: execute('return !!document.querySelector(\'[data-history-index="10"]\') && document.querySelector(".history-scroll").getAttribute("aria-busy")==="false" && document.querySelector(".capture-toggle span").textContent==="27"'), 'initial window with all 27 records in the scroll extent')
+    height = execute('return document.querySelector(".history-scroll").scrollHeight')
+    assert execute('return document.querySelector(".history-space").getBoundingClientRect().height') == 27 * 56
     assert execute('return [...document.querySelectorAll(".clip-row")].every(e=>e.getBoundingClientRect().height===56)')
     execute('''
       const viewport=document.querySelector('.history-scroll'), row=viewport.querySelectorAll('[data-clip-id]')[10];
@@ -22,13 +24,15 @@ def run(invoke, execute, click, wait, capture):
 
     added = invoke('create_text', {'text': '顶部插入的合成记录', 'collectionId': None})
     assert added['ok']
-    wait(lambda: execute('return document.querySelector(".clip-row").dataset.clipId===arguments[0] && document.querySelector(".history-scroll").getAttribute("aria-busy")==="false"', [added['value']]), 'background insertion reached main UI')
+    wait(lambda: execute('return document.querySelector(".capture-toggle span").textContent==="28" && document.querySelector(".history-scroll").getAttribute("aria-busy")==="false"'), 'background insertion reached main UI')
+    assert execute('return document.querySelector(".history-scroll").scrollHeight') == height + 56
     assert aligned(), 'prepending a record moved the record being read'
     assert execute('return document.querySelector(".clip-row.selected").dataset.clipId===window.__scrollFixture.id'), 'background insertion changed selection'
 
     # Resize an offscreen row as a delayed media layout would, without capture privileges.
     execute('document.querySelector(".clip-row").style.height="140px";return true')
     wait(aligned, 'late row expansion preserves viewport')
+    assert execute('return document.querySelector(".history-scroll").scrollHeight') == height + 56
     execute('document.querySelector(".clip-row").style.height="";return true')
     wait(aligned, 'late row collapse preserves viewport')
 
@@ -57,7 +61,7 @@ def run(invoke, execute, click, wait, capture):
     assert execute('return document.querySelector(".history-scroll").scrollTop===0')
     click('[aria-label="内容类型"]')
     click('.action-menu button[value="all"]')
-    wait(lambda: execute('return document.querySelectorAll(".clip-row").length===25 && document.querySelector(".history-scroll").getAttribute("aria-busy")==="false"'), 'filter cleared')
+    wait(lambda: execute('return document.querySelector(".row-position")?.textContent==="1" && document.querySelector(".capture-toggle span").textContent==="28"'), 'filter cleared')
     assert execute('return document.querySelector(".history-scroll").scrollTop===0')
 
     added = invoke('create_text', {'text': '顶部浏览时的新记录', 'collectionId': None})
@@ -65,4 +69,4 @@ def run(invoke, execute, click, wait, capture):
     wait(lambda: execute('return document.querySelector(".clip-row").dataset.clipId===arguments[0]', [added['value']]), 'top follows newest record')
     assert execute('return document.querySelector(".history-scroll").scrollTop===0')
     capture('stable-scroll-main')
-    print('PASS viewport: 56px text rows, background prepend and selection, late expansion/collapse, preview return, filter reset and top-follow', flush=True)
+    print('PASS viewport: fixed 56px rows and initial extent, background prepend and selection, late expansion/collapse, preview return, filter reset and top-follow', flush=True)

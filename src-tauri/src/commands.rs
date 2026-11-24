@@ -136,16 +136,17 @@ pub async fn update_capture_policy(
     match &state.clipboard {
         Ok(service) => service.update_policy(request).await,
         Err(error) => {
-            if !request.enabled {
-                state
-                    .core
-                    .as_ref()
-                    .map_err(Clone::clone)?
-                    .update_capture_policy(request)
-                    .await
-            } else {
-                Err(error.clone())
+            let core = state.core.as_ref().map_err(Clone::clone)?;
+            if request.enabled {
+                let current = core.capture_policy().await?;
+                if request.expected_revision != current.revision {
+                    return Err(AppError::new(uclip_core::ErrorCode::Conflict));
+                }
+                if !current.enabled {
+                    return Err(error.clone());
+                }
             }
+            core.update_capture_policy(request).await
         }
     }
 }
@@ -266,10 +267,38 @@ pub async fn desktop_status(
             .load(std::sync::atomic::Ordering::SeqCst),
         shortcut_available: state_desktop_shortcut(&app),
         autostart_enabled: enabled.as_ref().ok().copied(),
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        hardware_acceleration: Some(app.state::<crate::graphics::Preferences>().status()),
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        hardware_acceleration: None,
         error: enabled
             .err()
             .or_else(|| desktop.autostart_error.lock().ok()?.clone()),
     })
+}
+
+#[tauri::command]
+pub async fn set_hardware_acceleration(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> Result<(), AppError> {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        use tauri::{Emitter, Manager};
+        let writer = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            writer.state::<crate::graphics::Preferences>().save(enabled)
+        })
+        .await
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))??;
+        let _ = app.emit("settings-changed", ());
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        let _ = (app, enabled);
+        Err(AppError::new(uclip_core::ErrorCode::Restricted))
+    }
 }
 
 struct DesktopMutation<'a>(&'a std::sync::atomic::AtomicBool);
@@ -564,21 +593,16 @@ pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), AppError>
         .fit(kind, monitor.as_ref());
     let minimum = kind.minimum_size();
     let maximum = f64::from(uclip_core::AuxiliaryWindow::MAXIMUM_DIMENSION);
-    let window = tauri::WebviewWindowBuilder::new(
-        &app,
-        "settings",
-        tauri::WebviewUrl::App("index.html?window=settings".into()),
-    )
-    .title(crate::desktop::settings_title(&app))
-    .inner_size(f64::from(size.width), f64::from(size.height))
-    .min_inner_size(f64::from(minimum.width), f64::from(minimum.height))
-    .max_inner_size(maximum, maximum)
-    .resizable(true)
-    .parent(&parent)
-    .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
-    .on_navigation(crate::local_navigation)
-    .build()
-    .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
+    let window = crate::local_window(&app, "settings", "index.html?window=settings")
+        .title(crate::desktop::settings_title(&app))
+        .inner_size(f64::from(size.width), f64::from(size.height))
+        .min_inner_size(f64::from(minimum.width), f64::from(minimum.height))
+        .max_inner_size(maximum, maximum)
+        .resizable(true)
+        .parent(&parent)
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+        .build()
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     crate::auxiliary_window::attach_resize_tracking(&window, kind)?;
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]

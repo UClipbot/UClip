@@ -245,7 +245,15 @@ def main():
                     return
                 if args.settings_only:
                     from settings_native_check import run
-                    run(invoke, invoke_current, execute, execute_main, click, close_settings, switch_window, wait_for, capture, env, directory)
+                    enabled = run(invoke, invoke_current, execute, execute_main, click, close_settings, switch_window, wait_for, capture, env, directory)
+                    assert invoke('quit_app')['ok']
+                    wait_for(lambda: not owned_processes(), 'graphics preference test process exits')
+                    try: request('DELETE', f'/session/{session}')
+                    except (OSError, RuntimeError): pass
+                    session = start()
+                    wait_for(lambda: execute('return !!document.querySelector("#history-search")'), 'graphics preference restart UI')
+                    assert invoke('desktop_status')['value']['hardwareAcceleration'] == {'enabled': enabled, 'enabledAtStartup': enabled}
+                    print('PASS hardware acceleration preference: scoped setting, both choices, restart pending and startup persistence.', flush=True)
                     return
                 if args.source_only:
                     from source_native_check import run
@@ -439,7 +447,16 @@ def main():
                     status=invoke('clipboard_status')
                     assert status['ok'] and not status['value']['available'] and status['value']['error']['code']=='restricted',status
                     policy=status['value']['policy']
-                    refused=invoke('update_capture_policy',{'request':{'enabled':True,'excludePattern':'','maxItems':500,'expectedRevision':policy['revision']}})
+                    assert policy['enabled'] and policy['maxItems']==30000,policy
+                    def update_policy(enabled, max_items, policy):
+                        return invoke('update_capture_policy',{'request':{'enabled':enabled,'excludePattern':'','maxItems':max_items,'expectedRevision':policy['revision']}})
+                    saved=update_policy(True,29999,policy)
+                    assert saved['ok'] and saved['value']['enabled'] and saved['value']['maxItems']==29999,saved
+                    stale=update_policy(True,30000,policy)
+                    assert not stale['ok'] and stale['error']['code']=='conflict',stale
+                    disabled=update_policy(False,29999,saved['value'])
+                    assert disabled['ok'] and not disabled['value']['enabled'],disabled
+                    refused=update_policy(True,29999,disabled['value'])
                     assert not refused['ok'] and refused['error']['code']=='restricted',refused
                     desktop=invoke('desktop_status')['value']
                     assert not desktop['shortcutAvailable']

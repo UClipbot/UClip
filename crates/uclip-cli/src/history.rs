@@ -13,57 +13,45 @@ use uclip_core::{
 };
 use uclip_runtime::clipboard_native::{decode_image, png, MAX_ENCODED_IMAGE};
 
+use crate::i18n::{messages, text};
+
 #[derive(Args)]
 pub struct Get {
-    /// Record UUID or latest. Defaults to the first record in the selected scope.
-    #[arg(conflicts_with_all = ["position", "index"])]
+    #[arg(help = text(messages::RECORD_ID), conflicts_with_all = ["position", "index"])]
     id: Option<String>,
-    /// One-based position in desktop list order.
-    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=25_000))]
+    #[arg(help = text(messages::POSITION), long, value_parser = clap::value_parser!(u32).range(1..=i64::from(uclip_core::MAX_HISTORY_ITEMS)))]
     position: Option<u32>,
-    /// Zero-based position in desktop list order.
-    #[arg(short, long, conflicts_with = "position", value_parser = clap::value_parser!(u32).range(..25_000))]
+    #[arg(help = text(messages::INDEX), short, long, conflicts_with = "position", value_parser = clap::value_parser!(u32).range(..i64::from(uclip_core::MAX_HISTORY_ITEMS)))]
     index: Option<u32>,
-    /// Select an active collection by name or UUID.
-    #[arg(long)]
+    #[arg(help = text(messages::SELECT_COLLECTION), long)]
     collection: Option<String>,
-    /// Also write the record to the system clipboard.
-    #[arg(short, long)]
+    #[arg(help = text(messages::GET_COPY), short, long)]
     copy: bool,
-    /// Output original bytes without terminal escaping or an added newline.
-    #[arg(short, long)]
+    #[arg(help = text(messages::RAW), short, long)]
     raw: bool,
 }
 
 #[derive(Args)]
 pub struct Listing {
-    /// Select an active collection by name or UUID.
-    #[arg(long)]
+    #[arg(help = text(messages::SELECT_COLLECTION), long)]
     collection: Option<String>,
-    /// Maximum records to return.
-    #[arg(short, long, visible_short_alias = 'n', value_parser = clap::value_parser!(u32).range(1..=1000))]
+    #[arg(help = text(messages::LIMIT), short, long, visible_short_alias = 'n', value_parser = clap::value_parser!(u32).range(1..=1000))]
     limit: Option<u32>,
-    /// Output one JSON history page.
-    #[arg(long, conflicts_with = "full")]
+    #[arg(help = text(messages::JSON), long, conflicts_with = "full")]
     json: bool,
-    /// Output JSON Lines with full content. Images are base64 PNG.
-    #[arg(short, long)]
+    #[arg(help = text(messages::FULL), short, long)]
     full: bool,
 }
 
 #[derive(Args)]
 pub struct Input {
-    /// Literal text. With no source, read UTF-8 text from stdin.
-    #[arg(conflicts_with_all = ["file", "image", "reference"])]
+    #[arg(help = text(messages::TEXT), conflicts_with_all = ["file", "image", "reference"])]
     text: Option<String>,
-    /// Read UTF-8 text from a file, or - for stdin.
-    #[arg(long, conflicts_with_all = ["image", "reference"])]
+    #[arg(help = text(messages::FILE), long, conflicts_with_all = ["image", "reference"])]
     file: Option<PathBuf>,
-    /// Read an image from a file, or - for stdin.
-    #[arg(long, conflicts_with_all = ["reference"])]
+    #[arg(help = text(messages::IMAGE), long, conflicts_with_all = ["reference"])]
     image: Option<PathBuf>,
-    /// Reference a file or directory without reading its contents. Repeat to add more paths.
-    #[arg(long)]
+    #[arg(help = text(messages::REFERENCE), long)]
     reference: Vec<PathBuf>,
 }
 
@@ -71,11 +59,9 @@ pub struct Input {
 pub struct Save {
     #[command(flatten)]
     input: Input,
-    /// Save into an existing collection by name or UUID.
-    #[arg(long)]
+    #[arg(help = text(messages::SAVE_COLLECTION), long)]
     collection: Option<String>,
-    /// Also copy the saved content.
-    #[arg(long)]
+    #[arg(help = text(messages::SAVE_COPY), long)]
     copy: bool,
 }
 
@@ -83,14 +69,11 @@ pub struct Save {
 pub struct Copy {
     #[command(flatten)]
     pub input: Input,
-    /// Copy an existing record by UUID.
-    #[arg(long, conflicts_with_all = ["save", "collection", "text", "file", "image", "reference"])]
+    #[arg(help = text(messages::COPY_ID), long, conflicts_with_all = ["save", "collection", "text", "file", "image", "reference"])]
     pub id: Option<String>,
-    /// Save the input to history as well.
-    #[arg(long)]
+    #[arg(help = text(messages::COPY_SAVE), long)]
     pub save: bool,
-    /// Save into an existing collection by name or UUID.
-    #[arg(long, requires = "save")]
+    #[arg(help = text(messages::SAVE_COLLECTION), long, requires = "save")]
     collection: Option<String>,
 }
 
@@ -346,7 +329,7 @@ async fn publish_record(
 ) -> Result<(), AppError> {
     crate::clipboard::publish(payload)?;
     if let Err(error) = core.mark_used(id).await {
-        eprintln!("uclip: clipboard written; usage could not be saved");
+        crate::i18n::notice(messages::CLIPBOARD_USAGE_FAILED);
         return Err(error);
     }
     Ok(())
@@ -378,7 +361,7 @@ async fn save_input(
         Ok(())
     }
     .await;
-    result.inspect_err(|_| eprintln!("uclip: record saved"))
+    result.inspect_err(|_| crate::i18n::notice(messages::RECORD_SAVED))
 }
 
 pub async fn save(core: &CoreService, args: Save) -> Result<(), AppError> {

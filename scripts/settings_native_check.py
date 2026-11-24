@@ -18,6 +18,7 @@ def run(invoke, invoke_current, execute, execute_main, click, close_settings, sw
     assert execute('return !document.querySelector(".app-shell").inert')
 
     assert execute('return !document.querySelector(".filter-bar .app-more") && !document.querySelector(".listening-dot")')
+    assert not invoke('set_hardware_acceleration', {'enabled': True})['ok'], 'main can only read the graphics setting'
     click('[data-testid="footer-settings"]')
     assert execute('return document.body.classList.contains("settings-window") && document.querySelector(".app-shell").hidden && !document.querySelector(".window-titlebar")')
     assert execute('return !document.querySelector(".modal-heading button")')
@@ -27,6 +28,17 @@ def run(invoke, invoke_current, execute, execute_main, click, close_settings, sw
         click(f'[data-settings-page="{page}"]')
         assert execute('return document.querySelector(".settings-nav [aria-current=page]").dataset.settingsPage === arguments[0]', [page])
         capture('settings-' + page)
+    limit_input = '[aria-describedby="history-tab-capacity-hint"]'
+    wait(lambda: execute('return document.querySelector(arguments[0])?.value === "30000"', [limit_input]), 'default local tab capacity')
+    execute("""
+        const input = document.querySelector(arguments[0]);
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, "35000");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+    """, [limit_input])
+    wait(lambda: execute('return document.querySelector(arguments[0]).value === "30000" && document.querySelector("#history-tab-capacity-hint").textContent.includes("已将每个标签页的上限调整")', [limit_input]), 'clamped capacity and visible feedback')
+    previous = invoke_current('clipboard_status')['value']['policy']['revision']
+    click('section:has(#history-tab-capacity-hint) button.secondary-button')
+    wait(lambda: (policy := invoke_current('clipboard_status')['value']['policy'])['revision'] != previous and policy['maxItems'] == 30000, 'the clamped capacity is saved')
     click('[data-settings-page="desktop"]')
     capture('settings-desktop')
     for command, arguments in [
@@ -45,6 +57,15 @@ def run(invoke, invoke_current, execute, execute_main, click, close_settings, sw
         click('#show-search-by-default')
         wait(lambda: invoke('get_settings')['value']['showSearchByDefault'] == shown, 'saved search default')
         wait(lambda: execute_main('return !document.querySelector("#history-search-panel").hidden') == shown, 'main search toolbar refresh')
+    started_with_acceleration = invoke_current('desktop_status')['value']['hardwareAcceleration']['enabledAtStartup']
+    for enabled in [not started_with_acceleration, started_with_acceleration, not started_with_acceleration]:
+        wait(lambda: execute('return !document.querySelector("#hardware-acceleration").disabled'), 'hardware acceleration setting ready')
+        click('#hardware-acceleration')
+        wait(lambda: invoke_current('desktop_status')['value']['hardwareAcceleration'] == {
+            'enabled': enabled, 'enabledAtStartup': started_with_acceleration,
+        }, 'hardware acceleration setting saved for the next launch')
+        wait(lambda: execute('return document.querySelector("#hardware-acceleration").checked') == enabled, 'hardware acceleration switch reflects the saved setting')
+        assert execute('return document.querySelector("#hardware-acceleration-hint").textContent.includes("请退出并重新打开")') == (enabled != started_with_acceleration)
     capture('settings-appearance-dark')
     for native in [True, False]:
         wait(lambda: execute('return !document.querySelector("[aria-label=使用系统原生标题栏]").disabled'), 'titlebar preference ready')
@@ -147,3 +168,4 @@ def run(invoke, invoke_current, execute, execute_main, click, close_settings, sw
     from history_viewport_native_check import run as check_scroll
     check_scroll(invoke, execute, click, wait, capture)
     print('PASS settings window: search/filter row, main modal guard, separate settings UI, limited IPC, cross-window updates, concurrent open, close/reopen, pin blur/hide/recovery and failed-save rollback, listener state', flush=True)
+    return not started_with_acceleration

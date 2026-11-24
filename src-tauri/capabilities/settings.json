@@ -16,6 +16,7 @@
     "allow-clipboard-status",
     "allow-update-capture-policy",
     "allow-desktop-status",
+    "allow-set-hardware-acceleration",
     "allow-update-desktop-preferences",
     "allow-set-global-shortcut-recording",
     "allow-quick-paste-settings",

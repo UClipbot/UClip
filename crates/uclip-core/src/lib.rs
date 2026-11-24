@@ -11,7 +11,10 @@ mod storage;
 
 pub use contracts::*;
 pub use desktop::{AuxiliaryWindow, AuxiliaryWindowSize, WindowPlacement};
-pub use history::{ClipPayload, QuickPasteSlot, MAX_IMAGE_PIXELS, MAX_TEXT_BYTES};
+pub use history::{
+    ClipPayload, QuickPasteSlot, MAX_HISTORY_ITEMS, MAX_HISTORY_ITEMS_PER_TAB, MAX_IMAGE_PIXELS,
+    MAX_TEXT_BYTES,
+};
 pub use keyboard::*;
 pub use replica::{
     FileReplacement, FileTicket, ReplicaBody, ReplicaEntry, ReplicaId, ReplicaStamp, ReplicaType,

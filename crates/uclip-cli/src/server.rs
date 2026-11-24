@@ -4,27 +4,29 @@ use clap::Subcommand;
 use uclip_core::{AppError, CoreService, ErrorCode, SyncRemoteInput, SyncStatus, UpdateSync};
 use uclip_runtime::sync::SyncService;
 
+use crate::i18n::{messages, text};
+
 #[derive(Subcommand)]
 pub enum SyncCommand {
-    /// Create a new group with LAN discovery enabled.
+    #[command(about = text(messages::SYNC_CREATE))]
     Create,
-    /// Join an existing group using a pairing code read from stdin.
+    #[command(about = text(messages::SYNC_JOIN))]
     Join,
-    /// Print the pairing code to stdout for deliberate sharing.
+    #[command(about = text(messages::SYNC_CODE))]
     Code,
-    /// Print the saved configuration without credentials.
+    #[command(about = text(messages::SYNC_STATUS))]
     Status,
-    /// Enable or disable LAN discovery and synchronization.
+    #[command(about = text(messages::SYNC_LAN))]
     Lan {
-        #[arg(action = clap::ArgAction::Set)]
+        #[arg(action = clap::ArgAction::Set, help = text(messages::LAN_ENABLED))]
         enabled: bool,
     },
-    /// Read a WebDAV or SFTP configuration in JSON from stdin.
     #[command(
-        long_about = "Read a synchronization configuration in JSON from stdin.\n\nWebDAV fields: kind (webdav), url (HTTPS), username, password.\nSFTP fields: kind (sftp), host, port, directory (absolute), username, password, hostKey (SHA256 fingerprint)."
+        about = text(messages::SYNC_REMOTE),
+        long_about = text(messages::SYNC_REMOTE_LONG)
     )]
     Remote,
-    /// Disable remote storage synchronization.
+    #[command(about = text(messages::SYNC_CLEAR_REMOTE))]
     ClearRemote,
 }
 
@@ -106,7 +108,7 @@ async fn serve_until_signal(service: &SyncService) -> Result<(), AppError> {
     let mut stop = interrupt.as_mut();
     let initial = service.status()?;
     if !initial.paired || (!initial.lan_enabled && initial.remote.is_none()) {
-        eprintln!("uclip: configure a synchronization group first with 'uclip sync create' or 'uclip sync join'");
+        crate::i18n::notice(messages::SYNC_SETUP_REQUIRED);
         return Err(crate::invalid());
     }
     if initial.remote.is_none() {
@@ -114,7 +116,7 @@ async fn serve_until_signal(service: &SyncService) -> Result<(), AppError> {
             return Err(error);
         }
     }
-    eprintln!("uclip: synchronization service started");
+    crate::i18n::notice(messages::SYNC_STARTED);
     let mut previous = None;
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     loop {
@@ -124,7 +126,7 @@ async fn serve_until_signal(service: &SyncService) -> Result<(), AppError> {
                 let current = report(&service.status()?);
                 if previous.as_ref() != Some(&current) {
                     let (role, peers, lan, remote) = current;
-                    eprintln!("uclip: LAN {role:?}, peers {peers}, LAN error {lan:?}, remote error {remote:?}");
+                    crate::i18n::sync_status(role, peers, lan, remote);
                     previous = Some(current);
                 }
             }
