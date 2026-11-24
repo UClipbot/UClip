@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
@@ -39,12 +42,35 @@ impl Area {
     }
 }
 
+pub(super) struct ObjectUpload {
+    pub name: String,
+    pub data: Vec<u8>,
+}
+
 /// The final name must only become visible once the complete object is durable on the backend.
 pub(super) trait ArchiveStore {
     fn list(&mut self, area: Area) -> Result<Vec<String>, AppError>;
     fn object_exists(&mut self, name: &str) -> Result<bool, AppError>;
     fn read(&mut self, area: Area, name: &str, bound: usize) -> Result<Option<Vec<u8>>, AppError>;
     fn create(&mut self, area: Area, name: &str, data: Vec<u8>) -> Result<bool, AppError>;
+    fn object_batch_size(&self) -> usize {
+        1
+    }
+    fn create_objects(
+        &mut self,
+        objects: Vec<ObjectUpload>,
+        stopped: Option<&AtomicBool>,
+    ) -> Vec<Result<bool, AppError>> {
+        objects
+            .into_iter()
+            .map(|object| {
+                if stopped.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+                    return Err(unavailable());
+                }
+                self.create(Area::Objects, &object.name, object.data)
+            })
+            .collect()
+    }
     fn remove_manifest(&mut self, name: &str);
 }
 
@@ -139,6 +165,14 @@ impl<S: ArchiveStore> Archive<S> {
         }
         Ok(latest)
     }
+
+    fn verify_object(&mut self, entry: &ReplicaEntry) -> Result<(), AppError> {
+        let existing = self.fetch(&entry.stamp)?.ok_or_else(invalid)?;
+        if existing.stamp != entry.stamp || existing.body != entry.body {
+            return Err(invalid());
+        }
+        Ok(())
+    }
 }
 
 fn manifest_parts(name: &str) -> Option<(&str, u64)> {
@@ -225,11 +259,68 @@ impl<S: ArchiveStore> ReplicaTransport for Archive<S> {
             }
         }
         // An earlier round may have uploaded the body without committing its manifest.
-        let existing = self.fetch(&entry.stamp)?.ok_or_else(invalid)?;
-        if existing.stamp != entry.stamp || existing.body != entry.body {
-            return Err(invalid());
+        self.verify_object(&entry)
+    }
+
+    fn publish_batch_size(&self) -> usize {
+        self.store.object_batch_size()
+    }
+
+    fn publish_batch(&mut self, entries: Vec<ReplicaEntry>) -> Vec<Result<(), AppError>> {
+        if entries.len() <= 1 {
+            return entries
+                .into_iter()
+                .map(|entry| self.publish(entry))
+                .collect();
         }
-        Ok(())
+        let mut results = vec![None; entries.len()];
+        let mut indices = Vec::new();
+        let mut objects = Vec::new();
+        let mut failure: Option<AppError> = None;
+        for (index, entry) in entries.iter().enumerate() {
+            if let Some(error) = &failure {
+                results[index] = Some(Err(error.clone()));
+                continue;
+            }
+            let stage = (|| -> Result<Option<ObjectUpload>, AppError> {
+                if self.contains_body(&entry.stamp)? {
+                    self.verify_object(entry)?;
+                    return Ok(None);
+                }
+                let name = object_name(&entry.stamp);
+                let data = self.seal(&name, &encode(entry, MAX_RECORD)?)?;
+                Ok(Some(ObjectUpload { name, data }))
+            })();
+            match stage {
+                Ok(Some(object)) => {
+                    indices.push(index);
+                    objects.push(object);
+                }
+                Ok(None) => results[index] = Some(Ok(())),
+                Err(error) => {
+                    if !matches!(error.code, ErrorCode::SyncData | ErrorCode::LimitExceeded) {
+                        failure = Some(error.clone());
+                    }
+                    results[index] = Some(Err(error));
+                }
+            }
+        }
+        for (index, result) in indices
+            .into_iter()
+            .zip(self.store.create_objects(objects, None))
+        {
+            results[index] = Some(result.and_then(|created| {
+                if created {
+                    Ok(())
+                } else {
+                    self.verify_object(&entries[index])
+                }
+            }));
+        }
+        results
+            .into_iter()
+            .map(|result| result.unwrap_or_else(|| Err(invalid())))
+            .collect()
     }
 
     fn commit(&mut self, mut available: Vec<ReplicaStamp>, complete: bool) -> Result<(), AppError> {

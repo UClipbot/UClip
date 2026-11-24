@@ -43,6 +43,8 @@ Search and filters are shown by default. Change this in Settings → Appearance.
 
 Synced items are ordered by capture or save time within the pinned and unpinned groups. A conflict between edits, moves to Trash, and restores keeps the latest operation. Permanent deletion takes precedence for the same record, including restores made while a device was offline. LAN sync and server storage use protocol version 4. Shared history has a 512 MiB payload limit, and synced items are retained across devices independently of the local capture count setting.
 
+Nextcloud WebDAV servers that advertise bulk upload receive encrypted history objects in batches. Other WebDAV servers use a limited number of simultaneous uploads. Sync resumes from objects verified on the server and keeps the same archive format across clients.
+
 In **Server storage**, choose **Sync server storage now** to request an immediate sync with the configured server.
 
 ## Common shortcuts

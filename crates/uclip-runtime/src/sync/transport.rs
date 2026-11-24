@@ -5,13 +5,14 @@ use std::{
 
 use serde::{de::DeserializeOwned, Serialize};
 use uclip_core::{
-    AppError, CoreService, ErrorCode, ReplicaEntry, ReplicaId, ReplicaStamp, ReplicaType,
-    SyncRemoteProgress,
+    AppError, CoreService, ErrorCode, ReplicaBody, ReplicaEntry, ReplicaId, ReplicaStamp,
+    ReplicaType, SyncRemoteProgress,
 };
 
 pub(super) const MAX_RECORD: usize = 52 * 1024 * 1024;
 pub(super) const MAX_INVENTORY: usize = 48 * 1024 * 1024;
 pub(super) const MAX_STAMPS: usize = 25_000;
+pub(super) const UPLOAD_BATCH_BYTES: usize = 8 * 1024 * 1024;
 
 pub(super) fn block<T>(future: impl Future<Output = T>) -> T {
     futures_executor::block_on(future)
@@ -58,8 +59,57 @@ pub(super) trait ReplicaTransport {
         Ok(true)
     }
     fn publish(&mut self, entry: ReplicaEntry) -> Result<(), AppError>;
+    fn publish_batch_size(&self) -> usize {
+        1
+    }
+    fn publish_batch(&mut self, entries: Vec<ReplicaEntry>) -> Vec<Result<(), AppError>> {
+        entries
+            .into_iter()
+            .map(|entry| self.publish(entry))
+            .collect()
+    }
     /// Archive transports can publish available versions before the round is complete.
     fn commit(&mut self, available: Vec<ReplicaStamp>, complete: bool) -> Result<(), AppError>;
+}
+
+fn payload_bytes(entry: &ReplicaEntry) -> usize {
+    match &entry.body {
+        Some(ReplicaBody::Clip { text, data, .. }) => text.len() + data.len(),
+        _ => 0,
+    }
+}
+
+fn finish_batch(
+    transport: &mut impl ReplicaTransport,
+    batch: &mut Vec<ReplicaEntry>,
+    available: &mut Vec<ReplicaStamp>,
+    failed: &mut Option<AppError>,
+) -> bool {
+    if batch.is_empty() {
+        return true;
+    }
+    let stamps: Vec<_> = batch.iter().map(|entry| entry.stamp.clone()).collect();
+    let results = transport.publish_batch(std::mem::take(batch));
+    if results.len() != stamps.len() {
+        *failed = Some(invalid());
+        return false;
+    }
+    let mut keep_going = true;
+    for (stamp, result) in stamps.into_iter().zip(results) {
+        match result {
+            Ok(()) => available.push(stamp),
+            Err(error) if matches!(error.code, ErrorCode::SyncData | ErrorCode::LimitExceeded) => {
+                failed.get_or_insert(error);
+            }
+            Err(error) => {
+                if keep_going {
+                    *failed = Some(error);
+                    keep_going = false;
+                }
+            }
+        }
+    }
+    keep_going
 }
 
 /// All backends run the same pull, causal merge and push through the SQLite owner.
@@ -138,33 +188,52 @@ pub(super) fn reconcile_with_progress(
     let mut available = Vec::new();
     let local = block(core.replica_inventory())?;
     let total = local.len() as u32;
+    let batch_size = transport.publish_batch_size();
+    let mut batch = Vec::new();
+    let mut batch_bytes = 0usize;
     for (index, stamp) in local.into_iter().enumerate() {
-        progress(SyncRemoteProgress::Uploading {
-            processed: index as u32,
-            total,
-        });
-        let published = (|| {
+        let needed = (|| {
             if keys.contains(&stamp.key()) && transport.contains_body(&stamp)? {
-                return Ok(true);
+                return Ok((true, None));
             }
-            let Some(entry) = block(core.replica_entry(stamp.clone()))? else {
-                return Ok(false);
-            };
-            transport.publish(entry)?;
-            Ok::<_, AppError>(true)
+            Ok::<_, AppError>((false, block(core.replica_entry(stamp.clone()))?))
         })();
-        match published {
-            Ok(true) => available.push(stamp),
-            Ok(false) => pending = true,
+        match needed {
+            Ok((true, _)) => available.push(stamp),
+            Ok((false, None)) => pending = true,
+            Ok((false, Some(entry))) => {
+                progress(SyncRemoteProgress::Uploading {
+                    processed: (index - batch.len()) as u32,
+                    total,
+                });
+                let bytes = payload_bytes(&entry);
+                if batch_bytes + bytes > UPLOAD_BATCH_BYTES {
+                    if !finish_batch(transport, &mut batch, &mut available, &mut failed) {
+                        break;
+                    }
+                    batch_bytes = 0;
+                }
+                batch.push(entry);
+                batch_bytes += bytes;
+                if batch.len() >= batch_size || batch_bytes >= UPLOAD_BATCH_BYTES {
+                    if !finish_batch(transport, &mut batch, &mut available, &mut failed) {
+                        break;
+                    }
+                    batch_bytes = 0;
+                }
+            }
             Err(error) if matches!(error.code, ErrorCode::SyncData | ErrorCode::LimitExceeded) => {
                 failed.get_or_insert(error);
             }
             Err(error) => {
+                finish_batch(transport, &mut batch, &mut available, &mut failed);
                 failed = Some(error);
                 break;
             }
         }
     }
+    finish_batch(transport, &mut batch, &mut available, &mut failed);
+    available.sort_by(|a, b| (&a.id, &a.writer, a.counter).cmp(&(&b.id, &b.writer, b.counter)));
     let complete = !pending && failed.is_none();
     let records = available
         .iter()

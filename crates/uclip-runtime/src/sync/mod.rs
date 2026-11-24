@@ -323,6 +323,17 @@ impl<S: ArchiveStore> ArchiveStore for ActiveStore<'_, S> {
         self.active()?;
         self.0.create(area, name, data)
     }
+    fn object_batch_size(&self) -> usize {
+        self.0.object_batch_size()
+    }
+
+    fn create_objects(
+        &mut self,
+        objects: Vec<archive::ObjectUpload>,
+        _: Option<&AtomicBool>,
+    ) -> Vec<Result<bool, AppError>> {
+        self.0.create_objects(objects, Some(self.1))
+    }
     fn remove_manifest(&mut self, name: &str) {
         if self.active().is_ok() {
             self.0.remove_manifest(name);
