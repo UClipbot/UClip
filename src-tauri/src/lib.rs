@@ -15,7 +15,10 @@ use uclip_runtime::sync;
 #[cfg(target_os = "linux")]
 mod window_activation;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 use uclip_core::{AppError, CoreService};
@@ -26,6 +29,7 @@ pub(crate) struct AppState {
     core: Result<CoreService, AppError>,
     clipboard: Result<clipboard::ClipboardService, AppError>,
     sync: Result<sync::SyncService, AppError>,
+    history_sequence: Arc<AtomicU64>,
 }
 
 /// Navigation is restricted independently from CSP/ACL. Never load clipboard HTML as a document.
@@ -116,6 +120,8 @@ pub fn run() {
             quick_paste::expand_quick_paste,
             quick_paste::cancel_quick_paste,
             auxiliary_window::resize_auxiliary_corner,
+            auxiliary_window::settings_resize_available,
+            auxiliary_window::start_settings_resize,
             commands::update_key_bindings,
             commands::set_autostart,
             commands::set_desktop_interaction,
@@ -216,6 +222,7 @@ pub fn run() {
                     core: startup,
                     clipboard,
                     sync,
+                    history_sequence: Arc::default(),
                 });
                 // Creating a WebView in an async task avoids Windows synchronous-handler deadlocks.
                 let native_titlebar = handle

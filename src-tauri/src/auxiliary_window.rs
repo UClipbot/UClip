@@ -10,6 +10,7 @@ use std::{
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 use tauri::WebviewWindow;
 use tauri::{Manager, Monitor, Window, WindowEvent};
+use tauri_runtime::ResizeDirection;
 use uclip_core::{AppError, AuxiliaryWindow, AuxiliaryWindowSize, CoreService, ErrorCode};
 
 #[derive(Default)]
@@ -394,7 +395,11 @@ pub fn attach_resize_tracking(
 }
 
 #[cfg(target_os = "linux")]
-fn resize_x11(window: Window, kind: AuxiliaryWindow) -> Result<(), AppError> {
+fn resize_x11(
+    window: Window,
+    kind: AuxiliaryWindow,
+    direction: ResizeDirection,
+) -> Result<(), AppError> {
     use x11rb::{
         connection::Connection,
         protocol::xproto::{ConnectionExt, KeyButMask},
@@ -420,8 +425,18 @@ fn resize_x11(window: Window, kind: AuxiliaryWindow) -> Result<(), AppError> {
     let initial = window.inner_size().map_err(|_| unavailable())?;
     let scale = window.scale_factor().map_err(|_| unavailable())?;
     window
-        .start_resize_dragging(tauri_runtime::ResizeDirection::SouthEast)
+        .start_resize_dragging(direction)
         .map_err(|_| unavailable())?;
+    let (horizontal, vertical) = match direction {
+        ResizeDirection::North => (0, -1),
+        ResizeDirection::NorthEast => (1, -1),
+        ResizeDirection::East => (1, 0),
+        ResizeDirection::SouthEast => (1, 1),
+        ResizeDirection::South => (0, 1),
+        ResizeDirection::SouthWest => (-1, 1),
+        ResizeDirection::West => (-1, 0),
+        ResizeDirection::NorthWest => (-1, -1),
+    };
     let minimum = kind.minimum_size();
     let maximum = AuxiliaryWindow::MAXIMUM_DIMENSION;
     let requested = |initial: u32, delta: i32, minimum: u32| {
@@ -441,12 +456,12 @@ fn resize_x11(window: Window, kind: AuxiliaryWindow) -> Result<(), AppError> {
         let size = window.inner_size().map_err(|_| unavailable())?;
         let width = requested(
             initial.width,
-            i32::from(next.root_x) - i32::from(start.root_x),
+            (i32::from(next.root_x) - i32::from(start.root_x)) * horizontal,
             minimum.width,
         );
         let height = requested(
             initial.height,
-            i32::from(next.root_y) - i32::from(start.root_y),
+            (i32::from(next.root_y) - i32::from(start.root_y)) * vertical,
             minimum.height,
         );
         // Match the user's pointer displacement before accepting the WM's configure.
@@ -559,30 +574,52 @@ mod windows_resize {
 /// Only the two local auxiliary windows can start a native drag on themselves.
 #[tauri::command]
 pub async fn resize_auxiliary_corner(window: Window) -> Result<(), AppError> {
-    let Some(_kind) = kind_for(window.label()) else {
-        return Err(AppError::new(ErrorCode::Restricted));
-    };
-    if !window.is_visible().unwrap_or(false)
-        || window.is_maximized().unwrap_or(true)
-        || window.is_fullscreen().unwrap_or(true)
-    {
+    resize_auxiliary(window, ResizeDirection::SouthEast).await
+}
+
+#[tauri::command]
+pub fn settings_resize_available(window: Window) -> bool {
+    window.label() == "settings" && can_start_resize(&window)
+}
+
+#[tauri::command]
+pub async fn start_settings_resize(
+    window: Window,
+    direction: ResizeDirection,
+) -> Result<(), AppError> {
+    if window.label() != "settings" {
         return Err(AppError::new(ErrorCode::Restricted));
     }
+    resize_auxiliary(window, direction).await
+}
+
+fn can_start_resize(window: &Window) -> bool {
+    if cfg!(target_os = "macos") || crate::desktop::wayland() {
+        return false;
+    }
+    window.is_visible().unwrap_or(false)
+        && window.is_resizable().unwrap_or(false)
+        && !window.is_maximized().unwrap_or(true)
+        && !window.is_fullscreen().unwrap_or(true)
+        && !window.is_minimized().unwrap_or(true)
+}
+
+async fn resize_auxiliary(window: Window, _direction: ResizeDirection) -> Result<(), AppError> {
+    let Some(_kind) = kind_for(window.label()).filter(|_| can_start_resize(&window)) else {
+        return Err(AppError::new(ErrorCode::Restricted));
+    };
     #[cfg(target_os = "macos")]
     return Err(AppError::new(ErrorCode::Restricted));
 
     #[cfg(target_os = "linux")]
     {
-        if crate::desktop::wayland() {
-            return Err(AppError::new(ErrorCode::Restricted));
-        }
-        tauri::async_runtime::spawn_blocking(move || resize_x11(window, _kind))
+        tauri::async_runtime::spawn_blocking(move || resize_x11(window, _kind, _direction))
             .await
             .map_err(|_| AppError::new(ErrorCode::Unavailable))?
     }
 
     #[cfg(target_os = "windows")]
     window
-        .start_resize_dragging(tauri_runtime::ResizeDirection::SouthEast)
+        .start_resize_dragging(_direction)
         .map_err(|_| AppError::new(ErrorCode::Unavailable))
 }

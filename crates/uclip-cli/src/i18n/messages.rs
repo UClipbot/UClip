@@ -129,6 +129,10 @@ pub const SYNC_JOIN: Message = (
     "Join an existing group using a pairing code read from stdin.",
     "从标准输入读取配对码并加入现有同步组。",
 );
+pub const SYNC_FROM_NOW: Message = (
+    "Keep existing clipboard records on this device and sync new records.",
+    "将已有剪贴板记录保留在本机，只同步新记录。",
+);
 pub const SYNC_CODE: Message = (
     "Print the pairing code to stdout for deliberate sharing.",
     "将配对码写到标准输出，以便手动分享。",

@@ -584,6 +584,17 @@ option {
   max-width: 36em;
   overflow-wrap: anywhere;
 }
+.history-searching {
+  animation: show-search-status 150ms step-end both;
+}
+@keyframes show-search-status {
+  from {
+    visibility: hidden;
+  }
+  to {
+    visibility: visible;
+  }
+}
 .service-error {
   display: flex;
   align-items: center;
@@ -1204,10 +1215,6 @@ kbd {
   color: var(--danger);
   font-size: 13px;
 }
-.history-scroll[aria-busy='true'] .clip-row {
-  opacity: 0.55;
-}
-
 .clip-excerpt mark {
   color: inherit;
   background: var(--hover);
@@ -1485,6 +1492,69 @@ kbd {
   background: repeating-linear-gradient(135deg, transparent 0 2px, var(--muted) 2px 3px);
   clip-path: polygon(100% 0, 100% 100%, 0 100%);
   pointer-events: none;
+}
+
+.settings-resize-handles {
+  position: fixed;
+  inset: 0;
+  z-index: 11;
+  pointer-events: none;
+}
+.settings-resize-handles > div {
+  position: absolute;
+  pointer-events: auto;
+}
+.settings-resize-handles [data-resize='North'],
+.settings-resize-handles [data-resize='South'] {
+  left: 12px;
+  right: 12px;
+  height: 6px;
+  cursor: ns-resize;
+}
+.settings-resize-handles [data-resize='North'] {
+  top: 0;
+}
+.settings-resize-handles [data-resize='South'] {
+  right: 24px;
+  bottom: 0;
+}
+.settings-resize-handles [data-resize='East'],
+.settings-resize-handles [data-resize='West'] {
+  top: 12px;
+  bottom: 12px;
+  width: 6px;
+  cursor: ew-resize;
+}
+.settings-resize-handles [data-resize='East'] {
+  right: 0;
+  bottom: 24px;
+}
+.settings-resize-handles [data-resize='West'] {
+  left: 0;
+}
+.settings-resize-handles [data-resize='NorthEast'],
+.settings-resize-handles [data-resize='NorthWest'],
+.settings-resize-handles [data-resize='SouthWest'] {
+  width: 12px;
+  height: 12px;
+}
+.settings-resize-handles [data-resize='NorthWest'] {
+  inset: 0 auto auto 0;
+  cursor: nwse-resize;
+}
+.settings-resize-handles [data-resize='NorthEast'] {
+  inset: 0 0 auto auto;
+  cursor: nesw-resize;
+}
+.settings-resize-handles [data-resize='SouthWest'] {
+  inset: auto auto 0 0;
+  cursor: nesw-resize;
+}
+.settings-resize-handles [data-resize='SouthEast'] {
+  inset: auto 0 0 auto;
+  width: 24px;
+  height: 24px;
+  cursor: nwse-resize;
 }
 
 .settings-content {

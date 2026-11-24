@@ -8,6 +8,7 @@ const settingsCapability = JSON.parse(read('src-tauri/capabilities/settings.json
 const previewCapability = JSON.parse(read('src-tauri/capabilities/hover-preview.json'));
 const quickCapability = JSON.parse(read('src-tauri/capabilities/quick-paste.json'));
 const auxiliaryResize = 'resize_auxiliary_corner';
+const settingsResize = ['settings_resize_available', 'start_settings_resize'];
 const quickSessionCommands = [
   'quick_paste_snapshot',
   'select_quick_paste',
@@ -45,6 +46,7 @@ assert.deepEqual(
             'update_sync',
             'sync_pairing_code',
             auxiliaryResize,
+            ...settingsResize,
             ...quickSessionCommands,
           ].includes(name),
       )
@@ -69,6 +71,7 @@ assert.deepEqual(
     'core:event:allow-unlisten',
     'allow-bootstrap',
     'allow-resize-auxiliary-corner',
+    ...settingsResize.map((name) => `allow-${name.replaceAll('_', '-')}`),
     'allow-update-settings',
     'allow-sync-status',
     'allow-update-sync',

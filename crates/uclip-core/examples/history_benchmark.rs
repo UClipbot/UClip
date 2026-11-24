@@ -1,4 +1,4 @@
-//! Synthetic stress data bypasses the product's 1000-row capacity only for search measurement.
+//! Synthetic stress data can exceed the per-tab capacity to measure large history searches.
 use rusqlite::{params, Connection};
 use std::time::Instant;
 use uclip_core::{HistoryQuery, Storage};
@@ -62,26 +62,38 @@ fn main() {
             ("missing fixture", false, 0),
         ] {
             let mut times = vec![];
+            let mut first_page_times = vec![];
             for _ in 0..21 {
                 let start = Instant::now();
+                let mut first_page_ms = None;
                 let page = storage
-                    .history(HistoryQuery {
-                        query: query.into(),
-                        regex,
-                        kind: None,
-                        pinned_only: false,
-                        collection_id: None,
-                        offset: 0,
-                        expected_revision: None,
-                    })
+                    .search_history(
+                        HistoryQuery {
+                            query: query.into(),
+                            regex,
+                            kind: None,
+                            pinned_only: false,
+                            collection_id: None,
+                            offset: 0,
+                            expected_revision: None,
+                        },
+                        false,
+                        None,
+                        Some(|_| first_page_ms = Some(start.elapsed().as_secs_f64() * 1000.0)),
+                        || true,
+                    )
                     .unwrap();
-                times.push(start.elapsed().as_secs_f64() * 1000.0);
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                times.push(elapsed);
+                first_page_times.push(first_page_ms.unwrap_or(elapsed));
                 assert_eq!(page.total, expected);
                 assert_eq!(page.items.len(), usize::min(25, expected as usize));
             }
             let cold = times.remove(0);
             times.sort_by(f64::total_cmp);
-            results.push(serde_json::json!({"rows":count,"payloadBytes":payload,"query":query,"regex":regex,"firstMs":cold,"warmP50Ms":times[9],"warmP95Ms":times[18],"warmMaxMs":times[19],"databaseBytes":std::fs::metadata(&path).unwrap().len()}));
+            first_page_times.remove(0);
+            first_page_times.sort_by(f64::total_cmp);
+            results.push(serde_json::json!({"rows":count,"payloadBytes":payload,"query":query,"regex":regex,"firstMs":cold,"firstPageP50Ms":first_page_times[9],"warmP50Ms":times[9],"warmP95Ms":times[18],"warmMaxMs":times[19],"databaseBytes":std::fs::metadata(&path).unwrap().len()}));
         }
     }
     println!("{}", serde_json::to_string_pretty(&results).unwrap());

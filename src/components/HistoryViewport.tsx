@@ -179,6 +179,7 @@ export class HistoryViewport extends Component<Props, Metrics, Snapshot> {
     const showing = previous.hidden && !this.props.hidden;
     if (snapshot.reset) {
       this.hiddenTop = null;
+      this.reportedRange = { start: 0, end: 0 };
       node.scrollTop = 0;
     } else if (snapshot.hidingAt !== null) this.hiddenTop = snapshot.hidingAt;
     else if (showing && this.hiddenTop !== null) {
@@ -210,6 +211,7 @@ export class HistoryViewport extends Component<Props, Metrics, Snapshot> {
       node.focus({ preventScroll: true });
     if (snapshot.reset || showing || previous.total !== this.props.total || snapshot.anchors.length)
       this.measure();
+    if (snapshot.reset && this.state.top !== node.scrollTop) return;
     this.report();
   }
 

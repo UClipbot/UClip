@@ -617,7 +617,9 @@ pub struct SyncStatus {
 )]
 pub enum UpdateSync {
     Create,
+    CreateFromNow,
     Join { code: String },
+    JoinFromNow { code: String },
     Lan { enabled: bool },
     Remote { remote: Option<SyncRemoteInput> },
     SyncRemoteNow,

@@ -9,9 +9,15 @@ use crate::i18n::{messages, text};
 #[derive(Subcommand)]
 pub enum SyncCommand {
     #[command(about = text(messages::SYNC_CREATE))]
-    Create,
+    Create {
+        #[arg(long, help = text(messages::SYNC_FROM_NOW))]
+        from_now: bool,
+    },
     #[command(about = text(messages::SYNC_JOIN))]
-    Join,
+    Join {
+        #[arg(long, help = text(messages::SYNC_FROM_NOW))]
+        from_now: bool,
+    },
     #[command(about = text(messages::SYNC_CODE))]
     Code,
     #[command(about = text(messages::SYNC_STATUS))]
@@ -40,11 +46,15 @@ pub async fn configure(
         SyncCommand::Code => {
             return crate::history::output(SyncService::configured_code(core)?.as_bytes(), true)
         }
-        SyncCommand::Create => UpdateSync::Create,
-        SyncCommand::Join => {
+        SyncCommand::Create { from_now: false } => UpdateSync::Create,
+        SyncCommand::Create { from_now: true } => UpdateSync::CreateFromNow,
+        SyncCommand::Join { from_now } => {
             let bytes = crate::history::read_bounded(io::stdin().lock(), 128)?;
-            UpdateSync::Join {
-                code: String::from_utf8(bytes).map_err(|_| crate::invalid())?,
+            let code = String::from_utf8(bytes).map_err(|_| crate::invalid())?;
+            if from_now {
+                UpdateSync::JoinFromNow { code }
+            } else {
+                UpdateSync::Join { code }
             }
         }
         SyncCommand::Lan { enabled } => UpdateSync::Lan { enabled },

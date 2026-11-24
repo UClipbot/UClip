@@ -37,6 +37,8 @@ fn main() {
             "expand_quick_paste",
             "cancel_quick_paste",
             "resize_auxiliary_corner",
+            "settings_resize_available",
+            "start_settings_resize",
             "update_key_bindings",
             "set_autostart",
             "set_desktop_interaction",

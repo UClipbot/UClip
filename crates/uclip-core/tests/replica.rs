@@ -1,15 +1,164 @@
 use std::{collections::BTreeSet, path::Path};
 
 use uclip_core::{
-    ChangeClipDeletion, ChangeClipPin, ClipPayload, ClipVersion, CreateCollection, EditClip,
-    EditableContent, EmptyTrash, ErrorCode, PurgeTrash, ReplicaBody, ReplicaEntry, ReplicaType,
-    Storage,
+    ChangeClipDeletion, ChangeClipPin, ClipPayload, ClipVersion, CreateCollection,
+    DeleteCollection, EditClip, EditableContent, EmptyTrash, ErrorCode, PurgeTrash, ReplicaBody,
+    ReplicaEntry, ReplicaType, Storage,
 };
 
 fn storage(path: &Path) -> Storage {
     let mut store = Storage::open(path).unwrap();
     store.enroll_replica().unwrap();
     store
+}
+
+#[test]
+fn remote_collection_deletion_keeps_unshared_records_in_active_local_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("source.sqlite3");
+    let mut source = Storage::open(&path).unwrap();
+    let collection = source
+        .create_collection(CreateCollection {
+            name: "Existing collection".into(),
+        })
+        .unwrap();
+    let local = source
+        .create_text_in_collection("Local only".into(), Some(collection.id.clone()))
+        .unwrap();
+    source
+        .save_replica_profile("new-only".into(), true)
+        .unwrap();
+    let mut peer = storage(&dir.path().join("peer.sqlite3"));
+    transfer(&mut source, &mut peer);
+
+    let shared = peer.collections().unwrap().items.remove(0);
+    peer.delete_collection(DeleteCollection {
+        id: shared.id,
+        expected_revision: shared.revision,
+    })
+    .unwrap();
+    transfer(&mut peer, &mut source);
+
+    assert!(source.collections().unwrap().items.is_empty());
+    let active = history_items(&source, false);
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id, local);
+    assert_eq!(active[0].collection_id, None);
+    assert!(source
+        .replica_inventory()
+        .unwrap()
+        .iter()
+        .all(|stamp| stamp.id.id != local));
+    drop(source);
+
+    let legacy = rusqlite::Connection::open(&path).unwrap();
+    legacy
+        .execute(
+            "UPDATE clips SET collection=?1 WHERE id=?2",
+            [&collection.id, &local],
+        )
+        .unwrap();
+    legacy.pragma_update(None, "user_version", 20).unwrap();
+    drop(legacy);
+    let migrated = Storage::open(&path).unwrap();
+    let active = history_items(&migrated, false);
+    assert_eq!(active[0].id, local);
+    assert_eq!(active[0].collection_id, None);
+}
+
+#[test]
+fn oversized_history_can_create_a_group_with_new_records_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("history.sqlite3");
+    let mut store = Storage::open(&path).unwrap();
+    let original = store
+        .capture(ClipPayload::Text("Existing clipboard content".into()))
+        .unwrap()
+        .unwrap();
+    let fixture = rusqlite::Connection::open(&path).unwrap();
+    fixture.execute_batch(
+        "WITH RECURSIVE rows(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM rows WHERE n<25000)
+         INSERT INTO clips(id,kind,text,data,fingerprint,captured_at,sequence,revision)
+         SELECT printf('00000000-0000-4000-8000-%012x',n),'text','legacy',X'',zeroblob(32),n,n,0 FROM rows;",
+    ).unwrap();
+    drop(fixture);
+
+    let failed = store
+        .save_replica_profile("full-history".into(), false)
+        .unwrap_err();
+    assert_eq!(failed.code, ErrorCode::LimitExceeded);
+    assert!(store.replica_profile().unwrap().is_none());
+    assert!(store.replica_inventory().unwrap().is_empty());
+
+    store.save_replica_profile("new-only".into(), true).unwrap();
+    drop(store);
+    let mut store = storage(&path);
+    assert_eq!(
+        store.replica_profile().unwrap().as_deref(),
+        Some("new-only")
+    );
+    assert!(store.replica_inventory().unwrap().is_empty());
+    let shared = store
+        .capture(ClipPayload::Text("Existing clipboard content".into()))
+        .unwrap()
+        .unwrap();
+    assert_ne!(shared, original);
+    store
+        .change_clip_pin(ChangeClipPin {
+            id: original.clone(),
+            expected_revision: "0".into(),
+            pinned: true,
+        })
+        .unwrap();
+    let mut inventory = store.replica_inventory().unwrap();
+    assert_eq!(inventory.len(), 1);
+    let stamp = inventory.pop().unwrap();
+    assert_eq!(stamp.id.id, shared);
+    let mut peer = storage(&dir.path().join("peer.sqlite3"));
+    assert!(peer
+        .apply_replica_entry(store.replica_entry(&stamp).unwrap().unwrap())
+        .unwrap());
+    assert_eq!(
+        peer.read_clip(&shared).unwrap(),
+        store.read_clip(&original).unwrap()
+    );
+    assert!(peer.read_clip(&original).is_err());
+    assert_eq!(
+        store
+            .history_window(
+                uclip_core::HistoryQuery {
+                    query: String::new(),
+                    regex: false,
+                    kind: None,
+                    pinned_only: false,
+                    collection_id: None,
+                    offset: 25_000,
+                    expected_revision: None,
+                },
+                false,
+                None
+            )
+            .unwrap()
+            .items
+            .len(),
+        2
+    );
+    store
+        .change_clip_deletion(ChangeClipDeletion {
+            id: original,
+            expected_revision: "1".into(),
+            deleted: true,
+        })
+        .unwrap();
+    assert_eq!(
+        store
+            .purge_trash(PurgeTrash::All(EmptyTrash {
+                expected_revision: store.history_revision().unwrap(),
+            }))
+            .unwrap(),
+        1
+    );
+    assert!(store.replica_inventory().unwrap() == [stamp]);
 }
 
 fn entries(store: &mut Storage) -> Vec<ReplicaEntry> {

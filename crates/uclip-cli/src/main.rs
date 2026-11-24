@@ -119,7 +119,7 @@ fn run(cli: Cli) -> Result<(), AppError> {
             Command::Save(_)
                 | Command::Copy(history::Copy { save: true, .. })
                 | Command::Sync {
-                    command: server::SyncCommand::Create | server::SyncCommand::Join
+                    command: server::SyncCommand::Create { .. } | server::SyncCommand::Join { .. }
                 }
         );
         let core = location.open(create).await?;

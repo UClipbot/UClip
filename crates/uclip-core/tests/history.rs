@@ -13,6 +13,56 @@ fn query(text: &str) -> HistoryQuery {
         expected_revision: None,
     }
 }
+
+#[test]
+fn search_publishes_ordered_rows_before_the_exact_total_and_can_be_superseded() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut storage = Storage::open(&dir.path().join("search.sqlite3")).unwrap();
+    for index in 0..40 {
+        storage.create_text(format!("Match 🦀 {index}")).unwrap();
+    }
+    let mut first_page = None;
+    let full = storage
+        .search_history(
+            query("MATCH"),
+            false,
+            None,
+            Some(|page| first_page = Some(page)),
+            || true,
+        )
+        .unwrap();
+    let first_page = first_page.unwrap();
+    assert_eq!(first_page.revision, full.revision);
+    assert_eq!(full.total, 40);
+    assert!((1..full.total).contains(&first_page.total));
+    assert_eq!(first_page.total as usize, first_page.items.len());
+    for (first, complete) in first_page.items.iter().zip(&full.items) {
+        assert_eq!(first.id, complete.id);
+        assert_eq!(first.match_ranges, vec![(0, 5)]);
+    }
+
+    let current = std::cell::Cell::new(true);
+    let cancelled = storage.search_history(
+        query("match"),
+        false,
+        None,
+        Some(|_| current.set(false)),
+        || current.get(),
+    );
+    assert_eq!(cancelled.unwrap_err().code, ErrorCode::Conflict);
+
+    let checks = std::cell::Cell::new(0);
+    let range = HistoryQuery {
+        offset: 10,
+        expected_revision: Some(full.revision),
+        ..query("match")
+    };
+    let cancelled = storage.search_history(range, false, Some(5), None::<fn(HistoryPage)>, || {
+        checks.set(checks.get() + 1);
+        checks.get() < 3
+    });
+    assert_eq!(cancelled.unwrap_err().code, ErrorCode::Conflict);
+}
 fn enabled(storage: &mut Storage, max: u32) {
     let p = storage.capture_policy().unwrap();
     storage
@@ -194,30 +244,82 @@ fn history_can_page_past_thirty_thousand_across_tabs() {
 
 #[test]
 fn capacity_upgrade_replaces_the_old_default_and_preserves_other_preferences() {
-    for (old, expected) in [(500, MAX_HISTORY_ITEMS_PER_TAB), (725, 725)] {
+    for (old, saved, expected) in [
+        (500, false, MAX_HISTORY_ITEMS_PER_TAB),
+        (500, true, 500),
+        (725, true, 725),
+    ] {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("v18.sqlite3");
         let mut storage = Storage::open(&path).unwrap();
         let clip = storage.create_text("existing item".into()).unwrap();
         drop(storage);
         let connection = Connection::open(&path).unwrap();
-        connection.execute(
-            "UPDATE capture_policy SET max_items=?1,revision=9,enabled=0,exclude_pattern='excluded'",
-            [old],
-        ).unwrap();
+        let excluded = if saved { "excluded" } else { "" };
+        connection
+            .execute(
+                "UPDATE capture_policy SET max_items=?1,revision=?2,enabled=?3,exclude_pattern=?4",
+                rusqlite::params![old, if saved { 9 } else { 0 }, !saved, excluded],
+            )
+            .unwrap();
         connection.pragma_update(None, "user_version", 18).unwrap();
         drop(connection);
 
         let storage = Storage::open(&path).unwrap();
         let policy = storage.capture_policy().unwrap();
         assert_eq!(policy.max_items, expected);
-        assert_eq!(policy.exclude_pattern, "excluded");
-        assert!(!policy.enabled);
+        assert_eq!(policy.exclude_pattern, excluded);
+        assert_eq!(policy.enabled, !saved);
         assert_eq!(
             storage.read_clip(&clip).unwrap(),
             ClipPayload::Text("existing item".into())
         );
     }
+}
+
+#[test]
+fn local_payload_budget_evicts_old_captures_and_preserves_oversized_libraries_on_upgrade() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("payload-budget.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    let mut captured = Vec::new();
+    for color in 1..=5 {
+        captured.push(
+            storage
+                .capture(ClipPayload::Image {
+                    width: 4096,
+                    height: 2048,
+                    rgba: vec![color; 32 * 1024 * 1024],
+                })
+                .unwrap()
+                .unwrap(),
+        );
+    }
+    assert_eq!(storage.history(query("")).unwrap().total, 4);
+    assert_eq!(
+        storage.read_clip(&captured[0]).unwrap_err().code,
+        ErrorCode::NotFound
+    );
+    drop(storage);
+
+    let legacy = Connection::open(&path).unwrap();
+    legacy.execute_batch(
+        "DROP TRIGGER history_usage_insert;
+         DROP TRIGGER history_usage_update;
+         DROP TRIGGER history_usage_delete;
+         DROP TABLE history_usage;
+         INSERT INTO clips(id,kind,text,data,fingerprint,captured_at,sequence,revision)
+         VALUES('00000000-0000-4000-8000-000000000001','text','legacy overflow',X'',zeroblob(32),0,0,0);
+         PRAGMA user_version=20;",
+    ).unwrap();
+    drop(legacy);
+    let mut storage = Storage::open(&path).unwrap();
+    assert_eq!(storage.history(query("")).unwrap().total, 5);
+    assert_eq!(
+        storage.create_text("extra".into()).unwrap_err().code,
+        ErrorCode::LimitExceeded
+    );
+    assert_eq!(storage.history(query("")).unwrap().total, 5);
 }
 #[test]
 fn paused_filtered_invalid_and_oversize_data_never_land() {

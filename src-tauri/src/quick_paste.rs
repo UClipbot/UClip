@@ -139,11 +139,7 @@ pub fn prepare_window(app: &tauri::AppHandle) -> Result<WebviewWindow, AppError>
     #[cfg(target_os = "linux")]
     let builder = builder.transparent(true);
     #[cfg(target_os = "windows")]
-    let builder = builder.transparent(true).effects(
-        tauri::window::EffectsBuilder::new()
-            .effect(tauri::window::Effect::Acrylic)
-            .build(),
-    );
+    let builder = builder.transparent(true).shadow(false);
     let window = builder.build().map_err(|_| unavailable())?;
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     crate::auxiliary_window::attach_resize_tracking(&window, kind)?;

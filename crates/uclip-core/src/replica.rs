@@ -213,7 +213,7 @@ pub(crate) fn migrate_latest(tx: &Transaction<'_>) -> Result<(), AppError> {
             [],
         )?;
     }
-    install_latest_triggers(tx)?;
+    install_latest_triggers(tx, false)?;
     tx.execute_batch(
         "DROP TABLE replica_views;
          DROP INDEX replica_heads_entity;
@@ -223,7 +223,16 @@ pub(crate) fn migrate_latest(tx: &Transaction<'_>) -> Result<(), AppError> {
     Ok(())
 }
 
-fn install_latest_triggers(tx: &Transaction<'_>) -> Result<(), AppError> {
+pub(crate) fn migrate_local_history(tx: &Transaction<'_>) -> Result<(), AppError> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS replica_local_clips(
+            id TEXT PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE
+         ) STRICT;",
+    )?;
+    install_latest_triggers(tx, true)
+}
+
+fn install_latest_triggers(tx: &Transaction<'_>, local_history: bool) -> Result<(), AppError> {
     for (table, kind) in [("collections", 0), ("clips", 1)] {
         for (action, index, removed, changes) in [
             ("INSERT", "NEW", 0, ""),
@@ -250,10 +259,26 @@ fn install_latest_triggers(tx: &Transaction<'_>) -> Result<(), AppError> {
                 (1, "DELETE") => "DELETE FROM replica_files WHERE id=OLD.id; DELETE FROM replica_grant_refs WHERE id=OLD.id;",
                 _ => "",
             };
+            let (timing, shared_clip) = if local_history && kind == 1 {
+                // Check the local-only marker before the foreign key cascade removes it.
+                let timing = if action == "DELETE" {
+                    "BEFORE"
+                } else {
+                    "AFTER"
+                };
+                (
+                    timing,
+                    format!(
+                        "AND NOT EXISTS (SELECT 1 FROM replica_local_clips WHERE id={index}.id)"
+                    ),
+                )
+            } else {
+                ("AFTER", String::new())
+            };
             tx.execute_batch(&format!(
                 "DROP TRIGGER IF EXISTS replica_{table}_{action};
-                 CREATE TRIGGER replica_{table}_{action} AFTER {action} ON {table}
-                 WHEN (SELECT enrolled=1 AND applying=0 FROM replica_state WHERE singleton=1) {changes}
+                 CREATE TRIGGER replica_{table}_{action} {timing} {action} ON {table}
+                 WHEN (SELECT enrolled=1 AND applying=0 FROM replica_state WHERE singleton=1) {changes} {shared_clip}
                  BEGIN
                     SELECT CASE WHEN EXISTS(
                        SELECT 1 FROM replica_state WHERE singleton=1 AND
@@ -336,7 +361,8 @@ pub(crate) fn enrolled(tx: &rusqlite::Connection) -> Result<bool, AppError> {
 pub(crate) fn check_capacity(tx: &Transaction<'_>) -> Result<(), AppError> {
     let over_limit: bool = tx.query_row(
         "SELECT (SELECT count(*) FROM replica_entities) + (SELECT count(*) FROM replica_heads)>?1 OR
-          (SELECT coalesce(sum(length(CAST(text AS BLOB))+length(data)),0) FROM clips)>?2 OR
+          (SELECT coalesce(sum(length(CAST(text AS BLOB))+length(data)),0) FROM clips c
+             WHERE NOT EXISTS (SELECT 1 FROM replica_local_clips l WHERE l.id=c.id))>?2 OR
           (SELECT coalesce(sum(payload_bytes),0) FROM replica_heads) +
           (SELECT coalesce(sum(length(CAST(c.text AS BLOB))+length(c.data)),0)
              FROM replica_entities p JOIN clips c USING(id) WHERE p.kind=1 AND p.removed=0)>?2",
@@ -788,6 +814,26 @@ fn delete_projection(tx: &Transaction<'_>, id: &ReplicaId) -> Result<(), AppErro
     Ok(())
 }
 
+fn detach_local_clips(tx: &Transaction<'_>, collection: Option<&str>) -> Result<usize, AppError> {
+    Ok(tx.execute(
+        "UPDATE clips SET collection=NULL, revision=revision+1
+         WHERE deleted=0 AND collection IS NOT NULL AND (?1 IS NULL OR collection=?1)
+           AND id IN (SELECT id FROM replica_local_clips)
+           AND NOT EXISTS (SELECT 1 FROM collections WHERE id=clips.collection AND deleted=0)",
+        [collection],
+    )?)
+}
+
+pub(crate) fn repair_local_collection_membership(tx: &Transaction<'_>) -> Result<(), AppError> {
+    if detach_local_clips(tx, None)? > 0 {
+        tx.execute(
+            "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 fn project_entry(
     tx: &Transaction<'_>,
     entry: &ReplicaEntry,
@@ -937,18 +983,24 @@ fn normalize_names(conn: &rusqlite::Connection) -> Result<bool, AppError> {
     Ok(!updates.is_empty())
 }
 
-fn enroll(tx: &Transaction<'_>) -> Result<(), AppError> {
+fn enroll(tx: &Transaction<'_>, from_now: bool) -> Result<(), AppError> {
     if !enrolled(tx)? {
+        if from_now {
+            tx.execute("INSERT INTO replica_local_clips SELECT id FROM clips", [])?;
+        }
         tx.execute_batch(
             &format!("UPDATE replica_state SET counter=1,enrolled=1,change_time={CHANGE_TIME} WHERE singleton=1;
              INSERT INTO replica_names SELECT id,name FROM collections;
              INSERT INTO replica_entities
                 SELECT 0,c.id,s.device,1,json_object(s.device,1),0,s.change_time FROM collections c, replica_state s
                 UNION ALL
-                SELECT 1,c.id,s.device,1,json_object(s.device,1),0,s.change_time FROM clips c, replica_state s;
+                SELECT 1,c.id,s.device,1,json_object(s.device,1),0,s.change_time FROM clips c, replica_state s
+                WHERE NOT EXISTS (SELECT 1 FROM replica_local_clips l WHERE l.id=c.id);
              UPDATE history_meta SET revision=revision+1 WHERE singleton=1;"),
         )?;
         check_capacity(tx)?;
+    } else if from_now {
+        return Err(AppError::new(ErrorCode::Conflict));
     }
     Ok(())
 }
@@ -969,6 +1021,8 @@ impl Storage {
         )?;
         self.connection
             .prepare("SELECT id,device,token FROM replica_files LIMIT 0")?;
+        self.connection
+            .prepare("SELECT id FROM replica_local_clips LIMIT 0")?;
         self.connection
             .prepare("SELECT token,paths FROM replica_grants LIMIT 0")?;
         self.connection
@@ -995,7 +1049,7 @@ impl Storage {
 
     pub fn enroll_replica(&mut self) -> Result<(), AppError> {
         let tx = self.connection.transaction()?;
-        enroll(&tx)?;
+        enroll(&tx, false)?;
         tx.commit()?;
         Ok(())
     }
@@ -1008,12 +1062,16 @@ impl Storage {
         )?)
     }
 
-    pub fn save_replica_profile(&mut self, profile: String) -> Result<(), AppError> {
+    pub fn save_replica_profile(
+        &mut self,
+        profile: String,
+        from_now: bool,
+    ) -> Result<(), AppError> {
         if profile.len() > 16384 {
             return Err(invalid());
         }
         let tx = self.connection.transaction()?;
-        enroll(&tx)?;
+        enroll(&tx, from_now)?;
         tx.execute(
             "UPDATE replica_state SET profile=?1 WHERE singleton=1",
             [profile],
@@ -1075,6 +1133,15 @@ impl Storage {
             return Err(AppError::new(ErrorCode::Unavailable));
         }
         let id = &incoming.stamp.id;
+        if id.kind == ReplicaType::Clip
+            && tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM replica_local_clips WHERE id=?1)",
+                [&id.id],
+                |row| row.get::<_, bool>(0),
+            )?
+        {
+            return Ok(false);
+        }
         let pending = read_stamp(&tx, id)?;
         let head = read_current(&tx, id)?;
         let current = pending.as_ref().or(head.as_ref());
@@ -1093,6 +1160,14 @@ impl Storage {
         tx.execute("UPDATE replica_state SET applying=1 WHERE singleton=1", [])?;
         project_entry(&tx, &incoming, current.is_some())?;
         if id.kind == ReplicaType::Collection {
+            if incoming
+                .body
+                .as_ref()
+                .is_none_or(|body| matches!(body, ReplicaBody::Collection { deleted: true, .. }))
+            {
+                // Unshared clips stay in active local history when their shared collection is removed.
+                detach_local_clips(&tx, Some(&id.id))?;
+            }
             normalize_names(&tx)?;
         }
         check_capacity(&tx)?;

@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 
 use crate::{AppError, ErrorCode, Language, SettingsSnapshot, Theme, UpdateSettings};
 
-pub const SCHEMA_VERSION: u32 = 19;
+pub const SCHEMA_VERSION: u32 = 21;
 const APPLICATION_ID: i64 = 0x434c4e58; // Stable database format ID (CLNX), independent of the product name.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
@@ -204,8 +204,8 @@ impl Storage {
                     revision INTEGER NOT NULL CHECK(revision>=0)
                  ) STRICT;
                  INSERT INTO capture_policy_v19 SELECT singleton,enabled,exclude_pattern,
-                    CASE WHEN max_items=500 THEN {max} ELSE max_items END,
-                    revision+{bump_revision}*(max_items=500)
+                    CASE WHEN max_items=500 AND revision=0 THEN {max} ELSE max_items END,
+                    revision+{bump_revision}*(max_items=500 AND revision=0)
                     FROM capture_policy;
                  DROP TABLE capture_policy;
                  ALTER TABLE capture_policy_v19 RENAME TO capture_policy;
@@ -213,6 +213,15 @@ impl Storage {
                     ON clips(deleted,pinned DESC,sequence DESC,id);"
             ))?;
             tx.pragma_update(None, "user_version", 19)?;
+        }
+        if version < 20 {
+            crate::replica::migrate_local_history(&tx)?;
+            tx.pragma_update(None, "user_version", 20)?;
+        }
+        if version < 21 {
+            crate::history::migrate_payload_usage(&tx)?;
+            crate::replica::repair_local_collection_membership(&tx)?;
+            tx.pragma_update(None, "user_version", 21)?;
         }
         tx.commit()?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
@@ -226,6 +235,7 @@ impl Storage {
             .connection
             .prepare("SELECT source_app FROM clips LIMIT 0")?;
         storage.history_revision()?;
+        crate::history::validate_payload_usage(&storage.connection)?;
         storage.desktop_preferences()?;
         storage.connection.query_row(
             "SELECT autostart_initialized FROM desktop_preferences WHERE singleton=1",

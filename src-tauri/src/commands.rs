@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use tauri::{Emitter, Manager, State};
 use uclip_core::{
     AppError, BootstrapSnapshot, SettingsSnapshot, UpdateSettings, CONTRACT_VERSION, SCHEMA_VERSION,
@@ -65,17 +66,32 @@ pub async fn update_settings(
 
 #[tauri::command]
 pub async fn history_query(
+    webview: tauri::Webview,
     state: State<'_, AppState>,
     request: uclip_core::HistoryQuery,
     trash: Option<bool>,
     count: Option<u32>,
+    search_sequence: Option<u64>,
+    on_first_page: Option<tauri::ipc::JavaScriptChannelId>,
 ) -> Result<uclip_core::HistoryPage, AppError> {
-    state
-        .core
-        .as_ref()
-        .map_err(Clone::clone)?
-        .history_window(request, trash.unwrap_or(false), count)
+    let core = state.core.as_ref().map_err(Clone::clone)?;
+    let trash = trash.unwrap_or(false);
+    if let Some(sequence) = search_sequence {
+        let channel = on_first_page.map(|callback| callback.channel_on(webview));
+        let latest = state.history_sequence.clone();
+        latest.fetch_max(sequence, Ordering::Relaxed);
+        let publish = channel.map(|channel| {
+            move |page| {
+                let _ = channel.send(page);
+            }
+        });
+        core.search_history(request, trash, count, publish, move || {
+            latest.load(Ordering::Relaxed) == sequence
+        })
         .await
+    } else {
+        core.history_window(request, trash, count).await
+    }
 }
 #[tauri::command]
 pub async fn clip_detail(

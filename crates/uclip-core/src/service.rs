@@ -131,8 +131,12 @@ impl CoreService {
         self.operation(|s| s.replica_profile()).await
     }
 
-    pub async fn save_replica_profile(&self, profile: String) -> Result<(), AppError> {
-        self.operation(move |s| s.save_replica_profile(profile))
+    pub async fn save_replica_profile(
+        &self,
+        profile: String,
+        from_now: bool,
+    ) -> Result<(), AppError> {
+        self.operation(move |s| s.save_replica_profile(profile, from_now))
             .await
     }
 
@@ -291,6 +295,17 @@ impl CoreService {
         count: u32,
     ) -> Result<Vec<(crate::HistoryItem, crate::ClipPayload)>, AppError> {
         self.operation(move |s| s.history_content(request, count))
+            .await
+    }
+    pub async fn search_history(
+        &self,
+        request: crate::HistoryQuery,
+        trash: bool,
+        count: Option<u32>,
+        on_first_page: Option<impl FnOnce(crate::HistoryPage) + Send + 'static>,
+        is_current: impl Fn() -> bool + Send + 'static,
+    ) -> Result<crate::HistoryPage, AppError> {
+        self.operation(move |s| s.search_history(request, trash, count, on_first_page, is_current))
             .await
     }
     pub async fn quick_paste_slots(

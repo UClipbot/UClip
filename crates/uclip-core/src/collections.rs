@@ -1,7 +1,8 @@
 use crate::{
     history::{
-        allowed_by_capture_policy, check_change_budget, ensure_tab_capacity, mutation_revision,
-        now, prune_protecting, read_capture_policy, trash_count,
+        allowed_by_capture_policy, check_change_budget, enforce_local_payload_budget,
+        ensure_tab_capacity, history_payload_bytes, mutation_revision, now, prune_protecting,
+        read_capture_policy, trash_count,
     },
     AppError, ClipTransferBatch, ClipTransferSnapshot, CollectionItem, CollectionsSnapshot,
     CreateCollection, DeleteCollection, ErrorCode, RenameCollection, Storage, TransferClip,
@@ -256,12 +257,14 @@ impl Storage {
                     return Err(AppError::new(ErrorCode::Excluded));
                 }
                 let id = uuid::Uuid::new_v4().to_string();
+                let previous_bytes = history_payload_bytes(&tx)?;
                 tx.execute("INSERT INTO clips(id,kind,text,data,width,height,file_count,fingerprint,origin,pinned,deleted,collection,captured_at,last_used_at,sequence,revision)
                     SELECT ?1,kind,text,data,width,height,file_count,fingerprint,'manual',0,0,?2,?3,NULL,(SELECT revision+1 FROM history_meta WHERE singleton=1),0 FROM clips WHERE id=?4", params![id,request.collection_id,now(),request.id])?;
                 crate::replica::copy_file_reference(&tx, &request.id, &id)?;
                 // A copy must preserve its source even when capacity is tight.
                 ensure_tab_capacity(&tx, policy.max_items, request.collection_id.as_deref())?;
                 prune_protecting(&tx, policy.max_items, Some(&id), protected)?;
+                enforce_local_payload_budget(&tx, previous_bytes, &id, protected)?;
                 (id, 0)
             }
         };

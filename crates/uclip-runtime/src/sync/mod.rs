@@ -492,8 +492,12 @@ impl SyncService {
     pub fn update(&self, action: UpdateSync) -> Result<SyncStatus, AppError> {
         let mut state = self.runtime.lock().map_err(|_| storage())?;
         let mut next = state.profile.clone();
+        let from_now = matches!(
+            action,
+            UpdateSync::CreateFromNow | UpdateSync::JoinFromNow { .. }
+        );
         let (lan, remote) = match action {
-            UpdateSync::Create => {
+            UpdateSync::Create | UpdateSync::CreateFromNow => {
                 if next.code.is_some() {
                     return Err(AppError::new(ErrorCode::Conflict));
                 }
@@ -503,7 +507,7 @@ impl SyncService {
                 next.lan = true;
                 (true, false)
             }
-            UpdateSync::Join { code } => {
+            UpdateSync::Join { code } | UpdateSync::JoinFromNow { code } => {
                 let code = format_code(&decode_code(&code)?);
                 // A profile remains attached to its replica history and encryption key.
                 if next.code.as_ref().is_some_and(|current| current != &code) {
@@ -543,7 +547,7 @@ impl SyncService {
             }
         };
         let encoded = serde_json::to_string(&next).map_err(|_| storage())?;
-        block(self.core.save_replica_profile(encoded))?;
+        block(self.core.save_replica_profile(encoded, from_now))?;
         state.profile = next;
         if state.running && lan {
             if let Some(Ok(old)) = &state.lan {
@@ -924,7 +928,8 @@ mod tests {
                 lan,
                 remote,
             };
-            block(core.save_replica_profile(serde_json::to_string(&profile).unwrap())).unwrap();
+            block(core.save_replica_profile(serde_json::to_string(&profile).unwrap(), false))
+                .unwrap();
             let service = SyncService::start(core.clone(), &directory).unwrap();
             (core, service, item)
         };

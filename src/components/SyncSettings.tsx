@@ -12,6 +12,7 @@ export function SyncSettings() {
   const [visibleCode, setVisibleCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [historyOverLimit, setHistoryOverLimit] = useState<'create' | 'join' | null>(null);
   const [remoteRequested, setRemoteRequested] = useState(false);
   const [loadingError, setLoadingError] = useState('');
   const [kind, setKind] = useState<RemoteKind>('off');
@@ -51,7 +52,7 @@ export function SyncSettings() {
     }
   }, [initialized, status]);
 
-  async function perform(operation: () => Promise<void>) {
+  async function perform(operation: () => Promise<void>, action?: UpdateSync['action']) {
     if (saving.current) return;
     saving.current = true;
     generation.current++;
@@ -61,7 +62,13 @@ export function SyncSettings() {
     try {
       await operation();
     } catch (failure) {
-      setError(safeError(failure).message);
+      const reason = safeError(failure);
+      if ((action === 'create' || action === 'join') && reason.code === 'limit_exceeded') {
+        setHistoryOverLimit(action);
+        setError('sync_existing_history_over_limit');
+      } else {
+        setError(reason.message);
+      }
     } finally {
       saving.current = false;
       setBusy(false);
@@ -71,9 +78,9 @@ export function SyncSettings() {
   const update = (request: UpdateSync) =>
     perform(async () => {
       setStatus(await invoke<SyncStatus>('update_sync', { request }));
-      if (request.action === 'join') setCode('');
+      if (request.action === 'join' || request.action === 'join_from_now') setCode('');
       if (request.action === 'sync_remote_now') setRemoteRequested(true);
-    });
+    }, request.action);
 
   const remote = status?.remote;
   const roleMessage = {
@@ -104,6 +111,18 @@ export function SyncSettings() {
           >
             {t('sync_create_group')}
           </button>
+          {historyOverLimit === 'create' && (
+            <div>
+              <p>{t('sync_create_from_now_description')}</p>
+              <button
+                className="secondary-button"
+                disabled={busy}
+                onClick={() => void update({ action: 'create_from_now' })}
+              >
+                {t('sync_create_from_now')}
+              </button>
+            </div>
+          )}
           <form
             className="new-form sync-form"
             onSubmit={(event) => {
@@ -125,6 +144,19 @@ export function SyncSettings() {
             <button className="secondary-button" disabled={busy || !code.trim()}>
               {t('sync_join_group')}
             </button>
+            {historyOverLimit === 'join' && (
+              <>
+                <p>{t('sync_create_from_now_description')}</p>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={busy || !code.trim()}
+                  onClick={() => void update({ action: 'join_from_now', code })}
+                >
+                  {t('sync_join_from_now')}
+                </button>
+              </>
+            )}
           </form>
         </>
       )}

@@ -2,6 +2,7 @@ import { t, formatHistoryTime } from './i18n';
 import { selectionRange } from './platform/selection';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { WindowResizeGrip } from './components/WindowResizeGrip';
+import { SettingsResizeHandles } from './components/SettingsResizeHandles';
 import { GlobalShortcutSettings } from './components/GlobalShortcutSettings';
 import { onQuickPasteUnavailable } from './platform/quickPaste';
 import { Icon } from './components/Icon';
@@ -214,6 +215,8 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
     [itemsByPosition],
   );
   const total = appearance.native ? live.total : result.items.length;
+  const searching = result.pending || (appearance.native && live.counting);
+  const recordCount = appearance.native && live.partial ? `≥${total}` : total;
   const [policyPattern, setPolicyPattern] = useState('');
   const [policyMax, setPolicyMax] = useState<number | ''>(MAX_HISTORY_ITEMS_PER_TAB);
   const [policyMaxAdjusted, setPolicyMaxAdjusted] = useState(false);
@@ -1300,9 +1303,12 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
             <HistoryViewport
               listRef={list}
               viewportRef={viewport}
-              resetKey={JSON.stringify([selectionQuery, grid])}
+              resetKey={JSON.stringify([
+                appearance.native ? live.displayedScope : selectionQuery,
+                grid,
+              ])}
               grid={grid}
-              pending={result.pending}
+              pending={searching}
               hidden={!!previewClip}
               total={total}
               revision={live.revision}
@@ -1432,8 +1438,8 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                 </article>
               )}
             >
-              {result.pending && !result.items.length ? (
-                <div className="empty-state" role="status">
+              {result.pending && !result.items.length && !live.hasSnapshot ? (
+                <div className="empty-state history-searching" role="status">
                   <Icon name="search" size={24} />
                   <strong>{t('searching')}</strong>
                 </div>
@@ -1534,14 +1540,12 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               (!live.status.available && !live.status.policy.enabled)
             }
             aria-pressed={appearance.native ? !!live.status?.policy.enabled : undefined}
-            aria-label={`${result.pending ? t('searching_2') : t('0_records', { 0: appearance.native ? live.total : result.items.length })} · ${captureLabel}`}
+            aria-label={`${searching ? t('searching_2') : t('0_records', { 0: recordCount })} · ${captureLabel}`}
             title={captureLabel}
             onClick={() => void saveCapture(!live.status?.policy.enabled)}
           >
             <Icon name="copy" size={16} />
-            <span aria-live="polite">
-              {result.pending ? '…' : appearance.native ? live.total : result.items.length}
-            </span>
+            <span aria-live="polite">{searching ? '…' : recordCount}</span>
           </button>
           <div className="footer-tools">
             {appearance.native && (
@@ -2177,10 +2181,13 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       {(modal === 'settings' || settingsWindow) && (
         <Modal title={t('settings')} onClose={closeModal} showCloseButton={!settingsWindow}>
           {settingsWindow && appearance.snapshot && appearance.snapshot.platform.os !== 'macos' && (
-            <WindowResizeGrip
-              os={appearance.snapshot.platform.os}
-              onError={(message) => setToast({ message })}
-            />
+            <>
+              <WindowResizeGrip
+                os={appearance.snapshot.platform.os}
+                onError={(message) => setToast({ message })}
+              />
+              <SettingsResizeHandles onError={(message) => setToast({ message })} />
+            </>
           )}
           {settingsWindow && (appearance.error || live.statusError || live.status?.error) && (
             <p className="settings-feedback" role="alert">

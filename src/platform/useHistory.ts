@@ -1,6 +1,6 @@
 import { t, formatHistoryDate, formatHistoryTime, getLocale } from '../i18n';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke } from '@tauri-apps/api/core';
 import { safeError } from './client';
 import { useClipDetail } from './useClipDetail';
 import type {
@@ -32,14 +32,20 @@ import type { Clip, ClipType } from '../demo/clips';
 
 const HISTORY_BATCH = 100;
 const MAX_CACHED_ROWS = 4000;
+let historySequence = 0;
 
 export type HistoryRange = { start: number; end: number };
+const EMPTY_RANGE: HistoryRange = { start: 0, end: 0 };
 
 type HistorySnapshot = {
+  filters: string;
   scope: string;
+  visit: number;
+  sequence: number;
   key: string;
   revision: string;
   total: number;
+  partial: boolean;
   rows: ReadonlyMap<number, HistoryPage['items'][number]>;
 };
 
@@ -67,11 +73,23 @@ function cacheRows(
   return rows;
 }
 
-async function readHistory(request: HistoryQuery, trash: boolean, count?: number) {
+async function readHistory(
+  request: HistoryQuery,
+  trash: boolean,
+  searchSequence: number,
+  count?: number,
+  onFirstPage?: (page: HistoryPage) => void,
+) {
   let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      invoke<HistoryPage>('history_query', { request, trash, count }),
+      invoke<HistoryPage>('history_query', {
+        request,
+        trash,
+        count,
+        searchSequence,
+        onFirstPage: onFirstPage ? new Channel(onFirstPage) : undefined,
+      }),
       new Promise<never>((_, reject) => {
         deadline = setTimeout(() => reject(safeError({ code: 'query_timeout' })), 5000);
       }),
@@ -79,6 +97,15 @@ async function readHistory(request: HistoryQuery, trash: boolean, count?: number
   } finally {
     clearTimeout(deadline);
   }
+}
+
+function nextHistorySequence() {
+  // Order concurrent IPC dispatch and keep generations increasing after a WebView reload.
+  historySequence = Math.max(
+    historySequence + 1,
+    Math.floor((performance.timeOrigin + performance.now()) * 1000),
+  );
+  return historySequence;
 }
 
 export function useHistory(
@@ -92,18 +119,16 @@ export function useHistory(
   previewId?: string,
   settingsOnly = false,
 ) {
-  const queryScope = JSON.stringify([query, regex, type, pinnedOnly, collectionId, trash]);
+  const filterScope = JSON.stringify([type, pinnedOnly, collectionId, trash]);
+  const queryScope = JSON.stringify([filterScope, query, regex]);
+  const [visit, setVisit] = useState({ scope: queryScope, id: 0 });
+  if (visit.scope !== queryScope) setVisit({ scope: queryScope, id: visit.id + 1 });
   const [status, setStatus] = useState<ClipboardStatus | null>(null);
   const [result, setResult] = useState<HistorySnapshot>();
   const [collections, setCollections] = useState<CollectionsSnapshot | null>(null);
-  const [range, setRange] = useState({ scope: queryScope, start: 0, end: 0 });
+  const [range, setRange] = useState({ scope: queryScope, ...EMPTY_RANGE });
   const [queryEpoch, setQueryEpoch] = useState(0);
   const [failure, setFailure] = useState<{ key: string; message: string }>();
-  if (range.scope !== queryScope) {
-    setRange({ scope: queryScope, start: 0, end: 0 });
-    setResult(undefined);
-    setFailure(undefined);
-  }
   const [statusError, setStatusError] = useState('');
   const { detail, detailError } = useClipDetail(native, previewId);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
@@ -114,18 +139,24 @@ export function useHistory(
   const mounted = useRef(true);
   const cache = useRef(new Map<string, string>());
   const historyRevision = status?.historyRevision;
-  const requestKey = JSON.stringify([queryScope, historyRevision, queryEpoch]);
-  const page = result?.scope === queryScope ? result : undefined;
-  const current = page?.key === requestKey ? page : undefined;
-  const windowOffset = current ? firstMissing(current, range) : undefined;
-  const refreshStart = current || !page ? 0 : range.start;
-  const refreshEnd = current || !page ? 0 : range.end;
+  const requestKey = JSON.stringify([queryScope, visit.id, historyRevision, queryEpoch]);
+  const matching = result?.scope === queryScope ? result : undefined;
+  const fresh = matching?.key === requestKey ? matching : undefined;
+  const current = fresh?.partial ? undefined : fresh;
+  const queryRange = range.scope === queryScope ? range : EMPTY_RANGE;
+  const windowOffset = current ? firstMissing(current, queryRange) : undefined;
+  const refreshing = !current && matching?.visit === visit.id && !matching.partial;
+  const refreshStart = refreshing ? queryRange.start : 0;
+  const refreshEnd = refreshing ? queryRange.end : 0;
+  const streamFirstPage = !!query && !refreshing;
   const loadKey = JSON.stringify([requestKey, windowOffset]);
   const queryError = failure?.key === loadKey ? failure.message : '';
-  const pending = native && !settingsOnly && (mutating || (!current && !queryError));
+  const pending = native && !settingsOnly && (mutating || (!fresh && !queryError));
+  const page = matching ?? (!queryError && result?.filters === filterScope ? result : undefined);
+  const displayedScope = page?.scope ?? queryScope;
   const requestRange = useCallback(
-    ({ start, end }: HistoryRange) => setRange({ scope: queryScope, start, end }),
-    [queryScope],
+    ({ start, end }: HistoryRange) => setRange({ scope: displayedScope, start, end }),
+    [displayedScope],
   );
   const queryFields = useMemo<Omit<HistoryQuery, 'offset' | 'expectedRevision'>>(
     () => ({
@@ -182,12 +213,15 @@ export function useHistory(
     )
       return;
     let active = true;
+    let finished = false;
     const load = async () => {
+      const sequence = current?.sequence ?? nextHistorySequence();
       try {
         if (current && windowOffset !== undefined) {
           const next = await readHistory(
             { ...queryFields, offset: windowOffset, expectedRevision: current.revision },
             trash,
+            sequence,
             Math.min(HISTORY_BATCH, current.total - windowOffset),
           );
           if (!next.items.length) throw safeError({ code: 'conflict' });
@@ -197,7 +231,26 @@ export function useHistory(
         const head = await readHistory(
           { ...queryFields, offset: 0, expectedRevision: null },
           trash,
+          sequence,
+          undefined,
+          streamFirstPage
+            ? (page) => {
+                if (active && !finished)
+                  setResult({
+                    filters: filterScope,
+                    scope: queryScope,
+                    visit: visit.id,
+                    sequence,
+                    key: requestKey,
+                    revision: page.revision,
+                    total: page.total,
+                    partial: true,
+                    rows: cacheRows(undefined, page, 0),
+                  });
+              }
+            : undefined,
         );
+        finished = true;
         if (!active) return;
         let rows = cacheRows(undefined, head, 0);
         // Refresh the region being read together with the new total, so a
@@ -208,26 +261,33 @@ export function useHistory(
           const next = await readHistory(
             { ...queryFields, offset, expectedRevision: head.revision },
             trash,
+            sequence,
             Math.min(span, head.total - offset),
           );
           rows = cacheRows(rows, next, offset);
         }
         if (active)
           setResult({
+            filters: filterScope,
             scope: queryScope,
+            visit: visit.id,
+            sequence,
             key: requestKey,
             revision: head.revision,
             total: head.total,
+            partial: false,
             rows,
           });
       } catch (error) {
+        finished = true;
         if (!active) return;
         const reason = safeError(error);
         setFailure({ key: loadKey, message: reason.message });
         if (reason.code === 'conflict') void refresh();
       }
     };
-    const timer = setTimeout(() => void load(), current ? 40 : 80);
+    const timer = current ? setTimeout(() => void load(), 40) : undefined;
+    if (!current) void load();
     return () => {
       active = false;
       clearTimeout(timer);
@@ -236,6 +296,7 @@ export function useHistory(
     native,
     trash,
     current,
+    filterScope,
     windowOffset,
     refreshStart,
     refreshEnd,
@@ -247,6 +308,8 @@ export function useHistory(
     requestKey,
     loadKey,
     settingsOnly,
+    streamFirstPage,
+    visit.id,
   ]);
   useEffect(() => {
     if (!native || !page || trash || !visibleImages.length) return;
@@ -417,6 +480,7 @@ export function useHistory(
     const window = await readHistory(
       { ...queryFields, offset: start, expectedRevision: current.revision },
       trash,
+      current.sequence,
       count,
     );
     return window.items.map(mapItem);
@@ -426,7 +490,11 @@ export function useHistory(
     collections: collections?.items ?? [],
     items,
     itemsByPosition,
+    displayedScope,
+    hasSnapshot: !!page,
+    partial: !!page?.partial,
     pending,
+    counting: !!fresh?.partial && !queryError,
     error: current ? '' : queryError,
     moreError: current ? queryError : '',
     loadingWindow: windowOffset !== undefined && !pending && !queryError,

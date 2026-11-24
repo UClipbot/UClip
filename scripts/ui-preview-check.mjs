@@ -45,7 +45,7 @@ try {
   await rows.first().waitFor();
   assert.equal(await rows.first().evaluate((e) => e.getBoundingClientRect().height), 56);
   const imageRow = page.locator('[data-clip-id="image-1"]');
-  assert.equal(await imageRow.evaluate((e) => e.getBoundingClientRect().height), 96);
+  assert.equal(await imageRow.evaluate((e) => e.getBoundingClientRect().height), 56);
   const originalImage = await imageRow.locator('img').getAttribute('src');
   const imageBody = Buffer.from(originalImage.split(',')[1], 'base64').toString('utf8');
   await page.route('**/__image_delay.svg', async (route) => {
@@ -69,7 +69,7 @@ try {
   });
   releaseImage();
   await imageRow.locator('img').evaluate((e) => e.decode());
-  assert.equal(await imageRow.evaluate((e) => e.getBoundingClientRect().height), 96);
+  assert.equal(await imageRow.evaluate((e) => e.getBoundingClientRect().height), 56);
   await page.waitForFunction(({ id, offset }) => {
     const e = document.querySelector('.history-scroll'),
       r = [...e.querySelectorAll('[data-clip-id]')].find((r) => r.dataset.clipId === id);
@@ -80,9 +80,7 @@ try {
   });
   await page.setViewportSize({ width: 640, height: 650 });
   await search.focus();
-  interactions.push(
-    'Mixed 56px/96px rows; delayed image decode preserves reserved height and viewport',
-  );
+  interactions.push('Fixed 56px rows; delayed image decode preserves reserved height and viewport');
   assert.equal(await search.evaluate((e) => e === document.activeElement), true);
   assert.equal(await page.locator('.sidebar, .detail-panel').count(), 0);
   // Select a record before invoking the default action from search.
