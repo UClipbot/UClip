@@ -2,13 +2,17 @@ import { t } from '../i18n';
 import { Icon } from './Icon';
 
 export function WindowTitlebar({
+  title = 'UClip',
+  titleId,
   onDrag,
   onMinimize,
   onToggleMaximized,
   onClose,
 }: {
+  title?: string;
+  titleId?: string;
   onDrag: () => void;
-  onMinimize: () => void;
+  onMinimize?: () => void;
   onToggleMaximized: () => void;
   onClose: () => void;
 }) {
@@ -25,12 +29,14 @@ export function WindowTitlebar({
     >
       <div className="window-titlebar-brand" title={t('drag_window')}>
         <Icon name="copy" size={16} />
-        <span>UClip</span>
+        {titleId ? <h2 id={titleId}>{title}</h2> : <span>{title}</span>}
       </div>
       <div className="window-controls">
-        <button aria-label={t('minimize_window')} title={t('minimize')} onClick={onMinimize}>
-          <Icon name="minimize" size={14} />
-        </button>
+        {onMinimize && (
+          <button aria-label={t('minimize_window')} title={t('minimize')} onClick={onMinimize}>
+            <Icon name="minimize" size={14} />
+          </button>
+        )}
         <button
           aria-label={t('maximize_or_restore_window')}
           title={t('maximize_or_restore')}

@@ -295,8 +295,8 @@ export const english = {
     'Turn off to use software rendering. Changes apply at the next launch.',
   hardware_acceleration_restart:
     'Quit and reopen UClip to apply the saved hardware acceleration setting.',
-  turn_off_to_use_the_custom_title_bar_with_dragging_minimize_maximize_and_close_controls_applies_immediately_and_persists_after_restart:
-    'Turn off to use the custom title bar with dragging, minimize, maximize, and close controls. Applies immediately and persists after restart.',
+  main_window_titlebar_hint:
+    'Controls the main window title bar. Applies immediately and persists after restart.',
   theme: 'Theme',
   follow_system: 'Follow system',
   light: 'Light',
@@ -722,8 +722,7 @@ export const chinese: Record<keyof typeof english, string> = {
   hardware_acceleration_system_managed: '由 macOS 管理',
   hardware_acceleration_hint: '关闭后使用软件渲染。更改将在下次启动时生效。',
   hardware_acceleration_restart: '请退出并重新打开 UClip，使新的硬件加速设置生效。',
-  turn_off_to_use_the_custom_title_bar_with_dragging_minimize_maximize_and_close_controls_applies_immediately_and_persists_after_restart:
-    '关闭后使用自定义标题栏，可拖动、最小化、最大化和关闭窗口。立即生效，重启后保留。',
+  main_window_titlebar_hint: '此选项控制主窗口的标题栏。立即生效，重启后保留。',
   theme: '主题',
   follow_system: '跟随系统',
   light: '浅色',

@@ -13,6 +13,10 @@
     "allow-clip-detail",
     "allow-get-hover-preview",
     "allow-hover-preview-presence",
-    "allow-hide-hover-preview"
+    "allow-hide-hover-preview",
+    "allow-is-window-maximized",
+    "allow-toggle-window-maximized",
+    "allow-start-window-drag",
+    "allow-close-window"
   ]
 }

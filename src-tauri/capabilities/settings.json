@@ -25,6 +25,10 @@
     "allow-update-quick-paste-settings",
     "allow-update-key-bindings",
     "allow-set-autostart",
-    "allow-close-main-window"
+    "allow-minimize-window",
+    "allow-is-window-maximized",
+    "allow-toggle-window-maximized",
+    "allow-start-window-drag",
+    "allow-close-window"
   ]
 }

@@ -72,10 +72,25 @@ fn unavailable() -> AppError {
     AppError::new(ErrorCode::Unavailable)
 }
 
+pub fn native_titlebar_enabled(preferred: bool) -> bool {
+    preferred && !cfg!(target_os = "windows")
+}
+
+#[cfg(target_os = "macos")]
+pub fn title_bar_style(native: bool) -> tauri::TitleBarStyle {
+    if native {
+        tauri::TitleBarStyle::Visible
+    } else {
+        tauri::TitleBarStyle::Overlay
+    }
+}
+
 pub async fn set_titlebar(window: &tauri::WebviewWindow, native: bool) -> Result<(), AppError> {
     #[cfg(not(target_os = "macos"))]
     {
-        window.set_decorations(native).map_err(|_| unavailable())
+        window
+            .set_decorations(native_titlebar_enabled(native))
+            .map_err(|_| unavailable())
     }
     #[cfg(target_os = "macos")]
     {
@@ -83,11 +98,7 @@ pub async fn set_titlebar(window: &tauri::WebviewWindow, native: bool) -> Result
         // Keep the titled NSWindow frame: borderless windows lose the system's
         // rounded corners. Overlay lets the custom chrome fill the titlebar area.
         window
-            .set_title_bar_style(if native {
-                tauri::TitleBarStyle::Visible
-            } else {
-                tauri::TitleBarStyle::Overlay
-            })
+            .set_title_bar_style(title_bar_style(native))
             .map_err(|_| unavailable())?;
         let (tx, rx) = tokio::sync::oneshot::channel();
         window

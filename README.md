@@ -19,7 +19,7 @@ UClip is a local-first clipboard manager. Save what you copy, then quickly searc
 - **Custom shortcuts**: Adjust search, copy, preview, delete, and navigation shortcuts.
 - **Desktop integration**: Show the window from the tray or a shortcut, keep it always on top, pin it to prevent hiding on blur, and launch at login.
 - **Interface languages**: Simplified Chinese and English. The default follows your system language; change it in **Settings → Appearance → Language**. Your choice persists across restarts.
-- **Appearance**: Light and dark themes, with native or custom title bars.
+- **Appearance**: Light and dark themes and matching rounded window frames across desktop platforms. The main window can use the system title bar on macOS and Linux.
 
 ## Usage
 

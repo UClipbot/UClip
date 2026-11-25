@@ -20,8 +20,7 @@ def run(invoke, invoke_current, execute, execute_main, click, close_settings, sw
     assert execute('return !document.querySelector(".filter-bar .app-more") && !document.querySelector(".listening-dot")')
     assert not invoke('set_hardware_acceleration', {'enabled': True})['ok'], 'main can only read the graphics setting'
     click('[data-testid="footer-settings"]')
-    assert execute('return document.body.classList.contains("settings-window") && document.querySelector(".app-shell").hidden && !document.querySelector(".window-titlebar")')
-    assert execute('return !document.querySelector(".modal-heading button")')
+    assert execute('return document.body.classList.contains("settings-window") && document.querySelector(".app-shell").hidden && document.querySelectorAll(".modal .window-titlebar button").length === 3')
     capture('settings-window')
     assert invoke_current('clipboard_status')['ok']
     for page in ['desktop', 'keyboard', 'appearance', 'about', 'capture']:

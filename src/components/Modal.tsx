@@ -1,7 +1,8 @@
 import { t } from '../i18n';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type ComponentProps, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
+import { WindowTitlebar } from './WindowTitlebar';
 
 export function Modal({
   title,
@@ -10,6 +11,7 @@ export function Modal({
   children,
   wide = false,
   showCloseButton = true,
+  titlebar,
 }: {
   title: string;
   description?: string;
@@ -17,6 +19,7 @@ export function Modal({
   children: ReactNode;
   wide?: boolean;
   showCloseButton?: boolean;
+  titlebar?: Omit<ComponentProps<typeof WindowTitlebar>, 'title' | 'titleId' | 'onClose'>;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
@@ -77,16 +80,20 @@ export function Modal({
         ref={panel}
         tabIndex={-1}
       >
-        <div className="modal-heading">
-          <div>
-            <h2 id="modal-title">{title}</h2>
+        {titlebar ? (
+          <WindowTitlebar {...titlebar} title={title} titleId="modal-title" onClose={onClose} />
+        ) : (
+          <div className="modal-heading">
+            <div>
+              <h2 id="modal-title">{title}</h2>
+            </div>
+            {showCloseButton && (
+              <button className="icon-button" aria-label={t('close_panel')} onClick={onClose}>
+                <Icon name="close" />
+              </button>
+            )}
           </div>
-          {showCloseButton && (
-            <button className="icon-button" aria-label={t('close_panel')} onClick={onClose}>
-              <Icon name="close" />
-            </button>
-          )}
-        </div>
+        )}
         {description && (
           <p className="modal-description" id="modal-description">
             {description}

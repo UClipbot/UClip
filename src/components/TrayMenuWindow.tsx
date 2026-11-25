@@ -8,6 +8,7 @@ import { useAppearance } from '../platform/useAppearance';
 import { useSettingsRefresh } from '../platform/useSettingsRefresh';
 import { Icon, type IconName } from './Icon';
 import './tray-menu.css';
+import { windowFrame } from '../platform/windowFrame';
 
 const themes: { value: Theme; icon: IconName; label: string }[] = [
   { value: 'system', icon: 'monitor', label: 'tray_system_theme' },
@@ -92,7 +93,7 @@ export function TrayMenuWindow() {
 
   return (
     <main
-      className={`tray-menu${appearance.snapshot?.platform.os === 'windows' ? ' tray-menu--floating' : ''}`}
+      className={`tray-menu${windowFrame ? ` tray-menu--${windowFrame.mode}` : ''}`}
       aria-label={t('system_tray')}
       onContextMenu={(event) => event.preventDefault()}
     >

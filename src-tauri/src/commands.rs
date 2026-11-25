@@ -556,19 +556,25 @@ pub async fn hide_main_window(app: tauri::AppHandle) -> Result<(), AppError> {
 }
 
 #[tauri::command]
-pub async fn minimize_main_window(window: tauri::WebviewWindow) -> Result<(), AppError> {
-    crate::hover_preview::hide(window.app_handle(), None, false)?;
+pub async fn minimize_window(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    if window.label() == "main" {
+        crate::hover_preview::hide(window.app_handle(), None, false)?;
+    }
     window
         .minimize()
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
 }
 
 #[tauri::command]
-pub async fn toggle_main_window_maximized(window: tauri::WebviewWindow) -> Result<(), AppError> {
-    if window
+pub async fn is_window_maximized(window: tauri::WebviewWindow) -> Result<bool, AppError> {
+    window
         .is_maximized()
-        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
-    {
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
+}
+
+#[tauri::command]
+pub async fn toggle_window_maximized(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    if is_window_maximized(window.clone()).await? {
         window.unmaximize()
     } else {
         window.maximize()
@@ -577,15 +583,15 @@ pub async fn toggle_main_window_maximized(window: tauri::WebviewWindow) -> Resul
 }
 
 #[tauri::command]
-pub async fn start_main_window_drag(window: tauri::WebviewWindow) -> Result<(), AppError> {
+pub async fn start_window_drag(window: tauri::WebviewWindow) -> Result<(), AppError> {
     window
         .start_dragging()
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
 }
 
 #[tauri::command]
-pub async fn close_main_window(window: tauri::WebviewWindow) -> Result<(), AppError> {
-    // CloseRequested decides whether to hide or drain storage and exit.
+pub async fn close_window(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    // CloseRequested applies the main-window and hover-preview lifetime rules.
     window
         .close()
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
@@ -616,12 +622,13 @@ pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), AppError>
         .fit(kind, monitor.as_ref());
     let minimum = kind.minimum_size();
     let maximum = f64::from(uclip_core::AuxiliaryWindow::MAXIMUM_DIMENSION);
-    let builder = crate::local_window(&app, "settings", "index.html?window=settings")
-        .title(crate::desktop::settings_title(&app))
-        .inner_size(f64::from(size.width), f64::from(size.height))
-        .min_inner_size(f64::from(minimum.width), f64::from(minimum.height))
-        .max_inner_size(maximum, maximum)
-        .resizable(true);
+    let builder =
+        crate::window_frame::builder(&app, "settings", "index.html?window=settings", false)
+            .title(crate::desktop::settings_title(&app))
+            .inner_size(f64::from(size.width), f64::from(size.height))
+            .min_inner_size(f64::from(minimum.width), f64::from(minimum.height))
+            .max_inner_size(maximum, maximum)
+            .resizable(true);
     let window =
         if parent.is_visible().unwrap_or(false) && !parent.is_minimized().unwrap_or(true) {
             builder
@@ -632,10 +639,17 @@ pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), AppError>
         }
         .build()
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
+    if let Err(error) = crate::window_frame::prepare(&window, false).await {
+        let _ = window.destroy();
+        return Err(error);
+    }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     crate::auxiliary_window::attach_resize_tracking(&window, kind)?;
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-    let _ = window;
+    #[cfg(target_os = "macos")]
+    window
+        .show()
+        .and_then(|_| window.set_focus())
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
     Ok(())
 }
 

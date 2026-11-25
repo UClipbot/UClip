@@ -16,6 +16,7 @@ mod quick_paste;
 #[cfg(target_os = "linux")]
 mod status_notifier;
 mod tray_menu;
+mod window_frame;
 use uclip_runtime::sync;
 #[cfg(target_os = "linux")]
 mod window_activation;
@@ -132,10 +133,11 @@ pub fn run() {
             commands::set_autostart,
             commands::set_desktop_interaction,
             commands::hide_main_window,
-            commands::minimize_main_window,
-            commands::toggle_main_window_maximized,
-            commands::start_main_window_drag,
-            commands::close_main_window,
+            commands::minimize_window,
+            commands::is_window_maximized,
+            commands::toggle_window_maximized,
+            commands::start_window_drag,
+            commands::close_window,
             commands::open_settings_window,
             commands::dismiss_tray_menu,
             commands::show_hover_preview,
@@ -145,6 +147,8 @@ pub fn run() {
             commands::quit_app,
         ])
         .setup(|app| {
+            #[cfg(target_os = "linux")]
+            app.manage(window_frame::LinuxFrame::detect());
             let handle = app.handle().clone();
             let directory = paths::data_dir(&handle);
             // All disk work and migrations happen off the event loop, before exposing the UI.
@@ -236,27 +240,16 @@ pub fn run() {
                     .state::<desktop::DesktopState>()
                     .preferences()
                     .is_none_or(|p| p.native_titlebar);
-                let window = local_window(&handle, "main", "index.html")
+                let window = window_frame::builder(&handle, "main", "index.html", native_titlebar)
                     .title("UClip")
                     .always_on_top(true)
-                    .decorations(cfg!(target_os = "macos") || native_titlebar)
                     .inner_size(640.0, 650.0)
                     .min_inner_size(480.0, 390.0);
-                #[cfg(target_os = "macos")]
-                let window = window
-                    .visible(false)
-                    .hidden_title(!native_titlebar)
-                    .title_bar_style(if native_titlebar {
-                        tauri::TitleBarStyle::Visible
-                    } else {
-                        tauri::TitleBarStyle::Overlay
-                    });
                 let result = async {
                     let window = window
                         .build()
                         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
-                    #[cfg(target_os = "macos")]
-                    desktop::set_titlebar(&window, native_titlebar).await?;
+                    window_frame::prepare(&window, native_titlebar).await?;
                     let _ = desktop::restore(&handle).await;
                     let _ = desktop::install_tray(&handle).await;
                     if let Ok(core) = &handle.state::<AppState>().core {
@@ -299,8 +292,6 @@ pub fn run() {
                         .show()
                         .and_then(|_| window.set_focus())
                         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
-                    #[cfg(not(target_os = "macos"))]
-                    let _ = window;
                     Ok::<(), AppError>(())
                 }
                 .await;

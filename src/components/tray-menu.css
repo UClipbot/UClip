@@ -12,10 +12,14 @@ body.tray-menu-window {
   user-select: none;
 }
 
-.tray-menu--floating {
-  margin: 3px 5px 7px;
-  border-radius: 13px;
-  box-shadow: 0 2px 5px var(--modal-shadow);
+.tray-menu--inset,
+.tray-menu--flush {
+  border-radius: var(--floating-window-radius);
+}
+
+.tray-menu--inset {
+  margin: var(--floating-window-insets);
+  box-shadow: var(--floating-window-shadow);
 }
 
 .tray-menu-row {

@@ -146,17 +146,23 @@ pub async fn show(
         if previous_token.is_some() {
             return Ok(false);
         }
-        crate::local_window(&app, LABEL, "index.html?window=hover-preview")
-            .title(title(&app))
-            .inner_size(560.0, 640.0)
-            .min_inner_size(320.0, 240.0)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .minimizable(false)
-            .focused(false)
-            .visible(false)
-            .build()
-            .map_err(|_| unavailable())?
+        let window =
+            crate::window_frame::builder(&app, LABEL, "index.html?window=hover-preview", false)
+                .title(title(&app))
+                .inner_size(560.0, 640.0)
+                .min_inner_size(320.0, 240.0)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .minimizable(false)
+                .focused(false)
+                .visible(false)
+                .build()
+                .map_err(|_| unavailable())?;
+        if let Err(error) = crate::window_frame::prepare(&window, false).await {
+            let _ = window.destroy();
+            return Err(error);
+        }
+        window
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
     let handle = app.clone();

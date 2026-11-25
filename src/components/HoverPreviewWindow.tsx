@@ -1,15 +1,18 @@
+import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef, useState } from 'react';
 import type { HoverPreviewRequest } from '../generated/contracts';
 import { formatTimestamp, t } from '../i18n';
 import { useAppearance } from '../platform/useAppearance';
 import { useClipDetail } from '../platform/useClipDetail';
 import { safeError } from '../platform/client';
+import { useWindowFrame, windowFrame } from '../platform/windowFrame';
 import {
   hideHoverPreview,
   hoverPreviewPresence,
   onHoverPreviewChanged,
   readHoverPreview,
 } from '../platform/hoverPreview';
+import { WindowTitlebar } from './WindowTitlebar';
 
 export function HoverPreviewWindow() {
   const appearance = useAppearance();
@@ -20,6 +23,7 @@ export function HoverPreviewWindow() {
   const refreshRequest = useRef<() => void>(() => {});
   const current = useRef(request);
   current.current = request;
+  useWindowFrame(true);
   const { detail, detailError } = useClipDetail(true, request?.id, `${request?.token}:${retry}`);
   useEffect(() => {
     let disposed = false;
@@ -73,6 +77,11 @@ export function HoverPreviewWindow() {
   }, [request?.token]);
   const loading = !!request && !detail && !detailError;
   const failure = error || appearance.error || detailError;
+  const title = request
+    ? t(request.kind === 'files' ? 'file_references' : request.kind)
+    : t('content_preview');
+  const windowAction = (command: string) =>
+    void invoke(command).catch((failure) => setError(safeError(failure).message));
   return (
     <section
       className="native-hover-preview"
@@ -86,13 +95,16 @@ export function HoverPreviewWindow() {
         if (request) void hoverPreviewPresence(request.token, false).catch(() => {});
       }}
     >
-      <header className="native-preview-header">
-        <span>
-          {request
-            ? t(request.kind === 'files' ? 'file_references' : request.kind)
-            : t('content_preview')}
-        </span>
-      </header>
+      {windowFrame ? (
+        <WindowTitlebar
+          title={title}
+          onDrag={() => windowAction('start_window_drag')}
+          onToggleMaximized={() => windowAction('toggle_window_maximized')}
+          onClose={() => windowAction('close_window')}
+        />
+      ) : (
+        <header className="native-preview-header">{title}</header>
+      )}
       <div className="native-preview-scroll" aria-busy={loading}>
         {failure ? (
           <div className="detail-error" role="alert">

@@ -43,6 +43,7 @@ def run(invoke, invoke_current, execute, switch_window, wait, env):
             assert xdotool('getactivewindow').stdout.strip() != xid
         handle = wait(lambda: switch_window('hover-preview'), 'preview WebView exists')
         wait(lambda: execute('return document.querySelector(".native-preview-scroll pre")?.textContent === "Preview lifecycle fixture"'), 'preview detail available')
+        assert execute('return document.querySelectorAll(".window-titlebar button").length === 2')
         assert invoke_current('get_hover_preview')['value']['token'] == snapshot['token']
         return handle
 

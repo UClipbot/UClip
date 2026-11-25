@@ -1,5 +1,13 @@
 @import './themes.css';
 
+:root {
+  --floating-window-top: 3px;
+  --floating-window-insets: var(--floating-window-top) 5px 7px;
+  --floating-window-radius: 13px;
+  --floating-window-shadow: 0 2px 5px var(--modal-shadow);
+  --window-titlebar-height: 38px;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -26,6 +34,38 @@ body {
 #root {
   display: flex;
   flex-direction: column;
+}
+html:has(> body.window-frame-inset:not(.window-maximized))::before {
+  content: '';
+  position: fixed;
+  inset: var(--floating-window-insets);
+  border-radius: var(--floating-window-radius);
+  box-shadow: var(--floating-window-shadow);
+  pointer-events: none;
+}
+body:is(.window-frame-inset, .window-frame-flush) {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  background: transparent;
+}
+.custom-window-frame #root {
+  background: var(--background);
+}
+.window-frame-inset:not(.window-maximized) {
+  inset: var(--floating-window-insets);
+  /* Clip the whole window, including menus and dialogs portaled into the body. */
+  clip-path: inset(0 round var(--floating-window-radius));
+}
+:is(.window-frame-inset, .window-frame-flush):not(.window-maximized)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--floating-window-radius);
+  pointer-events: none;
+  z-index: 100;
 }
 button,
 input,
@@ -97,7 +137,7 @@ button:hover {
 .window-titlebar {
   display: flex;
   flex-shrink: 0;
-  height: 38px;
+  height: var(--window-titlebar-height);
   padding: 0 4px;
   gap: 4px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
@@ -107,6 +147,9 @@ button:hover {
   -webkit-user-select: none;
   position: relative;
   z-index: 55;
+}
+.custom-window-frame .window-titlebar {
+  background: var(--panel);
 }
 .window-titlebar-brand {
   display: flex;
@@ -118,7 +161,11 @@ button:hover {
   color: var(--accent);
   cursor: grab;
 }
-.window-titlebar-brand > span {
+.window-titlebar-brand > :is(span, h2) {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   color: var(--muted);
 }
@@ -764,8 +811,14 @@ option {
   padding: 20px;
   z-index: 40;
 }
-body:has(.window-titlebar) .modal-scrim {
+body:has(#root > .window-titlebar) .modal-scrim {
   top: 48px;
+}
+body.custom-window-frame:not(.settings-window) .modal-scrim {
+  top: var(--window-titlebar-height);
+}
+body.window-frame-inset:not(.settings-window, .window-maximized) .modal-scrim {
+  top: calc(var(--floating-window-top) + var(--window-titlebar-height));
 }
 .modal {
   background: var(--panel);
@@ -782,6 +835,9 @@ body.settings-window .modal-scrim {
   align-items: stretch;
   padding: 0;
   background: var(--background);
+}
+body.settings-window:is(.window-frame-inset, .window-frame-flush) .modal-scrim {
+  position: absolute;
 }
 body.settings-window .modal {
   width: 100%;

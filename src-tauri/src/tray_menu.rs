@@ -39,28 +39,31 @@ pub fn open(app: &AppHandle, cursor: Anchor) {
         let _opening = OPENING.lock().await;
         #[cfg(target_os = "linux")]
         let activation = crate::window_activation::Activation::prepare().ok();
-        let result = app.get_webview_window(LABEL).map_or_else(
-            || {
-                let builder = crate::local_window(&app, LABEL, "index.html?window=tray-menu")
+        let window = if let Some(window) = app.get_webview_window(LABEL) {
+            window
+        } else {
+            let window =
+                crate::window_frame::builder(&app, LABEL, "index.html?window=tray-menu", false)
                     .title("UClip Menu")
                     .inner_size(WIDTH, HEIGHT)
-                    .decorations(false)
                     .always_on_top(true)
                     .skip_taskbar(true)
                     .resizable(false)
-                    .visible(false);
-                #[cfg(target_os = "windows")]
-                let builder = builder.transparent(true).shadow(false);
-                builder.build()
-            },
-            Ok,
-        );
-        let window = match result {
-            Ok(window) => window,
-            Err(error) => {
+                    .visible(false)
+                    .build();
+            let window = match window {
+                Ok(window) => window,
+                Err(error) => {
+                    eprintln!("tray_menu_window_failed: {error}");
+                    return;
+                }
+            };
+            if let Err(error) = crate::window_frame::prepare(&window, false).await {
+                let _ = window.destroy();
                 eprintln!("tray_menu_window_failed: {error}");
                 return;
             }
+            window
         };
         #[cfg(target_os = "linux")]
         let focus_window = window.clone();

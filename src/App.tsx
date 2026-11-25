@@ -25,6 +25,7 @@ import { useHistory } from './platform/useHistory';
 import { KeyboardSettings } from './components/KeyboardSettings';
 import { SyncSettings } from './components/SyncSettings';
 import { WindowTitlebar } from './components/WindowTitlebar';
+import { useWindowFrame, windowFrame } from './platform/windowFrame';
 import { HistoryViewport } from './components/HistoryViewport';
 import { HoverPreview } from './components/HoverPreview';
 import {
@@ -135,8 +136,12 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const desktop = useDesktop(appearance.native, !!(modal || menu || preview), !settingsWindow);
   const hardwareAcceleration = desktop.status?.hardwareAcceleration;
   const quickPaste = useQuickPastePreferences(settingsWindow);
+  const canUseNativeTitlebar = windowFrame?.canUseNativeTitlebar ?? true;
+  const nativeTitlebar = desktop.status?.preferences.nativeTitlebar ?? windowFrame?.nativeTitlebar;
   const customChrome =
-    appearance.native && !settingsWindow && desktop.status?.preferences.nativeTitlebar === false;
+    appearance.native && !settingsWindow && (!canUseNativeTitlebar || nativeTitlebar === false);
+  const customSettingsChrome = !!windowFrame && settingsWindow;
+  useWindowFrame(customSettingsChrome || customChrome);
   useEffect(() => {
     document.body.classList.toggle('settings-window', settingsWindow);
     return () => document.body.classList.remove('settings-window');
@@ -1163,15 +1168,16 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
     </div>
   );
 
+  const titlebar = {
+    onDrag: () => void windowAction(desktop.startDrag),
+    onMinimize: () => void windowAction(desktop.minimize),
+    onToggleMaximized: () => void windowAction(desktop.toggleMaximized),
+  };
+
   return (
     <>
       {customChrome && (
-        <WindowTitlebar
-          onDrag={() => void windowAction(desktop.startDrag)}
-          onMinimize={() => void windowAction(desktop.minimize)}
-          onToggleMaximized={() => void windowAction(desktop.toggleMaximized)}
-          onClose={() => void windowAction(desktop.close)}
-        />
+        <WindowTitlebar {...titlebar} onClose={() => void windowAction(desktop.close)} />
       )}
       <div
         className="app-shell"
@@ -2179,8 +2185,13 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
         </Modal>
       )}
       {(modal === 'settings' || settingsWindow) && (
-        <Modal title={t('settings')} onClose={closeModal} showCloseButton={!settingsWindow}>
-          {settingsWindow && appearance.snapshot && appearance.snapshot.platform.os !== 'macos' && (
+        <Modal
+          title={t('settings')}
+          onClose={closeModal}
+          showCloseButton={!settingsWindow}
+          titlebar={customSettingsChrome ? titlebar : undefined}
+        >
+          {settingsWindow && appearance.snapshot?.platform.os === 'linux' && (
             <>
               <WindowResizeGrip
                 os={appearance.snapshot.platform.os}
@@ -2225,6 +2236,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                   <button
                     key={id}
                     data-settings-page={id}
+                    data-autofocus={customSettingsChrome && settingsPage === id ? '' : undefined}
                     aria-current={settingsPage === id ? 'page' : undefined}
                     onClick={() => setSettingsPage(id)}
                   >
@@ -2400,7 +2412,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                 hidden={settingsWindow && settingsPage !== 'appearance'}
               >
                 <h3>{t('appearance')}</h3>
-                {appearance.native && (
+                {appearance.native && canUseNativeTitlebar && (
                   <>
                     <label className="setting-row">
                       {t('use_system_title_bar')}
@@ -2414,11 +2426,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                         }
                       />
                     </label>
-                    <p className="settings-feedback">
-                      {t(
-                        'turn_off_to_use_the_custom_title_bar_with_dragging_minimize_maximize_and_close_controls_applies_immediately_and_persists_after_restart',
-                      )}
-                    </p>
+                    <p className="settings-feedback">{t('main_window_titlebar_hint')}</p>
                   </>
                 )}
                 {settingsWindow && hardwareAcceleration && (

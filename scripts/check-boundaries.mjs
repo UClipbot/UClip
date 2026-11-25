@@ -89,7 +89,11 @@ assert.deepEqual(
     'allow-update-quick-paste-settings',
     'allow-update-key-bindings',
     'allow-set-autostart',
-    'allow-close-main-window',
+    'allow-minimize-window',
+    'allow-is-window-maximized',
+    'allow-toggle-window-maximized',
+    'allow-start-window-drag',
+    'allow-close-window',
   ].toSorted(),
 );
 assert.deepEqual(previewCapability.windows, ['hover-preview']);
@@ -105,6 +109,10 @@ assert.deepEqual(
     'allow-get-hover-preview',
     'allow-hover-preview-presence',
     'allow-hide-hover-preview',
+    'allow-is-window-maximized',
+    'allow-toggle-window-maximized',
+    'allow-start-window-drag',
+    'allow-close-window',
   ].toSorted(),
 );
 assert.deepEqual(quickCapability.windows, ['quick-paste']);
