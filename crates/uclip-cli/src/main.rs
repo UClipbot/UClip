@@ -1,3 +1,4 @@
+mod archive;
 mod clipboard;
 mod history;
 mod i18n;
@@ -48,6 +49,10 @@ enum Command {
     Copy(history::Copy),
     #[command(about = text(messages::SAVE))]
     Save(history::Save),
+    #[command(about = text(messages::IMPORT))]
+    Import(archive::Import),
+    #[command(about = text(messages::EXPORT))]
+    Export(archive::Export),
     #[command(about = text(messages::COMPLETION))]
     Completion {
         #[arg(help = text(messages::SHELL))]
@@ -109,6 +114,11 @@ fn run(cli: Cli) -> Result<(), AppError> {
     }
 
     let location = library::Location::resolve(cli.data_dir, cli.dev, cli.portable)?;
+    match cli.command {
+        Command::Import(args) => return archive::import(&location.database(false)?, args),
+        Command::Export(args) => return archive::export(&location.database(false)?, args),
+        _ => {}
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -142,6 +152,7 @@ fn run(cli: Cli) -> Result<(), AppError> {
             }
             Command::Copy(args) => history::copy(&core, args).await,
             Command::Save(args) => history::save(&core, args).await,
+            Command::Import(_) | Command::Export(_) => unreachable!(),
             Command::Sync { command } => server::configure(&core, &location.path, command).await,
             Command::Serve => return server::serve(&core, &location.path).await,
             Command::Completion { .. } => unreachable!(),

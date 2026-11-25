@@ -99,6 +99,27 @@ uclip serve
 
 请像保护密码一样保管配对码，并在其他设备上填写。已有同步组可把配对码通过标准输入交给 `uclip sync join`。`uclip sync remote < profile.json` 从标准输入读取 WebDAV 或 SFTP 配置，格式见 `uclip sync remote --help`。`uclip sync status` 显示已保存的设置，不含凭据。局域网使用 IPv4 组播发现，无桌面节点参与与桌面端相同的主机选举。同一个库只运行一个同步进程，更改同步设置前先停止它。`serve` 前台运行，支持 Ctrl+C 和 Unix SIGTERM，可直接交由服务管理器监管。
 
+## 备份或迁移历史
+
+使用当前版本的 UClip CLI。对已有的独立库，`import` 默认预演。退出 UClip 后加 `--apply` 正式导入，并在库目录下生成经校验的 SQLite 备份。可用 `--data-dir`、`--dev` 或 `--portable` 选择 UClip 库。
+
+```bash
+uclip export --output history.jsonl
+uclip import --input history.jsonl
+uclip import --input history.jsonl --apply
+```
+
+明文归档含文本、图片、本机文件引用、分类、置顶、时间戳和回收站，请妥善保管。其他设备的文件引用依赖原设备，导出时会跳过。导入保留记录 ID，跳过目标库中已有或已永久删除的记录。超出容量或分类名称冲突时，整批回滚。要恢复导入前的备份，先退出 UClip 和无桌面同步服务，将当前数据库和 SQLite 附属文件移出原目录，再把备份复制为 `foundation.sqlite3`。
+
+在 Windows、macOS 或 Linux 上从 Cliporax 迁移时，先打开一次 UClip 初始化目标库，再退出两个应用。脚本使用 Python 3.11 或更新版本。
+
+```bash
+python scripts/migrate-cliporax.py --source "/path/to/cliporax.db"
+python scripts/migrate-cliporax.py --source "/path/to/cliporax.db" --apply
+```
+
+省略 `--source` 时读取 Cliporax 标准安装路径。从其他系统带来的备份可用 `--source-platform windows`、`macos` 或 `linux` 指明来源。如果旧库没有设备 ID，请通过 `--source-id` 指定一个固定值，后续重跑沿用该值。脚本报告标记敏感、损坏、超限或路径不兼容等跳过项。文件引用仍需要原路径上的文件。应用设置、同步凭据和插件数据保留在 Cliporax。当前 CLI 不在 PATH 时，用 `--uclip` 指定可执行文件。
+
 ## 从源码运行
 
 安装 Node.js、Rust 和对应平台的 [Tauri 构建依赖](https://v2.tauri.app/start/prerequisites/)后运行：

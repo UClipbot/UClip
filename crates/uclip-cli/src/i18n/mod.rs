@@ -77,7 +77,7 @@ pub fn notice(message: Message) {
     eprintln!("uclip: {}", text(message));
 }
 
-fn error_name(code: ErrorCode) -> String {
+pub(crate) fn error_name(code: ErrorCode) -> String {
     match serde_json::to_value(code) {
         Ok(serde_json::Value::String(name)) => name,
         _ => "unavailable".into(),

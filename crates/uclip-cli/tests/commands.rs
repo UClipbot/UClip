@@ -42,6 +42,73 @@ fn successful(output: Output) -> Vec<u8> {
 }
 
 #[test]
+fn history_archive_round_trips_and_backs_up_only_committed_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let library = temp.path().join("profile");
+    successful(run(&library, &["save"], b"existing text"));
+    let original = successful(run(&library, &["export"], b""));
+    let records = concat!(
+        "{\"type\":\"header\",\"version\":1}\n",
+        "{\"type\":\"collection\",\"id\":\"10000000-0000-4000-8000-000000000000\",\"name\":\"Example\"}\n",
+        "{\"type\":\"clip\",\"id\":\"20000000-0000-4000-8000-000000000000\",",
+        "\"collection\":\"10000000-0000-4000-8000-000000000000\",\"captured_at\":123,",
+        "\"last_used_at\":345,\"pinned\":true,\"kind\":\"text\",\"content\":\"Imported\"}\n",
+        "{\"type\":\"clip\",\"id\":\"30000000-0000-4000-8000-000000000000\",",
+        "\"collection\":\"10000000-0000-4000-8000-000000000000\",\"captured_at\":456,",
+        "\"deleted\":true,\"kind\":\"text\",\"content\":\"In Trash\"}\n",
+    );
+    let archive = format!("{records}{{\"type\":\"end\"}}\n");
+    let preview = successful(run(&library, &["import"], archive.as_bytes()));
+    let preview: serde_json::Value = serde_json::from_slice(&preview).unwrap();
+    assert_eq!(preview["history"]["clips"]["text"], 2);
+    assert!(preview["history"]["backup"].is_null());
+    assert_eq!(successful(run(&library, &["export"], b"")), original);
+
+    let incomplete = run(&library, &["import", "--apply"], records.as_bytes());
+    assert_eq!(incomplete.status.code(), Some(2));
+    assert_eq!(successful(run(&library, &["export"], b"")), original);
+
+    let apply = successful(run(&library, &["import", "--apply"], archive.as_bytes()));
+    let apply: serde_json::Value = serde_json::from_slice(&apply).unwrap();
+    assert_eq!(apply["history"]["trash"], 1);
+    assert_eq!(apply["history"]["pinned"], 1);
+    let backup = Path::new(apply["history"]["backup"].as_str().unwrap());
+    assert_eq!(
+        successful(run(backup.parent().unwrap(), &["export"], b"")),
+        original
+    );
+
+    let retry = successful(run(&library, &["import", "--apply"], archive.as_bytes()));
+    let retry: serde_json::Value = serde_json::from_slice(&retry).unwrap();
+    assert_eq!(retry["history"]["existing_clips"], 2);
+    assert!(retry["history"]["backup"].is_null());
+
+    let imported = successful(run(&library, &["export"], b""));
+    let archive_file = temp.path().join("history.jsonl");
+    let archive_path = archive_file.to_str().unwrap();
+    successful(run(&library, &["export", "--output", archive_path], b""));
+    assert_eq!(std::fs::read(&archive_file).unwrap(), imported);
+    let conflict = run(&library, &["export", "--output", archive_path], b"");
+    assert_eq!(conflict.status.code(), Some(4));
+    assert_eq!(std::fs::read(&archive_file).unwrap(), imported);
+
+    let second = temp.path().join("second");
+    std::fs::create_dir(&second).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&second, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    uclip_core::Storage::open(&second.join("foundation.sqlite3")).unwrap();
+    successful(run(
+        &second,
+        &["import", "--input", archive_path, "--apply"],
+        b"",
+    ));
+    assert_eq!(successful(run(&second, &["export"], b"")), imported);
+}
+
+#[test]
 fn help_follows_locale_and_supports_explicit_overrides_without_opening_the_library() {
     let temp = tempfile::tempdir().unwrap();
     let library = temp.path().join("unused");

@@ -431,6 +431,43 @@ fn usage_does_not_replicate_and_remote_file_ticket_requires_a_local_grant() {
 }
 
 #[test]
+fn history_archives_do_not_reinterpret_remote_file_references_as_local() {
+    use uclip_core::archive::{export_history, ArchiveItem};
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.sqlite3");
+    let peer = dir.path().join("peer.sqlite3");
+    let mut a = storage(&source);
+    let mut b = storage(&peer);
+    let paths = vec![dir.path().join("file.txt").to_string_lossy().into_owned()];
+    a.capture(ClipPayload::Files(paths.clone())).unwrap();
+    a.create_text("shared text".into()).unwrap();
+    transfer(&mut a, &mut b);
+
+    for (database, expected) in [
+        (
+            &source,
+            vec![
+                ClipPayload::Files(paths),
+                ClipPayload::Text("shared text".into()),
+            ],
+        ),
+        (&peer, vec![ClipPayload::Text("shared text".into())]),
+    ] {
+        let mut payloads = Vec::new();
+        export_history(database, |entry| {
+            if let ArchiveItem::Clip(_, payload) = entry {
+                payloads.push(payload);
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(payloads.len(), expected.len());
+        assert!(expected.iter().all(|payload| payloads.contains(payload)));
+    }
+}
+
+#[test]
 fn three_independent_edits_and_new_items_converge_by_item_time() {
     let directory = tempfile::tempdir().unwrap();
     let paths =
