@@ -6,6 +6,7 @@ fn main() {
             "sync_status",
             "update_sync",
             "sync_pairing_code",
+            "open_data_directory",
             "update_settings",
             "set_ui_language",
             "history_query",

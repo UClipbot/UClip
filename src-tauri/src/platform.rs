@@ -1,4 +1,51 @@
-use uclip_core::{CapabilityState as State, PlatformCapability, PlatformReport};
+use std::path::Path;
+use uclip_core::{
+    AppError, CapabilityState as State, ErrorCode, PlatformCapability, PlatformReport,
+};
+
+pub fn open_directory(directory: &Path) -> Result<(), AppError> {
+    if !directory.is_dir() {
+        return Err(AppError::new(ErrorCode::Unavailable));
+    }
+
+    #[cfg(target_os = "linux")]
+    let opened = {
+        use gtk::gio::{self, prelude::FileExt};
+
+        let uri = gio::File::for_path(directory).uri();
+        gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>).is_ok()
+    };
+    #[cfg(target_os = "macos")]
+    let opened = std::process::Command::new("/usr/bin/open")
+        .arg(directory)
+        .status()
+        .is_ok_and(|status| status.success());
+    #[cfg(target_os = "windows")]
+    let opened = {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::{
+            core::{w, PCWSTR},
+            Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
+        };
+
+        let wide_directory: Vec<u16> = directory.as_os_str().encode_wide().chain([0]).collect();
+        let result = unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                PCWSTR::from_raw(wide_directory.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        result.0 as isize > 32
+    };
+
+    opened
+        .then_some(())
+        .ok_or_else(|| AppError::new(ErrorCode::Unavailable))
+}
 
 /// Environment is a hint, never proof of the GDK backend, portal support or permissions.
 pub fn report() -> PlatformReport {

@@ -46,6 +46,7 @@ export function SyncSettings() {
   const [error, setError] = useState('');
   const [historyOverLimit, setHistoryOverLimit] = useState<'create' | 'join' | null>(null);
   const [loadingError, setLoadingError] = useState('');
+  const [directoryState, setDirectoryState] = useState<'idle' | 'opening' | 'failed'>('idle');
   const [kind, setKind] = useState<RemoteKind>('off');
   const [initialized, setInitialized] = useState(false);
   const generation = useRef(0);
@@ -110,6 +111,16 @@ export function SyncSettings() {
       if (request.action === 'join' || request.action === 'join_from_now') setCode('');
     }, request.action);
 
+  async function openDataDirectory() {
+    setDirectoryState('opening');
+    try {
+      await invoke('open_data_directory');
+      setDirectoryState('idle');
+    } catch {
+      setDirectoryState('failed');
+    }
+  }
+
   const remote = status?.remote;
   const capacity = status?.capacity;
   const progress = status?.remoteProgress;
@@ -126,6 +137,19 @@ export function SyncSettings() {
   return (
     <section className="settings-section sync-settings" aria-labelledby="sync-heading">
       <h3 id="sync-heading">{t('sync_settings')}</h3>
+      <button
+        type="button"
+        className="secondary-button"
+        disabled={directoryState === 'opening'}
+        onClick={() => void openDataDirectory()}
+      >
+        {t('sync_open_data_directory')}
+      </button>
+      {directoryState === 'failed' && (
+        <p className="settings-feedback" role="alert">
+          {t('sync_open_data_directory_failed')}
+        </p>
+      )}
       {(error || loadingError) && (
         <p className="settings-feedback" role="alert">
           {t(error || loadingError)}

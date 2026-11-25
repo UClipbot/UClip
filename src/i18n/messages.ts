@@ -1,6 +1,8 @@
 // Stable English message IDs; keep user content out of this catalog.
 export const english = {
   sync_settings: 'Sync',
+  sync_open_data_directory: 'Open config and database folder',
+  sync_open_data_directory_failed: 'Could not open the config and database folder.',
   sync_loading: 'Reading sync settings…',
   sync_share_history:
     'Creating or joining a group shares your existing history and future changes with paired devices. Paired devices can request files from your history while you are online.',
@@ -441,6 +443,8 @@ export const english = {
 
 export const chinese: Record<keyof typeof english, string> = {
   sync_settings: '同步',
+  sync_open_data_directory: '打开配置和数据库目录',
+  sync_open_data_directory_failed: '无法打开配置和数据库目录。',
   sync_loading: '正在读取同步设置…',
   sync_share_history:
     '创建或加入后，配对设备会双向合并现有历史和后续变更。你在线时，配对设备可以请求历史中的文件。',

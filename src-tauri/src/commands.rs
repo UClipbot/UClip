@@ -34,6 +34,27 @@ pub async fn sync_pairing_code(state: State<'_, AppState>) -> Result<String, App
 }
 
 #[tauri::command]
+pub async fn open_data_directory(app: tauri::AppHandle) -> Result<(), AppError> {
+    let directory = crate::paths::data_dir(&app)?;
+    let unavailable = |_| AppError::new(uclip_core::ErrorCode::Unavailable);
+
+    #[cfg(target_os = "windows")]
+    {
+        // Windows shell extensions can require the UI thread's COM apartment.
+        let (send, receive) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let _ = send.send(platform::open_directory(&directory));
+        })
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
+        receive.await.map_err(unavailable)?
+    }
+    #[cfg(not(target_os = "windows"))]
+    tauri::async_runtime::spawn_blocking(move || platform::open_directory(&directory))
+        .await
+        .map_err(unavailable)?
+}
+
+#[tauri::command]
 pub async fn bootstrap(state: State<'_, AppState>) -> Result<BootstrapSnapshot, AppError> {
     let core = state.core.as_ref().map_err(Clone::clone)?;
     Ok(BootstrapSnapshot {

@@ -96,6 +96,7 @@ pub fn run() {
             commands::sync_status,
             commands::update_sync,
             commands::sync_pairing_code,
+            commands::open_data_directory,
             commands::update_settings,
             commands::set_ui_language,
             commands::history_query,

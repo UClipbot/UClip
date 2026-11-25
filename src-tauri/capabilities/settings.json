@@ -15,6 +15,7 @@
     "allow-sync-status",
     "allow-update-sync",
     "allow-sync-pairing-code",
+    "allow-open-data-directory",
     "allow-clipboard-status",
     "allow-update-capture-policy",
     "allow-desktop-status",
