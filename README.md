@@ -99,6 +99,27 @@ uclip serve
 
 Treat the pairing code like a password and enter it on other devices. To reuse an existing group, pass its code to `uclip sync join` through stdin. `uclip sync remote < profile.json` accepts a WebDAV or SFTP profile through stdin. Use `uclip sync remote --help` for the format, and `uclip sync status` to inspect saved settings without credentials. LAN discovery uses IPv4 multicast, and the headless peer follows the same host election as desktop peers. Run one sync process per library and stop it before changing sync settings. `serve` handles Ctrl+C and Unix SIGTERM, so a service manager can supervise it directly.
 
+## Back up or migrate history
+
+Use a current UClip CLI. For an existing standalone library, `import` previews the result by default. Exit UClip before using `--apply` to import and create a verified SQLite backup in the library directory. The commands use the selected UClip profile, including `--data-dir`, `--dev`, and `--portable`.
+
+```bash
+uclip export --output history.jsonl
+uclip import --input history.jsonl
+uclip import --input history.jsonl --apply
+```
+
+The plaintext archive includes text, images, local file references, collections, pins, timestamps, and Trash. Keep it private. File references from other devices are omitted because they require a connection to the original device. The import preserves record IDs and skips IDs already present or permanently deleted in the destination. Capacity and collection-name conflicts roll back the import. To restore the pre-import backup, close UClip and any headless service, move the current database and its SQLite sidecars out of the library directory, and copy the backup to `foundation.sqlite3`.
+
+To migrate from Cliporax on Windows, macOS, or Linux, open UClip once to initialize its library, then exit both apps before running the script with Python 3.11 or newer.
+
+```bash
+python scripts/migrate-cliporax.py --source "/path/to/cliporax.db"
+python scripts/migrate-cliporax.py --source "/path/to/cliporax.db" --apply
+```
+
+Omit `--source` to use the standard Cliporax installation. For a backup from another OS, specify `--source-platform windows`, `macos`, or `linux`. If the source has no device ID, choose a stable `--source-id` and reuse it on later runs. The script reports skipped records, including items marked sensitive, damaged or oversized payloads, and incompatible file paths. File references require the original files at their recorded paths. App settings, sync credentials, and plugin data stay in Cliporax. Use `--uclip` if the current CLI is outside your PATH.
+
 ## Run from source
 
 Install Node.js, Rust, and the [Tauri build prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform, then run:

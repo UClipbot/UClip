@@ -27,7 +27,7 @@ pub const MAX_HISTORY_ITEMS: u32 =
 pub const PAGE_SIZE: usize = 25;
 pub(crate) const MAX_TRASH_ITEMS: u32 = MAX_HISTORY_ITEMS_PER_TAB;
 const MAX_FULL_HISTORY_RESPONSE_BYTES: i64 = 128 * 1024 * 1024;
-const MAX_LOCAL_HISTORY_BYTES: i64 = 128 * 1024 * 1024;
+pub(crate) const MAX_LOCAL_HISTORY_BYTES: i64 = 128 * 1024 * 1024;
 
 /// Only Rust platform adapters construct capture payloads. There is no arbitrary-payload IPC.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1243,11 +1243,15 @@ pub(crate) fn allowed_by_capture_policy(
         return Ok(true);
     }
     let excluded = pattern(&policy.exclude_pattern, false)?;
-    Ok(!match payload {
+    Ok(!matches_capture_exclusion(payload, &excluded))
+}
+
+pub(crate) fn matches_capture_exclusion(payload: &ClipPayload, excluded: &Regex) -> bool {
+    match payload {
         ClipPayload::Text(text) => excluded.is_match(text),
         ClipPayload::Files(paths) => paths.iter().any(|path| excluded.is_match(path)),
         ClipPayload::Image { .. } => false,
-    })
+    }
 }
 
 #[cfg(test)]

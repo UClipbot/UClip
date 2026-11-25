@@ -59,6 +59,31 @@ pub const SAVE: Message = (
     "Save text, an image, or explicit file references.",
     "保存文本、图片或显式指定的文件引用。",
 );
+pub const IMPORT: Message = (
+    "Preview or import a history archive into a standalone library.",
+    "预演或向未加入同步组的库导入历史归档。",
+);
+pub const EXPORT: Message = (
+    "Export history, collections, and Trash as a JSON Lines archive.",
+    "将历史、分类和回收站导出为 JSON Lines 归档。",
+);
+pub const ARCHIVE_INPUT: Message = (
+    "Read the archive from a file. Defaults to stdin.",
+    "从文件读取归档。默认从标准输入读取。",
+);
+pub const ARCHIVE_OUTPUT: Message = (
+    "Write to a new file. Defaults to stdout.",
+    "写入新文件。默认写入标准输出。",
+);
+pub const IMPORT_APPLY: Message = (
+    "Commit the import after backing up the library. Defaults to preview.",
+    "备份库后提交导入。默认为预演。",
+);
+pub const IMPORT_SKIP_INVALID: Message = (
+    "Report and skip records whose payload cannot be imported.",
+    "报告并跳过无法导入内容的记录。",
+);
+pub const ARCHIVE_SKIPPED: Message = ("skipped", "已跳过");
 pub const COMPLETION: Message = ("Generate shell completions.", "生成 Shell 补全脚本。");
 pub const SYNC: Message = ("Configure a synchronization group.", "配置同步组。");
 pub const SERVE: Message = (

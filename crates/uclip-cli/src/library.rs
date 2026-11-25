@@ -36,6 +36,10 @@ impl Location {
     }
 
     pub async fn open(&self, create: bool) -> Result<CoreService, AppError> {
+        CoreService::open(self.database(create)?).await
+    }
+
+    pub fn database(&self, create: bool) -> Result<PathBuf, AppError> {
         if create {
             paths::prepare_directory(&self.path)?;
         }
@@ -66,7 +70,7 @@ impl Location {
                 Ok(_) => return Err(crate::storage()),
             }
         }
-        CoreService::open(database).await
+        Ok(database)
     }
 }
 

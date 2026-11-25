@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 use crate::{AppError, ErrorCode, Language, SettingsSnapshot, Theme, UpdateSettings};
 
 pub const SCHEMA_VERSION: u32 = 21;
-const APPLICATION_ID: i64 = 0x434c4e58; // Stable database format ID (CLNX), independent of the product name.
+pub(crate) const APPLICATION_ID: i64 = 0x434c4e58; // Stable database format ID (CLNX), independent of the product name.
 
 /// Owned by one dedicated worker. No Tauri handles or frontend state enter storage.
 pub struct Storage {
@@ -244,20 +244,7 @@ impl Storage {
         )?;
         storage.keyboard_bindings()?;
         storage.collections()?;
-        storage
-            .connection
-            .prepare("SELECT id,revision,operation,ordinal FROM collection_changes LIMIT 0")?;
-        let collection_triggers: u32 = storage.connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN ('collections_change_insert','collections_change_update','collections_change_delete')", [], |r|r.get(0))?;
-        if collection_triggers != 3 {
-            return Err(AppError::new(ErrorCode::Storage));
-        }
-        storage
-            .connection
-            .prepare("SELECT id,revision,operation,ordinal FROM clip_changes LIMIT 0")?;
-        let triggers: u32 = storage.connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN ('clips_change_insert','clips_change_update','clips_change_delete')", [], |r|r.get(0))?;
-        if triggers != 3 {
-            return Err(AppError::new(ErrorCode::Storage));
-        }
+        validate_change_tracking(&storage.connection)?;
         storage.settings()?; // Fail startup on an invalid persisted setting.
         storage.validate_replica_schema()?;
         Ok(storage)
@@ -335,4 +322,20 @@ impl Storage {
             .execute_batch("PRAGMA wal_checkpoint(PASSIVE)")?;
         Ok(())
     }
+}
+
+pub(crate) fn validate_change_tracking(connection: &Connection) -> Result<(), AppError> {
+    connection.prepare("SELECT id,revision,operation,ordinal FROM collection_changes LIMIT 0")?;
+    connection.prepare("SELECT id,revision,operation,ordinal FROM clip_changes LIMIT 0")?;
+    let triggers: u32 = connection.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name IN
+         ('collections_change_insert','collections_change_update','collections_change_delete',
+          'clips_change_insert','clips_change_update','clips_change_delete')",
+        [],
+        |row| row.get(0),
+    )?;
+    if triggers != 6 {
+        return Err(AppError::new(ErrorCode::Storage));
+    }
+    Ok(())
 }
