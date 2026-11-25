@@ -438,8 +438,10 @@ impl SyncService {
 
     pub fn configured_status(core: &CoreService) -> Result<SyncStatus, AppError> {
         let profile = Profile::load(core)?;
+        let paired = profile.code.is_some();
+        let (capacity, local_only_records) = Self::usage(core, paired)?;
         Ok(SyncStatus {
-            paired: profile.code.is_some(),
+            paired,
             lan_enabled: profile.lan,
             role: SyncRole::Off,
             peers: 0,
@@ -450,11 +452,8 @@ impl SyncService {
             remote_progress: None,
             remote_last_sync: None,
             remote_synced_records: None,
-            local_only_records: profile
-                .code
-                .is_some()
-                .then(|| block(core.replica_local_only_count()))
-                .transpose()?,
+            local_only_records,
+            capacity,
             remote_error: None,
         })
     }
@@ -513,26 +512,39 @@ impl SyncService {
             Some(Err(error)) => (None, None, Some(error.clone())),
             None => (None, None, None),
         };
-        let mut status = SyncStatus {
-            paired: state.profile.code.is_some(),
-            lan_enabled: state.profile.lan,
+        let paired = state.profile.code.is_some();
+        let lan_enabled = state.profile.lan;
+        let remote = state.profile.view();
+        drop(state);
+        let (capacity, local_only_records) = Self::usage(&self.core, paired)?;
+        Ok(SyncStatus {
+            paired,
+            lan_enabled,
             role,
             peers,
             lan_last_sync: last_sync,
             lan_error,
-            remote: state.profile.view(),
+            remote,
             remote_syncing: remote_progress.is_some(),
             remote_progress,
             remote_last_sync: remote_success.map(|(time, _)| time.to_string()),
             remote_synced_records: remote_success.map(|(_, records)| records),
-            local_only_records: None,
+            local_only_records,
+            capacity,
             remote_error,
-        };
-        drop(state);
-        if status.paired {
-            status.local_only_records = Some(block(self.core.replica_local_only_count())?);
+        })
+    }
+
+    fn usage(
+        core: &CoreService,
+        paired: bool,
+    ) -> Result<(Option<uclip_core::SyncCapacity>, Option<u32>), AppError> {
+        if paired {
+            let (capacity, local_only_records) = block(core.replica_usage())?;
+            Ok((Some(capacity), Some(local_only_records)))
+        } else {
+            Ok((None, None))
         }
-        Ok(status)
     }
 
     pub fn update(&self, action: UpdateSync) -> Result<SyncStatus, AppError> {

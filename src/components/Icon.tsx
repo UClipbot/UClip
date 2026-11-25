@@ -9,6 +9,7 @@ export type IconName =
   | 'plus'
   | 'chevron'
   | 'settings'
+  | 'power'
   | 'moon'
   | 'sun'
   | 'monitor'
@@ -71,6 +72,7 @@ const paths: Record<IconName, React.ReactNode> = {
       <circle cx="12" cy="12" r="3" />
     </>
   ),
+  power: <path d="M12 3v9M6 6a8 8 0 1 0 12 0" />,
   moon: <path d="M20.8 13.1A9 9 0 0 1 10.9 3.2a9 9 0 1 0 9.9 9.9Z" />,
   sun: (
     <>

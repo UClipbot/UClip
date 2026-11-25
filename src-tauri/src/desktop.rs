@@ -11,12 +11,6 @@ use uclip_core::{AppError, DesktopPreferences, ErrorCode, WindowPlacement};
 pub struct DesktopState {
     /// 0 = not resolved yet, 1 = English, 2 = Simplified Chinese.
     pub ui_language: AtomicU8,
-    pub tray_labels: Mutex<
-        Option<(
-            tauri::menu::MenuItem<tauri::Wry>,
-            tauri::menu::MenuItem<tauri::Wry>,
-        )>,
-    >,
     pub preferences: Mutex<Option<DesktopPreferences>>,
     pub autostart_error: Mutex<Option<AppError>>,
     pub updating: AtomicBool,
@@ -298,13 +292,6 @@ pub fn ensure_visible(window: &tauri::WebviewWindow) -> Result<(), AppError> {
     }
     Ok(())
 }
-fn tray_text(chinese: bool) -> (&'static str, &'static str) {
-    if chinese {
-        ("显示 UClip", "退出 UClip")
-    } else {
-        ("Show UClip", "Quit UClip")
-    }
-}
 pub fn settings_title(app: &tauri::AppHandle) -> &'static str {
     if app
         .state::<DesktopState>()
@@ -328,21 +315,12 @@ pub fn update_ui_language(app: &tauri::AppHandle) -> Result<(), AppError> {
             .set_title(settings_title(app))
             .map_err(|_| unavailable())?;
     }
-    let state = app.state::<DesktopState>();
-    let labels = state.tray_labels.lock().map_err(|_| unavailable())?.clone();
-    let (show, quit) = tray_text(state.ui_language.load(Ordering::SeqCst) == 2);
-    // Release the state lock before calling platform menu APIs.
-    if let Some((open, exit)) = labels {
-        open.set_text(show).map_err(|_| unavailable())?;
-        exit.set_text(quit).map_err(|_| unavailable())?;
-    }
+    #[cfg(target_os = "linux")]
+    crate::native_tray_menu::update_language(app).map_err(|_| unavailable())?;
     Ok(())
 }
 pub async fn install_tray(app: &tauri::AppHandle) -> Result<(), AppError> {
-    use tauri::{
-        menu::{Menu, MenuItem},
-        tray::TrayIconBuilder,
-    };
+    use tauri::tray::TrayIconBuilder;
     let state = app.state::<DesktopState>();
     if let Ok(core) = &app.state::<crate::AppState>().core {
         if let Ok(settings) = core.settings().await {
@@ -359,12 +337,6 @@ pub async fn install_tray(app: &tauri::AppHandle) -> Result<(), AppError> {
                     .compare_exchange(0, language, Ordering::SeqCst, Ordering::SeqCst);
         }
     }
-    let (show_label, quit_label) = tray_text(state.ui_language.load(Ordering::SeqCst) == 2);
-    let open = MenuItem::with_id(app, "show", show_label, true, None::<&str>)
-        .map_err(|_| unavailable())?;
-    let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)
-        .map_err(|_| unavailable())?;
-    let menu = Menu::with_items(app, &[&open, &quit]).map_err(|_| unavailable())?;
     // Existing local icon system: a simple clipboard silhouette, no remote assets.
     let mut pixels = vec![0u8; 32 * 32 * 4];
     for y in 4..29 {
@@ -379,31 +351,48 @@ pub async fn install_tray(app: &tauri::AppHandle) -> Result<(), AppError> {
             }
         }
     }
-    TrayIconBuilder::with_id("main-tray")
-        .icon(tauri::image::Image::new_owned(pixels, 32, 32))
-        .tooltip("UClip")
-        .menu(&menu)
-        .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
-                let app = app.clone();
-                tauri::async_runtime::spawn_blocking(move || {
-                    let _ = show(&app, false);
-                });
+    #[cfg(target_os = "linux")]
+    let custom_status_notifier = crate::status_notifier::install(app, pixels.clone()).await;
+    {
+        let tray = TrayIconBuilder::with_id("main-tray")
+            .icon(tauri::image::Image::new_owned(pixels, 32, 32))
+            .tooltip("UClip")
+            .show_menu_on_left_click(false);
+        #[cfg(target_os = "linux")]
+        if !custom_status_notifier {
+            crate::native_tray_menu::install(app, tray).map_err(|_| unavailable())?;
+        }
+        #[cfg(not(target_os = "linux"))]
+        tray.on_tray_icon_event(|tray, event| {
+            use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+            if let TrayIconEvent::Click {
+                button,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                match button {
+                    MouseButton::Left => show_from_tray(tray.app_handle()),
+                    MouseButton::Right => crate::tray_menu::open_from_tray(tray),
+                    MouseButton::Middle => {}
+                }
             }
-            "quit" => crate::shutdown(app.clone()),
-            _ => {}
         })
         .build(app)
         .map_err(|_| unavailable())?;
-    if let Ok(mut labels) = state.tray_labels.lock() {
-        *labels = Some((open, quit));
     }
     update_ui_language(app)?;
-    app.state::<DesktopState>()
-        .tray_available
-        .store(true, Ordering::SeqCst);
+    state.tray_available.store(true, Ordering::SeqCst);
+    #[cfg(target_os = "linux")]
+    crate::native_tray_menu::refresh(app).await;
     Ok(())
+}
+
+pub(crate) fn show_from_tray(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = show(&app, false);
+    });
 }
 pub async fn restore(app: &tauri::AppHandle) -> Result<(), AppError> {
     let core = app

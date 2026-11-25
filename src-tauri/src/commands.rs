@@ -61,6 +61,8 @@ pub async fn update_settings(
     let core = state.core.as_ref().map_err(Clone::clone)?;
     let saved = core.update_settings(request).await?;
     let _ = app.emit("settings-changed", ());
+    #[cfg(target_os = "linux")]
+    crate::native_tray_menu::refresh(&app).await;
     Ok(saved)
 }
 
@@ -146,10 +148,11 @@ pub async fn clipboard_status(
 }
 #[tauri::command]
 pub async fn update_capture_policy(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     request: uclip_core::UpdateCapturePolicy,
 ) -> Result<uclip_core::CapturePolicy, AppError> {
-    match &state.clipboard {
+    let saved = match &state.clipboard {
         Ok(service) => service.update_policy(request).await,
         Err(error) => {
             let core = state.core.as_ref().map_err(Clone::clone)?;
@@ -164,7 +167,11 @@ pub async fn update_capture_policy(
             }
             core.update_capture_policy(request).await
         }
-    }
+    }?;
+    let _ = app.emit("settings-changed", ());
+    #[cfg(target_os = "linux")]
+    crate::native_tray_menu::refresh(&app).await;
+    Ok(saved)
 }
 #[tauri::command]
 pub async fn copy_clip(
@@ -609,14 +616,20 @@ pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), AppError>
         .fit(kind, monitor.as_ref());
     let minimum = kind.minimum_size();
     let maximum = f64::from(uclip_core::AuxiliaryWindow::MAXIMUM_DIMENSION);
-    let window = crate::local_window(&app, "settings", "index.html?window=settings")
+    let builder = crate::local_window(&app, "settings", "index.html?window=settings")
         .title(crate::desktop::settings_title(&app))
         .inner_size(f64::from(size.width), f64::from(size.height))
         .min_inner_size(f64::from(minimum.width), f64::from(minimum.height))
         .max_inner_size(maximum, maximum)
-        .resizable(true)
-        .parent(&parent)
-        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+        .resizable(true);
+    let window =
+        if parent.is_visible().unwrap_or(false) && !parent.is_minimized().unwrap_or(true) {
+            builder
+                .parent(&parent)
+                .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+        } else {
+            builder
+        }
         .build()
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -625,6 +638,17 @@ pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), AppError>
     let _ = window;
     Ok(())
 }
+
+#[tauri::command]
+pub fn dismiss_tray_menu(window: tauri::WebviewWindow) -> Result<(), AppError> {
+    if window.label() != "tray-menu" {
+        return Err(AppError::new(uclip_core::ErrorCode::Restricted));
+    }
+    window
+        .hide()
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
+}
+
 #[tauri::command]
 pub async fn quit_app(app: tauri::AppHandle) {
     crate::shutdown(app);

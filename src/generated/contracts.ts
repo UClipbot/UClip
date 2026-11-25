@@ -126,7 +126,9 @@ export type SyncRemoteSettings = { "kind": "webdav", url: string, username: stri
 
 export type SyncRemoteProgress = { "stage": "queued" } | { "stage": "connecting" } | { "stage": "checking" } | { "stage": "downloading", processed: number, total: number, } | { "stage": "uploading", processed: number, total: number, } | { "stage": "finalizing" };
 
-export type SyncStatus = { paired: boolean, lanEnabled: boolean, role: SyncRole, peers: number, lanLastSync: string | null, lanError: AppError | null, remote: SyncRemoteSettings | null, remoteSyncing: boolean, remoteProgress: SyncRemoteProgress | null, remoteLastSync: string | null, remoteSyncedRecords: number | null, localOnlyRecords: number | null, remoteError: AppError | null, };
+export type SyncCapacity = { usedBytes: number, limitBytes: number, };
+
+export type SyncStatus = { paired: boolean, lanEnabled: boolean, role: SyncRole, peers: number, lanLastSync: string | null, lanError: AppError | null, remote: SyncRemoteSettings | null, remoteSyncing: boolean, remoteProgress: SyncRemoteProgress | null, remoteLastSync: string | null, remoteSyncedRecords: number | null, localOnlyRecords: number | null, capacity: SyncCapacity | null, remoteError: AppError | null, };
 
 export type UpdateSync = { "action": "create" } | { "action": "create_from_now" } | { "action": "join", code: string, } | { "action": "join_from_now", code: string, } | { "action": "lan", enabled: boolean, } | { "action": "remote", remote: SyncRemoteInput | null, } | { "action": "sync_remote_now" };
 

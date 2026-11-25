@@ -607,6 +607,15 @@ pub enum SyncRemoteProgress {
 
 #[derive(Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct SyncCapacity {
+    #[ts(type = "number")]
+    pub used_bytes: i64,
+    #[ts(type = "number")]
+    pub limit_bytes: i64,
+}
+
+#[derive(Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
     pub paired: bool,
     pub lan_enabled: bool,
@@ -620,6 +629,7 @@ pub struct SyncStatus {
     pub remote_last_sync: Option<String>,
     pub remote_synced_records: Option<u32>,
     pub local_only_records: Option<u32>,
+    pub capacity: Option<SyncCapacity>,
     pub remote_error: Option<AppError>,
 }
 

@@ -7,6 +7,7 @@ const capability = JSON.parse(read('src-tauri/capabilities/main.json'));
 const settingsCapability = JSON.parse(read('src-tauri/capabilities/settings.json'));
 const previewCapability = JSON.parse(read('src-tauri/capabilities/hover-preview.json'));
 const quickCapability = JSON.parse(read('src-tauri/capabilities/quick-paste.json'));
+const trayCapability = JSON.parse(read('src-tauri/capabilities/tray-menu.json'));
 const auxiliaryResize = 'resize_auxiliary_corner';
 const settingsResize = ['settings_resize_available', 'start_settings_resize'];
 const quickSessionCommands = [
@@ -45,6 +46,7 @@ assert.deepEqual(
             'set_hardware_acceleration',
             'update_sync',
             'sync_pairing_code',
+            'dismiss_tray_menu',
             auxiliaryResize,
             ...settingsResize,
             ...quickSessionCommands,
@@ -60,6 +62,7 @@ assert.deepEqual(config.app.security.capabilities, [
   'settings',
   'hover-preview',
   'quick-paste',
+  'tray-menu',
 ]);
 assert.deepEqual(settingsCapability.windows, ['settings']);
 assert.equal(settingsCapability.local, true);
@@ -115,6 +118,23 @@ assert.deepEqual(
     'allow-bootstrap',
     'allow-resize-auxiliary-corner',
     ...quickSessionCommands.map((name) => `allow-${name.replaceAll('_', '-')}`),
+  ].toSorted(),
+);
+assert.deepEqual(trayCapability.windows, ['tray-menu']);
+assert.equal(trayCapability.local, true);
+assert.equal(trayCapability.remote, undefined);
+assert.deepEqual(
+  trayCapability.permissions.toSorted(),
+  [
+    'core:event:allow-listen',
+    'core:event:allow-unlisten',
+    'allow-bootstrap',
+    'allow-update-settings',
+    'allow-clipboard-status',
+    'allow-update-capture-policy',
+    'allow-open-settings-window',
+    'allow-dismiss-tray-menu',
+    'allow-quit-app',
   ].toSorted(),
 );
 assert.equal(config.app.withGlobalTauri, false);

@@ -6,10 +6,20 @@ import type {
   SyncStatus,
   UpdateSync,
 } from '../generated/contracts';
-import { formatTimestamp, t } from '../i18n';
+import { formatTimestamp, getLocale, t } from '../i18n';
 import { safeError } from '../platform/client';
 
 type RemoteKind = 'off' | SyncRemoteInput['kind'];
+
+function formatBytes(bytes: number) {
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
+  let unit = 0;
+  while (bytes >= 1024 && unit < units.length - 1) {
+    bytes /= 1024;
+    unit++;
+  }
+  return `${bytes.toLocaleString(getLocale(), { maximumFractionDigits: 2 })} ${units[unit]}`;
+}
 
 function remoteProgressLabel(progress: SyncRemoteProgress) {
   switch (progress.stage) {
@@ -101,6 +111,7 @@ export function SyncSettings() {
     }, request.action);
 
   const remote = status?.remote;
+  const capacity = status?.capacity;
   const progress = status?.remoteProgress;
   const countedProgress = progress && 'total' in progress ? progress : null;
   const roleMessage = {
@@ -121,6 +132,21 @@ export function SyncSettings() {
         </p>
       )}
       {!status && !loadingError && <p role="status">{t('sync_loading')}</p>}
+      {capacity && (
+        <div className="sync-capacity">
+          <span id="sync-capacity-label" className="settings-feedback">
+            {t('sync_history_usage_0_1', {
+              0: formatBytes(capacity.usedBytes),
+              1: formatBytes(capacity.limitBytes),
+            })}
+          </span>
+          <meter
+            aria-labelledby="sync-capacity-label"
+            value={capacity.usedBytes}
+            max={capacity.limitBytes}
+          />
+        </div>
+      )}
       {status && !status.paired && (
         <>
           <p>{t('sync_share_history')}</p>

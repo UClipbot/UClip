@@ -48,6 +48,7 @@ fn main() {
             "start_main_window_drag",
             "close_main_window",
             "open_settings_window",
+            "dismiss_tray_menu",
             "show_hover_preview",
             "hide_hover_preview",
             "get_hover_preview",

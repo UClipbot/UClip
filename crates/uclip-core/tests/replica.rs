@@ -99,6 +99,7 @@ fn oversized_history_can_create_a_group_with_new_records_only() {
     );
     assert!(store.replica_inventory().unwrap().is_empty());
     assert_eq!(store.replica_local_only_count().unwrap(), 25_001);
+    assert_eq!(store.replica_capacity().unwrap().used_bytes, 0);
     let shared = store
         .capture(ClipPayload::Text("Existing clipboard content".into()))
         .unwrap()
@@ -115,6 +116,10 @@ fn oversized_history_can_create_a_group_with_new_records_only() {
     assert_eq!(inventory.len(), 1);
     let stamp = inventory.pop().unwrap();
     assert_eq!(stamp.id.id, shared);
+    assert_eq!(
+        store.replica_capacity().unwrap().used_bytes,
+        "Existing clipboard content".len() as i64
+    );
     let mut peer = storage(&dir.path().join("peer.sqlite3"));
     assert!(peer
         .apply_replica_entry(store.replica_entry(&stamp).unwrap().unwrap())
@@ -161,6 +166,48 @@ fn oversized_history_can_create_a_group_with_new_records_only() {
     );
     assert!(store.replica_inventory().unwrap() == [stamp]);
     assert_eq!(store.replica_local_only_count().unwrap(), 25_000);
+}
+
+#[test]
+fn sync_capacity_uses_utf8_bytes_and_accepts_exactly_two_gibibytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("library");
+    let mut store = storage(&path);
+    let text = "猫\0abc";
+    let id = store.create_text(text.into()).unwrap();
+    let pending = store.replica_capacity().unwrap();
+    assert_eq!(pending.limit_bytes, 2 * 1024 * 1024 * 1024);
+    assert_eq!(pending.used_bytes, text.len() as i64);
+    assert_eq!(entries(&mut store).len(), 1);
+    assert_eq!(
+        store.replica_capacity().unwrap().used_bytes,
+        pending.used_bytes
+    );
+
+    // Set the recorded size to exercise the boundary without a multi-GiB fixture.
+    let fixture = rusqlite::Connection::open(&path).unwrap();
+    fixture
+        .execute(
+            "UPDATE replica_heads SET payload_bytes=?1 WHERE id=?2",
+            rusqlite::params![pending.limit_bytes - 3, id],
+        )
+        .unwrap();
+    drop(fixture);
+    store.create_text("猫".into()).unwrap();
+    assert_eq!(
+        store.replica_capacity().unwrap().used_bytes,
+        pending.limit_bytes
+    );
+    let revision = store.history_revision().unwrap();
+    assert_eq!(
+        store.create_text("a".into()).unwrap_err().code,
+        ErrorCode::LimitExceeded,
+    );
+    assert_eq!(store.history_revision().unwrap(), revision);
+    assert_eq!(
+        store.replica_capacity().unwrap().used_bytes,
+        pending.limit_bytes
+    );
 }
 
 fn entries(store: &mut Storage) -> Vec<ReplicaEntry> {

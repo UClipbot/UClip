@@ -6,7 +6,7 @@ export const english = {
     'Creating or joining a group shares your existing history and future changes with paired devices. Paired devices can request files from your history while you are online.',
   sync_create_group: 'Create sync group',
   sync_existing_history_over_limit:
-    'Your history exceeds the sync group limit of 25,000 entities or 512 MiB.',
+    'Your history exceeds the sync group limit of 25,000 entities or 2 GiB.',
   sync_create_from_now_description:
     'Keep existing clipboard records on this device and share collections and records added from now on.',
   sync_create_from_now: 'Create group and sync new records only',
@@ -34,6 +34,7 @@ export const english = {
   sync_storage_uploading_0_1: 'Checking and uploading local records · {0}/{1}',
   sync_storage_finalizing: 'Saving the server index…',
   sync_storage_confirmed_0: 'Clipboard entries confirmed on server · {0}',
+  sync_history_usage_0_1: 'Sync history · {0} of {1} used',
   sync_existing_history_local_only_0: 'Older clipboard entries kept on this device only · {0}',
   sync_storage_user: 'Username',
   sync_storage_password: 'Password',
@@ -129,6 +130,10 @@ export const english = {
   capturing_click_to_pause: 'Capturing · Click to pause',
   capture_service_unavailable: 'Capture service unavailable',
   capture_unavailable_click_to_pause: 'Capture unavailable · Click to pause',
+  clipboard_monitoring: 'Clipboard monitoring',
+  monitoring_on: 'Listening',
+  monitoring_off: 'Paused',
+  tray_system_theme: 'System',
   saving: 'Saving…',
   connecting_to_capture_service: 'Connecting to capture service',
   browser_demo_capture_requires_the_desktop_app: 'Browser demo · Capture requires the desktop app',
@@ -269,7 +274,7 @@ export const english = {
   history_tab_capacity_adjusted: 'The limit was adjusted to {0} records per tab.',
   save_capture_rules: 'Save capture rules',
   capture_payload_limits:
-    'Each item can contain up to 4 MiB of text, 8 million image pixels, or 256 file references. Standalone history has a 128 MiB content budget. Sync groups can share up to 25,000 entities and 512 MiB.',
+    'Each item can contain up to 4 MiB of text, 8 million image pixels, or 256 file references. Standalone history has a 128 MiB content budget. Sync groups can share up to 25,000 entities and 2 GiB.',
   '0_to_show_the_window': ' {0} to show the window.',
   keep_running_after_closing: 'Keep running after closing',
   hide_on_blur: 'Hide on blur',
@@ -440,7 +445,7 @@ export const chinese: Record<keyof typeof english, string> = {
   sync_share_history:
     '创建或加入后，配对设备会双向合并现有历史和后续变更。你在线时，配对设备可以请求历史中的文件。',
   sync_create_group: '创建同步组',
-  sync_existing_history_over_limit: '现有历史超出了同步组容量。每组最多 25,000 个对象、512 MiB。',
+  sync_existing_history_over_limit: '现有历史超出了同步组容量。每组最多 25,000 个对象、2 GiB。',
   sync_create_from_now_description:
     '现有剪贴板记录会保留在此设备。同步组会共享分类和之后新增的记录。',
   sync_create_from_now: '创建同步组，仅同步新记录',
@@ -468,6 +473,7 @@ export const chinese: Record<keyof typeof english, string> = {
   sync_storage_uploading_0_1: '正在核对并上传本机记录 · {0}/{1}',
   sync_storage_finalizing: '正在保存服务器索引…',
   sync_storage_confirmed_0: '已在服务器确认的剪贴板记录 · {0} 条',
+  sync_history_usage_0_1: '同步历史 · 已用 {0} / {1}',
   sync_existing_history_local_only_0: '仅保存在本机的旧剪贴板记录 · {0} 条',
   sync_storage_user: '用户名',
   sync_storage_password: '密码',
@@ -557,6 +563,10 @@ export const chinese: Record<keyof typeof english, string> = {
   capturing_click_to_pause: '监听中 · 点击暂停记录新复制',
   capture_service_unavailable: '监听服务不可用',
   capture_unavailable_click_to_pause: '监听不可用 · 点击暂停',
+  clipboard_monitoring: '剪贴板监听',
+  monitoring_on: '监听中',
+  monitoring_off: '已暂停',
+  tray_system_theme: '跟随系统',
   saving: '正在保存…',
   connecting_to_capture_service: '正在连接监听服务',
   browser_demo_capture_requires_the_desktop_app: '浏览器示例 · 监听仅在桌面可用',
@@ -694,7 +704,7 @@ export const chinese: Record<keyof typeof english, string> = {
   history_tab_capacity_adjusted: '已将每个标签页的上限调整为 {0} 条。',
   save_capture_rules: '保存采集规则',
   capture_payload_limits:
-    '每条最多可保存 4 MiB 文本、约 800 万图片像素或 256 条文件引用。未启用同步时，历史内容的总上限为 128 MiB。同步组最多可共享 25,000 个对象和 512 MiB。',
+    '每条最多可保存 4 MiB 文本、约 800 万图片像素或 256 条文件引用。未启用同步时，历史内容的总上限为 128 MiB。同步组最多可共享 25,000 个对象和 2 GiB。',
   '0_to_show_the_window': ' {0} 唤起窗口。',
   keep_running_after_closing: '关闭窗口后常驻',
   hide_on_blur: '失焦自动隐藏',

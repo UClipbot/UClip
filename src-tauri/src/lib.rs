@@ -7,10 +7,15 @@ mod desktop;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod graphics;
 mod hover_preview;
+#[cfg(target_os = "linux")]
+mod native_tray_menu;
 mod paste;
 mod paths;
 mod platform;
 mod quick_paste;
+#[cfg(target_os = "linux")]
+mod status_notifier;
+mod tray_menu;
 use uclip_runtime::sync;
 #[cfg(target_os = "linux")]
 mod window_activation;
@@ -82,6 +87,7 @@ pub fn run() {
             desktop::window_event(window, event);
             auxiliary_window::window_event(window, event);
             quick_paste::window_event(window, event);
+            tray_menu::window_event(window, event);
         })
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
@@ -131,6 +137,7 @@ pub fn run() {
             commands::start_main_window_drag,
             commands::close_main_window,
             commands::open_settings_window,
+            commands::dismiss_tray_menu,
             commands::show_hover_preview,
             commands::hide_hover_preview,
             commands::get_hover_preview,

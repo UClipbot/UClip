@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::{AppError, ClipPayload, ErrorCode, Storage};
+use crate::{AppError, ClipPayload, ErrorCode, Storage, SyncCapacity};
 
 pub(crate) const MAX_ENTITIES: u32 = 25_000;
-const MAX_BYTES: i64 = 512 * 1024 * 1024;
+const MAX_PAYLOAD_BYTES: i64 = 2 * 1024 * 1024 * 1024;
 const MAX_DEVICES: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -358,18 +358,30 @@ pub(crate) fn enrolled(tx: &rusqlite::Connection) -> Result<bool, AppError> {
     )?)
 }
 
+fn sync_payload_bytes(connection: &rusqlite::Connection) -> Result<i64, AppError> {
+    // Apply the same budget to shared clips and to the bodies tracked by replication.
+    // SQLite reads octet_length on a column from the record header without loading the body.
+    Ok(connection.query_row(
+        "SELECT max(
+            (SELECT payload_bytes FROM history_usage WHERE singleton=1) -
+              (SELECT coalesce(sum(octet_length(c.text)+octet_length(c.data)),0)
+                 FROM replica_local_clips l JOIN clips c USING(id)),
+            (SELECT coalesce(sum(payload_bytes),0) FROM replica_heads) +
+              (SELECT coalesce(sum(octet_length(c.text)+octet_length(c.data)),0)
+                 FROM replica_entities p JOIN clips c USING(id) WHERE p.kind=1 AND p.removed=0)
+         )",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
 pub(crate) fn check_capacity(tx: &Transaction<'_>) -> Result<(), AppError> {
-    let over_limit: bool = tx.query_row(
-        "SELECT (SELECT count(*) FROM replica_entities) + (SELECT count(*) FROM replica_heads)>?1 OR
-          (SELECT coalesce(sum(length(CAST(text AS BLOB))+length(data)),0) FROM clips c
-             WHERE NOT EXISTS (SELECT 1 FROM replica_local_clips l WHERE l.id=c.id))>?2 OR
-          (SELECT coalesce(sum(payload_bytes),0) FROM replica_heads) +
-          (SELECT coalesce(sum(length(CAST(c.text AS BLOB))+length(c.data)),0)
-             FROM replica_entities p JOIN clips c USING(id) WHERE p.kind=1 AND p.removed=0)>?2",
-        params![MAX_ENTITIES, MAX_BYTES],
+    let entities: u32 = tx.query_row(
+        "SELECT (SELECT count(*) FROM replica_entities) + (SELECT count(*) FROM replica_heads)",
+        [],
         |r| r.get(0),
     )?;
-    if over_limit {
+    if entities > MAX_ENTITIES || sync_payload_bytes(tx)? > MAX_PAYLOAD_BYTES {
         return Err(AppError::new(ErrorCode::LimitExceeded));
     }
     Ok(())
@@ -1115,6 +1127,13 @@ impl Storage {
             [],
             |row| row.get(0),
         )?)
+    }
+
+    pub fn replica_capacity(&self) -> Result<SyncCapacity, AppError> {
+        Ok(SyncCapacity {
+            used_bytes: sync_payload_bytes(&self.connection)?,
+            limit_bytes: MAX_PAYLOAD_BYTES,
+        })
     }
 
     pub fn replica_entry(

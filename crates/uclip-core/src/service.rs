@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{AppError, ErrorCode, SettingsSnapshot, Storage, UpdateSettings};
+use crate::{AppError, ErrorCode, SettingsSnapshot, Storage, SyncCapacity, UpdateSettings};
 
 const QUEUE_CAPACITY: usize = 64;
 type Operation = Box<dyn FnOnce(Result<&mut Storage, AppError>) + Send>;
@@ -144,8 +144,9 @@ impl CoreService {
         self.operation(|s| s.replica_inventory()).await
     }
 
-    pub async fn replica_local_only_count(&self) -> Result<u32, AppError> {
-        self.operation(|s| s.replica_local_only_count()).await
+    pub async fn replica_usage(&self) -> Result<(SyncCapacity, u32), AppError> {
+        self.operation(|s| Ok((s.replica_capacity()?, s.replica_local_only_count()?)))
+            .await
     }
 
     pub async fn replica_entry(

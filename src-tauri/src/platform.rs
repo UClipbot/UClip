@@ -71,7 +71,7 @@ pub fn report() -> PlatformReport {
             capability(
                 "tray",
                 State::Unverified,
-                "已接入托盘显示/退出菜单；Linux 托盘宿主是否可见需单独验证。无可靠恢复入口时关闭仍退出。",
+                "托盘可打开应用菜单。Linux 根据桌面宿主选择自定义浮窗或原生菜单。",
             ),
             capability(
                 "sync",
