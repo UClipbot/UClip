@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { createReadStream, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { githubOrigin, isReleaseVersion, watchWorkflow } from './release-ci.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const versionFiles = [
@@ -85,37 +85,6 @@ function bumpVersion(version, previous) {
   }
 }
 
-async function watchWorkflow(repo, workflow, branch, head) {
-  let id;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    id = run(
-      'gh',
-      [
-        'api',
-        '--method',
-        'GET',
-        `repos/${repo}/actions/workflows/${workflow}/runs`,
-        '-f',
-        `branch=${branch}`,
-        '-f',
-        'event=push',
-        '-f',
-        `head_sha=${head}`,
-        '-f',
-        'per_page=1',
-        '--jq',
-        '.workflow_runs[0].id // empty',
-      ],
-      true,
-    );
-    if (id) break;
-    await sleep(5000);
-  }
-  if (!id) throw new Error(`No ${workflow} run appeared for ${branch} at ${head}.`);
-  console.log(`Watching ${workflow} (${branch}): https://github.com/${repo}/actions/runs/${id}`);
-  run('gh', ['run', 'watch', id, '--repo', repo, '--interval', '15', '--exit-status']);
-}
-
 async function verifyRelease(repo, tag, version) {
   const release = JSON.parse(
     run(
@@ -173,12 +142,7 @@ async function release(version) {
   if (git('branch', '--show-current') !== 'main' || git('status', '--porcelain')) {
     throw new Error('Start from a clean main branch. Commit the changes to include first.');
   }
-  const origin = git('remote', 'get-url', 'origin');
-  const repo =
-    /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(
-      origin,
-    )?.[1];
-  if (!repo) throw new Error('The origin remote must point to a GitHub repository.');
+  const repo = githubOrigin();
   run('gh', ['repo', 'view', repo, '--json', 'nameWithOwner'], true);
   run('git', ['fetch', 'origin', 'main']);
   const tag = `v${version}`;
@@ -216,13 +180,17 @@ async function release(version) {
     run('npm', ['run', 'check']);
   }
   if (!remote.has(packageRef)) {
-    run('git', ['push', '--atomic', 'origin', 'HEAD:refs/heads/main', `HEAD:${packageRef}`]);
+    run('git', ['push', '--atomic', 'origin', `${head}:refs/heads/main`, `${head}:${packageRef}`]);
   }
   if (!remoteTag) {
     await watchWorkflow(repo, 'check.yml', 'main', head);
     await watchWorkflow(repo, 'package.yml', packageBranch, head);
-    if (!localTag) run('git', ['tag', '-a', tag, '-m', `UClip ${tag}`]);
-    run('git', ['push', 'origin', tagRef]);
+    if (!localTag) run('git', ['tag', '-a', '-m', `UClip ${tag}`, tag, head]);
+    const tagObject = git('rev-parse', tagRef);
+    if (git('rev-parse', `${tagObject}^{commit}`) !== head) {
+      throw new Error(`${tag} no longer points to the verified commit ${head}.`);
+    }
+    run('git', ['push', 'origin', `${tagObject}:${tagRef}`]);
   }
   await watchWorkflow(repo, 'package.yml', tag, head);
   await verifyRelease(repo, tag, version);
@@ -230,7 +198,7 @@ async function release(version) {
 
 const [version, extra] = process.argv.slice(2);
 try {
-  if (!version || extra || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) {
+  if (!isReleaseVersion(version) || extra) {
     throw new Error('Usage: npm run release -- <major.minor.patch>');
   }
   await release(version);
