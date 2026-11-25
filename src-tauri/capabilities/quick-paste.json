@@ -9,6 +9,8 @@
     "core:event:allow-unlisten",
     "allow-bootstrap",
     "allow-resize-auxiliary-corner",
+    "allow-window-resize-available",
+    "allow-start-window-resize",
     "allow-quick-paste-snapshot",
     "allow-select-quick-paste",
     "allow-expand-quick-paste",

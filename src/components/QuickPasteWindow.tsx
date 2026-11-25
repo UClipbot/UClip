@@ -12,6 +12,7 @@ import {
 import { useAppearance } from '../platform/useAppearance';
 import { globalShortcutKeyCode } from '../platform/globalShortcut';
 import { WindowResizeGrip } from './WindowResizeGrip';
+import { WindowResizeHandles } from './WindowResizeHandles';
 import { Icon } from './Icon';
 
 function modifiers(event: KeyboardEvent) {
@@ -137,6 +138,7 @@ export function QuickPasteWindow() {
   return (
     <main className="quick-paste-panel" aria-label={t('quick_paste')}>
       {!feedbackOnly && os && os !== 'macos' && <WindowResizeGrip os={os} onError={setError} />}
+      {!feedbackOnly && os === 'windows' && <WindowResizeHandles os={os} onError={setError} />}
       <header className="quick-paste-header">
         <strong>{t('quick_paste')}</strong>
         {!feedbackOnly && view?.copyOnly && <span>{t('quick_paste_copy_only')}</span>}

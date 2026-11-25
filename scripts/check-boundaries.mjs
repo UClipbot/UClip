@@ -9,7 +9,7 @@ const previewCapability = JSON.parse(read('src-tauri/capabilities/hover-preview.
 const quickCapability = JSON.parse(read('src-tauri/capabilities/quick-paste.json'));
 const trayCapability = JSON.parse(read('src-tauri/capabilities/tray-menu.json'));
 const auxiliaryResize = 'resize_auxiliary_corner';
-const settingsResize = ['settings_resize_available', 'start_settings_resize'];
+const windowResizePermissions = ['allow-window-resize-available', 'allow-start-window-resize'];
 const quickSessionCommands = [
   'quick_paste_snapshot',
   'select_quick_paste',
@@ -48,8 +48,8 @@ assert.deepEqual(
             'sync_pairing_code',
             'open_data_directory',
             'dismiss_tray_menu',
+            'resize_tray_menu',
             auxiliaryResize,
-            ...settingsResize,
             ...quickSessionCommands,
           ].includes(name),
       )
@@ -75,7 +75,7 @@ assert.deepEqual(
     'core:event:allow-unlisten',
     'allow-bootstrap',
     'allow-resize-auxiliary-corner',
-    ...settingsResize.map((name) => `allow-${name.replaceAll('_', '-')}`),
+    ...windowResizePermissions,
     'allow-update-settings',
     'allow-sync-status',
     'allow-update-sync',
@@ -114,6 +114,7 @@ assert.deepEqual(
     'allow-is-window-maximized',
     'allow-toggle-window-maximized',
     'allow-start-window-drag',
+    ...windowResizePermissions,
     'allow-close-window',
   ].toSorted(),
 );
@@ -127,6 +128,7 @@ assert.deepEqual(
     'core:event:allow-unlisten',
     'allow-bootstrap',
     'allow-resize-auxiliary-corner',
+    ...windowResizePermissions,
     ...quickSessionCommands.map((name) => `allow-${name.replaceAll('_', '-')}`),
   ].toSorted(),
 );
@@ -144,6 +146,7 @@ assert.deepEqual(
     'allow-update-capture-policy',
     'allow-open-settings-window',
     'allow-dismiss-tray-menu',
+    'allow-resize-tray-menu',
     'allow-quit-app',
   ].toSorted(),
 );

@@ -2,7 +2,7 @@ import { t, formatHistoryTime } from './i18n';
 import { selectionRange } from './platform/selection';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { WindowResizeGrip } from './components/WindowResizeGrip';
-import { SettingsResizeHandles } from './components/SettingsResizeHandles';
+import { WindowResizeHandles } from './components/WindowResizeHandles';
 import { GlobalShortcutSettings } from './components/GlobalShortcutSettings';
 import { onQuickPasteUnavailable } from './platform/quickPaste';
 import { Icon } from './components/Icon';
@@ -131,6 +131,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const [trashPurge, setTrashPurge] = useState<PurgeTrash | null>(null);
   const [trashPurgeError, setTrashPurgeError] = useState('');
   const [toast, setToast] = useState<Toast | null>(null);
+  const os = appearance.snapshot?.platform.os;
   const settingsWindow =
     appearance.native && new URLSearchParams(window.location.search).get('window') === 'settings';
   const desktop = useDesktop(appearance.native, !!(modal || menu || preview), !settingsWindow);
@@ -1179,6 +1180,9 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       {customChrome && (
         <WindowTitlebar {...titlebar} onClose={() => void windowAction(desktop.close)} />
       )}
+      {os === 'windows' && (
+        <WindowResizeHandles os={os} onError={(message) => setToast({ message })} />
+      )}
       <div
         className="app-shell"
         hidden={settingsWindow}
@@ -2191,13 +2195,10 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
           showCloseButton={!settingsWindow}
           titlebar={customSettingsChrome ? titlebar : undefined}
         >
-          {settingsWindow && appearance.snapshot?.platform.os === 'linux' && (
+          {settingsWindow && os === 'linux' && (
             <>
-              <WindowResizeGrip
-                os={appearance.snapshot.platform.os}
-                onError={(message) => setToast({ message })}
-              />
-              <SettingsResizeHandles onError={(message) => setToast({ message })} />
+              <WindowResizeGrip os={os} onError={(message) => setToast({ message })} />
+              <WindowResizeHandles os={os} onError={(message) => setToast({ message })} />
             </>
           )}
           {settingsWindow && (appearance.error || live.statusError || live.status?.error) && (

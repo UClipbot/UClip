@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { CapturePolicy, ClipboardStatus, Theme } from '../generated/contracts';
 import { t } from '../i18n';
@@ -24,6 +24,32 @@ export function TrayMenuWindow() {
   const [actionError, setActionError] = useState('');
   const [captureError, setCaptureError] = useState('');
   const acting = useRef(false);
+  const menu = useRef<HTMLElement>(null);
+
+  useLayoutEffect(() => {
+    const element = menu.current;
+    if (!appearance.native || !element) return;
+    let previousHeight = 0;
+    const resize = () => {
+      const { marginTop, marginBottom } = getComputedStyle(element);
+      const height = Math.ceil(
+        (element.getBoundingClientRect().height +
+          parseFloat(marginTop) +
+          parseFloat(marginBottom)) *
+          window.devicePixelRatio,
+      );
+      if (height <= 0 || height === previousHeight) return;
+      previousHeight = height;
+      void invoke('resize_tray_menu', { physicalHeight: height }).catch(() => {});
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(element, { box: 'border-box' });
+    window.addEventListener('resize', resize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', resize);
+    };
+  }, [appearance.native]);
 
   const refreshCapture = useCallback(
     () =>
@@ -93,6 +119,7 @@ export function TrayMenuWindow() {
 
   return (
     <main
+      ref={menu}
       className={`tray-menu${windowFrame ? ` tray-menu--${windowFrame.mode}` : ''}`}
       aria-label={t('system_tray')}
       onContextMenu={(event) => event.preventDefault()}

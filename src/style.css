@@ -1566,66 +1566,71 @@ kbd {
   pointer-events: none;
 }
 
-.settings-resize-handles {
-  position: fixed;
+.window-resize-handles {
+  --resize-corner: 12px;
+  --resize-bottom-right: 24px;
+  position: absolute;
   inset: 0;
-  z-index: 11;
+  z-index: 101;
   pointer-events: none;
 }
-.settings-resize-handles > div {
+.window-resize-handles--windows {
+  --resize-corner: 16px;
+  --resize-bottom-right: var(--resize-corner);
+}
+.window-resize-handles > div {
   position: absolute;
   pointer-events: auto;
 }
-.settings-resize-handles [data-resize='North'],
-.settings-resize-handles [data-resize='South'] {
-  left: 12px;
-  right: 12px;
+.window-resize-handles [data-resize='North'],
+.window-resize-handles [data-resize='South'] {
+  left: var(--resize-corner);
+  right: var(--resize-corner);
   height: 6px;
   cursor: ns-resize;
 }
-.settings-resize-handles [data-resize='North'] {
+.window-resize-handles [data-resize='North'] {
   top: 0;
 }
-.settings-resize-handles [data-resize='South'] {
-  right: 24px;
+.window-resize-handles [data-resize='South'] {
+  right: var(--resize-bottom-right);
   bottom: 0;
 }
-.settings-resize-handles [data-resize='East'],
-.settings-resize-handles [data-resize='West'] {
-  top: 12px;
-  bottom: 12px;
+.window-resize-handles [data-resize='East'],
+.window-resize-handles [data-resize='West'] {
+  top: var(--resize-corner);
+  bottom: var(--resize-corner);
   width: 6px;
   cursor: ew-resize;
 }
-.settings-resize-handles [data-resize='East'] {
+.window-resize-handles [data-resize='East'] {
   right: 0;
-  bottom: 24px;
+  bottom: var(--resize-bottom-right);
 }
-.settings-resize-handles [data-resize='West'] {
+.window-resize-handles [data-resize='West'] {
   left: 0;
 }
-.settings-resize-handles [data-resize='NorthEast'],
-.settings-resize-handles [data-resize='NorthWest'],
-.settings-resize-handles [data-resize='SouthWest'] {
-  width: 12px;
-  height: 12px;
+.window-resize-handles
+  :is([data-resize='NorthEast'], [data-resize='NorthWest'], [data-resize='SouthWest']) {
+  width: var(--resize-corner);
+  height: var(--resize-corner);
 }
-.settings-resize-handles [data-resize='NorthWest'] {
+.window-resize-handles [data-resize='NorthWest'] {
   inset: 0 auto auto 0;
   cursor: nwse-resize;
 }
-.settings-resize-handles [data-resize='NorthEast'] {
+.window-resize-handles [data-resize='NorthEast'] {
   inset: 0 0 auto auto;
   cursor: nesw-resize;
 }
-.settings-resize-handles [data-resize='SouthWest'] {
+.window-resize-handles [data-resize='SouthWest'] {
   inset: auto auto 0 0;
   cursor: nesw-resize;
 }
-.settings-resize-handles [data-resize='SouthEast'] {
+.window-resize-handles [data-resize='SouthEast'] {
   inset: auto 0 0 auto;
-  width: 24px;
-  height: 24px;
+  width: var(--resize-bottom-right);
+  height: var(--resize-bottom-right);
   cursor: nwse-resize;
 }
 

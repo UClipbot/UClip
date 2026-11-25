@@ -13,6 +13,7 @@
     "allow-update-capture-policy",
     "allow-open-settings-window",
     "allow-dismiss-tray-menu",
+    "allow-resize-tray-menu",
     "allow-quit-app"
   ]
 }

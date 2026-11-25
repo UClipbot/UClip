@@ -3,10 +3,8 @@ body.tray-menu-window {
 }
 
 .tray-menu {
-  flex: 1;
-  min-height: 0;
+  flex: none;
   padding: 7px;
-  overflow: auto;
   border: 1px solid var(--border-strong);
   background: var(--panel);
   user-select: none;
@@ -141,4 +139,5 @@ body.tray-menu-window {
 .tray-menu > p {
   margin: 4px 9px;
   font-size: 12px;
+  overflow-wrap: anywhere;
 }

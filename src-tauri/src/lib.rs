@@ -84,6 +84,7 @@ pub fn run() {
         .manage(hover_preview::PreviewState::default())
         .manage(quick_paste::QuickPasteState::default())
         .manage(auxiliary_window::SizeState::default())
+        .manage(tray_menu::TrayMenuAnchor::default())
         .on_window_event(|window, event| {
             desktop::window_event(window, event);
             auxiliary_window::window_event(window, event);
@@ -128,8 +129,8 @@ pub fn run() {
             quick_paste::expand_quick_paste,
             quick_paste::cancel_quick_paste,
             auxiliary_window::resize_auxiliary_corner,
-            auxiliary_window::settings_resize_available,
-            auxiliary_window::start_settings_resize,
+            auxiliary_window::window_resize_available,
+            auxiliary_window::start_window_resize,
             commands::update_key_bindings,
             commands::set_autostart,
             commands::set_desktop_interaction,
@@ -141,6 +142,7 @@ pub fn run() {
             commands::close_window,
             commands::open_settings_window,
             commands::dismiss_tray_menu,
+            tray_menu::resize_tray_menu,
             commands::show_hover_preview,
             commands::hide_hover_preview,
             commands::get_hover_preview,

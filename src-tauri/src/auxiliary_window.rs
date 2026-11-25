@@ -578,19 +578,36 @@ pub async fn resize_auxiliary_corner(window: Window) -> Result<(), AppError> {
 }
 
 #[tauri::command]
-pub fn settings_resize_available(window: Window) -> bool {
-    window.label() == "settings" && can_start_resize(&window)
+pub fn window_resize_available(window: Window) -> bool {
+    can_start_window_resize(&window)
 }
 
 #[tauri::command]
-pub async fn start_settings_resize(
+pub async fn start_window_resize(
     window: Window,
     direction: ResizeDirection,
 ) -> Result<(), AppError> {
-    if window.label() != "settings" {
+    if !can_start_window_resize(&window) {
         return Err(AppError::new(ErrorCode::Restricted));
     }
-    resize_auxiliary(window, direction).await
+    #[cfg(target_os = "windows")]
+    {
+        window
+            .start_resize_dragging(direction)
+            .map_err(|_| AppError::new(ErrorCode::Unavailable))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        resize_auxiliary(window, direction).await
+    }
+}
+
+fn can_start_window_resize(window: &Window) -> bool {
+    let label = window.label();
+    let supported = label == "settings"
+        || (cfg!(target_os = "windows")
+            && matches!(label, "main" | "hover-preview" | "quick-paste"));
+    supported && can_start_resize(window)
 }
 
 fn can_start_resize(window: &Window) -> bool {

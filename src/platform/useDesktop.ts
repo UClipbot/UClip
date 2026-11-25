@@ -40,7 +40,16 @@ export function useDesktop(native: boolean, interaction: boolean, manageInteract
     if (!native || !manageInteraction) return;
     // Native blur timers use this only as a veto; the Rust lifetime is independent.
     void invoke('set_desktop_interaction', { active: interaction }).catch(() => {});
-    const guard = () => void invoke('set_desktop_interaction', { active: true }).catch(() => {});
+    const guard = (event: Event) => {
+      // Native resizing can consume pointerup before it reaches the WebView.
+      if (
+        event.type === 'pointerdown' &&
+        event.target instanceof Element &&
+        event.target.closest('.window-resize-handles')
+      )
+        return;
+      void invoke('set_desktop_interaction', { active: true }).catch(() => {});
+    };
     const release = () =>
       void invoke('set_desktop_interaction', { active: interaction }).catch(() => {});
     document.addEventListener('pointerdown', guard, true);

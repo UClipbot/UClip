@@ -13,6 +13,7 @@ import {
   readHoverPreview,
 } from '../platform/hoverPreview';
 import { WindowTitlebar } from './WindowTitlebar';
+import { WindowResizeHandles } from './WindowResizeHandles';
 
 export function HoverPreviewWindow() {
   const appearance = useAppearance();
@@ -95,6 +96,9 @@ export function HoverPreviewWindow() {
         if (request) void hoverPreviewPresence(request.token, false).catch(() => {});
       }}
     >
+      {appearance.snapshot?.platform.os === 'windows' && (
+        <WindowResizeHandles os="windows" onError={setError} />
+      )}
       {windowFrame ? (
         <WindowTitlebar
           title={title}
