@@ -1,10 +1,15 @@
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { createReadStream, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { githubOrigin, isReleaseVersion, watchWorkflow } from './release-ci.mjs';
+import {
+  findPackageTarget,
+  githubOrigin,
+  isReleaseVersion,
+  packageCommitSubject,
+  verifyRelease,
+  watchWorkflow,
+} from './release-ci.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const versionFiles = [
@@ -85,60 +90,29 @@ function bumpVersion(version, previous) {
   }
 }
 
-async function verifyRelease(repo, tag, version) {
-  const release = JSON.parse(
-    run(
-      'gh',
-      ['release', 'view', tag, '--repo', repo, '--json', 'url,isDraft,isPrerelease,assets'],
-      true,
-    ),
-  );
-  const installers = [
-    `UClip_${version}_amd64.deb`,
-    `UClip_${version}_amd64.AppImage`,
-    `UClip_${version}_x64-setup.exe`,
-    `UClip_${version}_aarch64.dmg`,
-    `UClip_${version}_x64.dmg`,
-  ];
-  const checksum = 'SHA256SUMS.txt';
-  const names = new Set(release.assets.map((asset) => asset.name));
-  if (
-    release.isDraft ||
-    !release.isPrerelease ||
-    names.size !== installers.length + 1 ||
-    ![...installers, checksum].every((name) => names.has(name))
-  ) {
-    throw new Error(
-      `Published preview ${tag} is missing expected assets or has the wrong visibility.`,
-    );
-  }
-
-  const directory = mkdtempSync(join(tmpdir(), 'uclip-release-'));
-  try {
-    run('gh', ['release', 'download', tag, '--repo', repo, '--dir', directory]);
-    const rows = readFileSync(join(directory, checksum), 'utf8').trim().split(/\r?\n/);
-    const hashes = new Map(
-      rows.map((line) => {
-        const match = /^([a-f0-9]{64}) [ *](.+)$/.exec(line);
-        if (!match) throw new Error(`Invalid row in ${checksum}.`);
-        return [match[2], match[1]];
-      }),
-    );
-    if (rows.length !== installers.length || hashes.size !== installers.length) {
-      throw new Error(`${checksum} must list each installer once.`);
+function preparePackageCommit(version) {
+  run('git', ['merge-base', '--is-ancestor', 'origin/main', 'HEAD']);
+  const previous = json('package.json').version;
+  const subject = packageCommitSubject(version);
+  verifyVersions(previous);
+  if (previous !== version) {
+    if (version.localeCompare(previous, 'en', { numeric: true }) <= 0) {
+      throw new Error(`${version} must be newer than ${previous}.`);
     }
-    for (const name of installers) {
-      const hash = createHash('sha256');
-      for await (const chunk of createReadStream(join(directory, name))) hash.update(chunk);
-      if (hash.digest('hex') !== hashes.get(name)) throw new Error(`Checksum mismatch: ${name}`);
-    }
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
+    bumpVersion(version, previous);
+  } else if (git('log', '-1', '--format=%s') !== subject) {
+    throw new Error(`No packaging commit for ${version}. Choose a newer version.`);
   }
-  console.log(`Verified ${installers.length} installers: ${release.url}`);
+  run('npm', ['run', 'check']);
+  if (previous !== version) {
+    run('git', ['diff', '--check']);
+    run('git', ['add', '--', ...versionFiles]);
+    run('git', ['commit', '-m', subject]);
+  }
+  return { ref: 'main', head: git('rev-parse', 'HEAD') };
 }
 
-async function release(version) {
+async function release(version, packageOnly) {
   if (git('branch', '--show-current') !== 'main' || git('status', '--porcelain')) {
     throw new Error('Start from a clean main branch. Commit the changes to include first.');
   }
@@ -146,45 +120,61 @@ async function release(version) {
   run('gh', ['repo', 'view', repo, '--json', 'nameWithOwner'], true);
   run('git', ['fetch', 'origin', 'main']);
   const tag = `v${version}`;
-  const packageBranch = `package/${tag}`;
-  const packageRef = `refs/heads/${packageBranch}`;
   const tagRef = `refs/tags/${tag}`;
+  const publishBranch = `publish/${tag}`;
+  const publishRef = `refs/heads/${publishBranch}`;
   const remote = new Map(
-    git('ls-remote', 'origin', packageRef, tagRef, `${tagRef}^{}`)
+    git('ls-remote', 'origin', tagRef, `${tagRef}^{}`, publishRef)
       .split('\n')
       .filter(Boolean)
       .map((line) => line.split('\t').reverse()),
   );
   const remoteTag = remote.get(`${tagRef}^{}`) ?? remote.get(tagRef);
-  let head = git('rev-parse', 'HEAD');
-  const previous = json('package.json').version;
-  verifyVersions(previous);
+  const remoteRequest = remote.get(publishRef);
+  const target = findPackageTarget(version);
   const localTag = git('tag', '--list', tag) ? git('rev-parse', `${tagRef}^{commit}`) : undefined;
-  for (const ref of [remote.get(packageRef), remoteTag, localTag]) {
-    if (ref && (ref !== head || previous !== version)) {
+  for (const ref of [remoteTag, remoteRequest, localTag]) {
+    if (ref && ref !== target?.head) {
       throw new Error(`${tag} is already reserved by a different release commit.`);
     }
   }
-  if (!remote.has(packageRef)) run('git', ['merge-base', '--is-ancestor', 'origin/main', 'HEAD']);
-  if (previous !== version) {
-    if (version.localeCompare(previous, 'en', { numeric: true }) <= 0) {
-      throw new Error(`${version} must be newer than ${previous}.`);
+
+  if (target) {
+    run('git', ['merge-base', '--is-ancestor', target.head, 'origin/main']);
+    const actual = JSON.parse(git('show', `${target.head}:package.json`)).version;
+    if (actual !== version)
+      throw new Error(`Packaging commit has version ${actual}; expected ${version}.`);
+  }
+  const { ref, head } = target ?? preparePackageCommit(version);
+  const requestRelease =
+    !packageOnly && ref === 'main' && !remoteRequest && !remoteTag && !localTag;
+  const updates = [];
+  if (!target) updates.push(`${head}:refs/heads/main`);
+  if (requestRelease) updates.push(`${head}:${publishRef}`);
+  if (updates.length) {
+    const lease = requestRelease ? [`--force-with-lease=${publishRef}:`] : [];
+    run('git', ['push', '--atomic', ...lease, 'origin', ...updates]);
+  }
+
+  if (packageOnly) {
+    await watchWorkflow(repo, ref, head);
+    if (!remoteRequest && !remoteTag) {
+      console.log(`Installers verified. To publish them, run npm run release -- ${version}.`);
     }
-    bumpVersion(version, previous);
-    run('npm', ['run', 'check']);
-    run('git', ['diff', '--check']);
-    run('git', ['add', '--', ...versionFiles]);
-    run('git', ['commit', '-m', `Release UClip ${version}`]);
-    head = git('rev-parse', 'HEAD');
-  } else if (!remote.has(packageRef)) {
-    run('npm', ['run', 'check']);
+    return;
   }
-  if (!remote.has(packageRef)) {
-    run('git', ['push', '--atomic', 'origin', `${head}:refs/heads/main`, `${head}:${packageRef}`]);
+
+  if (requestRelease || remoteRequest) {
+    console.log(`GitHub Actions will publish ${tag} from ${head} after packaging passes.`);
+    await watchWorkflow(repo, publishBranch, head);
+    await verifyRelease(repo, tag, version);
+    return;
   }
+
+  // Older package branches and existing local tags use the tag-triggered release.
   if (!remoteTag) {
-    await watchWorkflow(repo, 'check.yml', 'main', head);
-    await watchWorkflow(repo, 'package.yml', packageBranch, head);
+    if (ref !== 'main') await watchWorkflow(repo, 'main', head, { workflow: 'check.yml' });
+    await watchWorkflow(repo, ref, head);
     if (!localTag) run('git', ['tag', '-a', '-m', `UClip ${tag}`, tag, head]);
     const tagObject = git('rev-parse', tagRef);
     if (git('rev-parse', `${tagObject}^{commit}`) !== head) {
@@ -192,16 +182,16 @@ async function release(version) {
     }
     run('git', ['push', 'origin', `${tagObject}:${tagRef}`]);
   }
-  await watchWorkflow(repo, 'package.yml', tag, head);
+  await watchWorkflow(repo, tag, head);
   await verifyRelease(repo, tag, version);
 }
 
-const [version, extra] = process.argv.slice(2);
+const [version, flag, extra] = process.argv.slice(2);
 try {
-  if (!isReleaseVersion(version) || extra) {
-    throw new Error('Usage: npm run release -- <major.minor.patch>');
+  if (!isReleaseVersion(version) || (flag !== undefined && flag !== '--package-only') || extra) {
+    throw new Error('Usage: npm run release -- <major.minor.patch> [--package-only]');
   }
-  await release(version);
+  await release(version, flag === '--package-only');
 } catch (error) {
   console.error(`Release failed: ${error.message}`);
   process.exitCode = 1;

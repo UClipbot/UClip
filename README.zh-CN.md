@@ -146,3 +146,9 @@ npm run package
 Windows 安装程序会复用系统已有的 WebView2 Evergreen 运行时。缺少时，安装程序会联网下载并安装它。UClip 的 MSVC C 运行库采用静态链接。运行 `bundle/nsis` 下的安装程序即可安装 UClip。
 
 Linux 的 deb 包声明 GTK、WebKitGTK 和托盘库依赖，由包管理器安装。AppImage 随带这些库，仍使用宿主系统的 glibc。请在计划支持的最旧 Linux 发行版上构建分发包，以打包工作流的 Ubuntu 22.04 环境为基线。macOS 应用包使用系统自带的 WKWebView。
+
+## 在 GitHub Actions 中打包
+
+从干净且已同步的 `main` 运行 `npm run release -- <版本号> --package-only`，脚本会更新版本并将版本提交推到 `main`。一次 **UClip CI** 运行完成 Linux、Windows、macOS Apple Silicon 和 Intel 的检查与打包，可在该次运行的产物中下载五个安装包。
+
+用 `npm run release:watch -- <版本号>` 跟踪打包进度，加 `--once` 可只查询当前状态。运行 `npm run release -- <版本号>` 请求发布 GitHub 预览版。发布请求推送后，即使本地命令退出，GitHub Actions 也会在验证通过后为同一提交打标签并发布。这条命令也可以发布已用 `--package-only` 打包的版本。详见[发布流程](AGENTS.md)。

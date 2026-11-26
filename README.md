@@ -146,3 +146,9 @@ Build on the target operating system: Linux produces deb and AppImage packages, 
 The Windows installer reuses the system's WebView2 Evergreen Runtime and downloads it during setup if it is missing. The MSVC C runtime is statically linked into UClip. Run the setup executable from the `bundle/nsis` directory to install UClip.
 
 Linux deb packages declare the GTK, WebKitGTK, and tray dependencies for the package manager. AppImage includes those libraries and still uses the host's glibc. Build Linux distribution packages on the oldest target distribution you support, using the packaging workflow's Ubuntu 22.04 build environment as a baseline. macOS app bundles use the system's WKWebView.
+
+## Build installers in GitHub Actions
+
+From a clean, up-to-date `main`, run `npm run release -- <version> --package-only` to bump the version and push the version commit to `main`. A single **UClip CI** run checks and builds installers for Linux, Windows, and both Apple Silicon and Intel Macs. Find the five installers in that run's artifacts.
+
+Use `npm run release:watch -- <version>` to follow packaging, or add `--once` for its current status. Run `npm run release -- <version>` to request a GitHub preview release. GitHub Actions tags and publishes the verified build even if the local command exits after pushing the request. The same command can publish a version previously built with `--package-only`. See the [release procedure](AGENTS.md).

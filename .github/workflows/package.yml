@@ -1,22 +1,29 @@
-name: Build installers
+name: UClip CI
 
 on:
+  pull_request:
   workflow_dispatch:
   push:
-    branches: ['package/v*']
+    branches: [main, 'publish/v*']
     tags: ['v*']
 
 permissions:
   contents: read
 
 jobs:
-  package:
-    if: github.ref_type == 'branch' || github.event_name == 'workflow_dispatch'
+  check:
+    if: github.event_name != 'push' || github.ref == 'refs/heads/main'
     timeout-minutes: 60
+    env:
+      BUILD_INSTALLERS: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Package UClip ')) }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-latest, macos-latest, macos-15-intel]
+        os:
+          - ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Package UClip '))) && 'ubuntu-22.04' || 'ubuntu-24.04' }}
+          - windows-latest
+          - macos-latest
+          - macos-15-intel
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -28,16 +35,23 @@ jobs:
         with:
           toolchain: 1.93.1
           components: rustfmt, clippy
-      - name: Install Linux packaging dependencies
+      - name: Install Linux native dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev patchelf libfuse2
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev
       - run: npm ci
       - run: npm run check
+      - name: Compile packaged frontend with native runtime
+        if: env.BUILD_INSTALLERS != 'true'
+        run: npm run tauri:build -- --debug
+      - name: Install Linux packaging dependencies
+        if: env.BUILD_INSTALLERS == 'true' && runner.os == 'Linux'
+        run: sudo apt-get install -y patchelf libfuse2
       - run: npm run package
+        if: env.BUILD_INSTALLERS == 'true'
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
       - name: Verify CLI in Linux installers
-        if: runner.os == 'Linux'
+        if: env.BUILD_INSTALLERS == 'true' && runner.os == 'Linux'
         shell: bash
         run: |
           bundle="$PWD/target/release/bundle"
@@ -50,7 +64,7 @@ jobs:
           [[ "$(squashfs-root/usr/bin/uclip --version)" == "$expected" ]]
           UCLIP_LANG=zh-CN squashfs-root/usr/bin/uclip --help | grep -F "$(printf '\347\224\250\346\263\225')"
       - name: Verify CLI in Windows installer
-        if: runner.os == 'Windows'
+        if: env.BUILD_INSTALLERS == 'true' && runner.os == 'Windows'
         shell: pwsh
         run: |
           $installer = @(Get-ChildItem target/release/bundle/nsis -Filter *.exe)
@@ -69,7 +83,7 @@ jobs:
           $heading = [string][char]0x7528 + [char]0x6cd5
           if ((& $binary --help | Out-String) -notmatch $heading) { throw 'Missing localized CLI help' }
       - name: Verify CLI in macOS disk image
-        if: runner.os == 'macOS'
+        if: env.BUILD_INSTALLERS == 'true' && runner.os == 'macOS'
         shell: bash
         run: |
           mount="$(mktemp -d)"
@@ -79,6 +93,7 @@ jobs:
           [[ "$("$cli" --version)" == "uclip $(node -p 'require("./package.json").version')" ]]
           UCLIP_LANG=zh-CN "$cli" --help | grep -F "$(printf '\347\224\250\346\263\225')"
       - name: Upload installers
+        if: env.BUILD_INSTALLERS == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: uclip-${{ matrix.os }}
@@ -91,32 +106,75 @@ jobs:
           retention-days: 14
 
   release:
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    name: Publish preview
+    if: github.event_name == 'push' && (github.ref_type == 'tag' || startsWith(github.ref, 'refs/heads/publish/v'))
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: publish-uclip-${{ github.sha }}
     permissions:
       actions: read
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - name: Download installers from the verified build
+      - name: Validate release request
+        id: request
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          [[ "$GITHUB_REF_NAME" == "v$(node -p 'require("./package.json").version')" ]]
-          run="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/package.yml/runs" \
-            -f branch="package/$GITHUB_REF_NAME" -f event=push -f status=success \
-            -f head_sha="$GITHUB_SHA" -f per_page=1 --jq '.workflow_runs[0].id // empty')"
-          [[ -n "$run" ]]
-          gh run download "$run" --dir artifacts
+          version="$(node -p 'require("./package.json").version')"
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          tag="v$version"
+          [[ "$GITHUB_REF" == "refs/heads/publish/$tag" || "$GITHUB_REF" == "refs/tags/$tag" ]]
+          [[ "$(git log -1 --format=%s)" == "Package UClip $version" ]]
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+          refs="$(git ls-remote origin "refs/tags/$tag" "refs/tags/$tag^{}")"
+          if [[ -n "$refs" ]]; then
+            commit="$(awk -v ref="refs/tags/$tag^{}" '$2 == ref {print $1}' <<< "$refs")"
+            if [[ "$commit" != "$GITHUB_SHA" ]]; then
+              echo "::error::$tag already exists and must be an annotated tag pointing to $GITHUB_SHA."
+              exit 1
+            fi
+            if [[ "$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null)" == false ]]; then
+              echo 'published=true' >> "$GITHUB_OUTPUT"
+            fi
+          fi
+      - name: Wait for the package workflow on main
+        if: steps.request.outputs.published != 'true'
+        id: package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          import { watchWorkflow } from './scripts/release-ci.mjs';
+          const { GITHUB_REPOSITORY, GITHUB_SHA, GITHUB_OUTPUT } = process.env;
+          const { id } = await watchWorkflow(GITHUB_REPOSITORY, 'main', GITHUB_SHA);
+          appendFileSync(GITHUB_OUTPUT, `run=${id}\n`);
+          JS
+      - name: Download installers from the verified build
+        if: steps.request.outputs.published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_RUN: ${{ steps.package.outputs.run }}
+          TAG: ${{ steps.request.outputs.tag }}
+        shell: bash
+        run: |
+          gh run download "$PACKAGE_RUN" --dir artifacts
           shopt -s globstar nullglob
-          deb=(artifacts/uclip-ubuntu-22.04/**/*.deb)
-          appimage=(artifacts/uclip-ubuntu-22.04/**/*.AppImage)
-          windows=(artifacts/uclip-windows-latest/**/*.exe)
-          mac_arm=(artifacts/uclip-macos-latest/**/*.dmg)
-          mac_intel=(artifacts/uclip-macos-15-intel/**/*.dmg)
+          version="${TAG#v}"
+          deb=(artifacts/uclip-ubuntu-22.04/**/"UClip_${version}_amd64.deb")
+          appimage=(artifacts/uclip-ubuntu-22.04/**/"UClip_${version}_amd64.AppImage")
+          windows=(artifacts/uclip-windows-latest/**/"UClip_${version}_x64-setup.exe")
+          mac_arm=(artifacts/uclip-macos-latest/**/"UClip_${version}_aarch64.dmg")
+          mac_intel=(artifacts/uclip-macos-15-intel/**/"UClip_${version}_x64.dmg")
           [[ ${#deb[@]} = 1 && ${#appimage[@]} = 1 && ${#windows[@]} = 1 && ${#mac_arm[@]} = 1 && ${#mac_intel[@]} = 1 ]]
           mkdir release-files
           cp -- "${deb[@]}" "${appimage[@]}" "${windows[@]}" "${mac_arm[@]}" "${mac_intel[@]}" release-files/
@@ -124,12 +182,24 @@ jobs:
           files=(*)
           [[ ${#files[@]} = 5 ]]
           sha256sum -- "${files[@]}" > SHA256SUMS.txt
-      - name: Publish preview installers
+      - name: Tag the verified commit and publish its installers
+        if: steps.request.outputs.published != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.request.outputs.tag }}
         shell: bash
         run: |
-          tag="$GITHUB_REF_NAME"
+          tag="$TAG"
+          refs="$(git ls-remote origin "refs/tags/$tag")"
+          if [[ -z "$refs" ]]; then
+            object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags" \
+              -f tag="$tag" -f message="UClip $tag" -f object="$GITHUB_SHA" -f type=commit \
+              -f 'tagger[name]=github-actions[bot]' \
+              -f 'tagger[email]=41898282+github-actions[bot]@users.noreply.github.com' --jq '.sha')"
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$object" --silent
+          fi
+          commit="$(git ls-remote origin "refs/tags/$tag^{}" | cut -f1)"
+          [[ "$commit" == "$GITHUB_SHA" ]]
           if existing="$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
             [[ "$existing" == true ]]
             gh release upload "$tag" release-files/* --clobber
@@ -139,3 +209,16 @@ jobs:
               --notes "Preview installers for Windows, macOS (Apple Silicon and Intel), and Linux. Every installer includes the uclip CLI. Verify downloads with SHA256SUMS.txt."
           fi
           gh release edit "$tag" --draft=false
+      - name: Verify the published preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.request.outputs.tag }}
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          import { verifyRelease } from './scripts/release-ci.mjs';
+          const { GITHUB_REPOSITORY, GITHUB_STEP_SUMMARY, TAG } = process.env;
+          const url = await verifyRelease(GITHUB_REPOSITORY, TAG, TAG.slice(1));
+          appendFileSync(GITHUB_STEP_SUMMARY, `Published [UClip ${TAG}](${url}). All five installers passed SHA-256 verification.\n`);
+          JS
