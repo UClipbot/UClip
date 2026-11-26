@@ -18,6 +18,7 @@ fn main() {
             "update_capture_policy",
             "copy_clip",
             "change_clip_deletion",
+            "change_clip_deletions",
             "purge_trash",
             "change_clip_pin",
             "deduplicate_pinned",

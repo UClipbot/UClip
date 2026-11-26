@@ -391,6 +391,13 @@ impl CoreService {
         self.operation(move |s| s.change_clip_deletion(request))
             .await
     }
+    pub async fn change_clip_deletions(
+        &self,
+        requests: Vec<crate::ChangeClipDeletion>,
+    ) -> Result<crate::ClipDeletionBatch, AppError> {
+        self.operation(move |s| s.change_clip_deletions(requests))
+            .await
+    }
     pub async fn purge_trash(&self, request: crate::PurgeTrash) -> Result<u32, AppError> {
         self.operation(move |s| s.purge_trash(request)).await
     }

@@ -305,6 +305,13 @@ pub struct ClipDeletionSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipDeletionBatch {
+    pub completed: Vec<ClipDeletionSnapshot>,
+    pub failure: Option<AppError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "scope", rename_all = "snake_case")]
 pub enum PurgeTrash {
     Selected(PurgeSelectedTrash),

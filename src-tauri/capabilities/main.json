@@ -21,6 +21,7 @@
     "allow-update-capture-policy",
     "allow-copy-clip",
     "allow-change-clip-deletion",
+    "allow-change-clip-deletions",
     "allow-purge-trash",
     "allow-change-clip-pin",
     "allow-deduplicate-pinned",

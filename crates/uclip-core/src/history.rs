@@ -1,10 +1,11 @@
 use crate::{
-    AppError, CapturePolicy, ClipKind, ClipVersion, ErrorCode, HistoryItem, HistoryPage,
-    HistoryQuery, Storage, UpdateCapturePolicy,
+    AppError, CapturePolicy, ChangeClipDeletion, ClipDeletionBatch, ClipDeletionSnapshot, ClipKind,
+    ClipVersion, ErrorCode, HistoryItem, HistoryPage, HistoryQuery, Storage, UpdateCapturePolicy,
 };
 use regex::{Regex, RegexBuilder};
 use rusqlite::{
-    params, params_from_iter, types::Value, OptionalExtension, Transaction, TransactionBehavior,
+    params, params_from_iter, types::Value, Connection, OptionalExtension, Transaction,
+    TransactionBehavior,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -825,23 +826,58 @@ impl Storage {
 
     pub fn change_clip_deletion(
         &mut self,
-        request: crate::ChangeClipDeletion,
-    ) -> Result<crate::ClipDeletionSnapshot, AppError> {
-        if uuid::Uuid::parse_str(&request.id).is_err() {
-            return Err(AppError::new(ErrorCode::InvalidInput));
-        }
-        let revision: i64 = request
-            .expected_revision
-            .parse()
-            .map_err(|_| AppError::new(ErrorCode::InvalidInput))?;
-        if revision < 0 || revision == i64::MAX || revision.to_string() != request.expected_revision
-        {
-            return Err(AppError::new(ErrorCode::InvalidInput));
-        }
-        let policy = self.capture_policy()?;
+        request: ChangeClipDeletion,
+    ) -> Result<ClipDeletionSnapshot, AppError> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let policy = read_capture_policy(&tx)?;
+        let changed = Self::set_clip_deletion(&tx, request, policy.max_items)?;
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    pub fn change_clip_deletions(
+        &mut self,
+        requests: Vec<ChangeClipDeletion>,
+    ) -> Result<ClipDeletionBatch, AppError> {
+        if requests.is_empty() {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let mut tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let policy = read_capture_policy(&tx)?;
+        let mut completed = Vec::with_capacity(requests.len());
+        let mut failure = None;
+        for request in requests {
+            // Roll back a failed item while keeping the successful prefix undoable.
+            let item = tx.savepoint()?;
+            match Self::set_clip_deletion(&item, request, policy.max_items) {
+                Ok(changed) => {
+                    item.commit()?;
+                    completed.push(changed);
+                }
+                Err(error) => {
+                    item.finish()?;
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(ClipDeletionBatch { completed, failure })
+    }
+
+    fn set_clip_deletion(
+        tx: &Connection,
+        request: ChangeClipDeletion,
+        max_items: u32,
+    ) -> Result<ClipDeletionSnapshot, AppError> {
+        if uuid::Uuid::parse_str(&request.id).is_err() {
+            return Err(AppError::new(ErrorCode::InvalidInput));
+        }
+        let revision = mutation_revision(&request.expected_revision)?;
         let current: Option<(i64, bool)> = tx
             .query_row(
                 "SELECT revision,deleted FROM clips WHERE id=?1",
@@ -858,24 +894,23 @@ impl Storage {
             "UPDATE clips SET deleted=?1,revision=revision+1,collection=CASE WHEN ?1=0 AND NOT EXISTS(SELECT 1 FROM collections WHERE id=clips.collection AND deleted=0) THEN NULL ELSE collection END WHERE id=?2 AND revision=?3",
             params![request.deleted, request.id, revision],
         )?;
-        if !request.deleted && !crate::replica::enrolled(&tx)? {
+        if !request.deleted && !crate::replica::enrolled(tx)? {
             // Undo must never evict another active record to make room.
             let collection: Option<String> = tx.query_row(
                 "SELECT collection FROM clips WHERE id=?1",
                 [&request.id],
                 |row| row.get(0),
             )?;
-            ensure_tab_capacity(&tx, policy.max_items, collection.as_deref())?;
+            ensure_tab_capacity(tx, max_items, collection.as_deref())?;
         }
         // Retained deleted payloads have a bounded count.
         // Keep the record just changed so a successful delete always starts undoable.
-        prune(&tx, policy.max_items, Some(&request.id))?;
+        prune(tx, max_items, Some(&request.id))?;
         tx.execute(
             "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
             [],
         )?;
-        tx.commit()?;
-        Ok(crate::ClipDeletionSnapshot {
+        Ok(ClipDeletionSnapshot {
             id: request.id,
             revision: (revision + 1).to_string(),
             deleted: request.deleted,
@@ -1060,7 +1095,7 @@ pub(crate) fn mutation_revision(value: &str) -> Result<i64, AppError> {
     }
     Ok(revision)
 }
-fn prune(tx: &rusqlite::Transaction<'_>, max: u32, keep: Option<&str>) -> Result<(), AppError> {
+fn prune(tx: &Connection, max: u32, keep: Option<&str>) -> Result<(), AppError> {
     prune_protecting(tx, max, keep, "[]")
 }
 
@@ -1141,7 +1176,7 @@ pub(crate) fn enforce_local_payload_budget(
 }
 
 fn tab_over_capacity(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &Connection,
     max: u32,
     collection: Option<&str>,
 ) -> Result<bool, AppError> {
@@ -1153,7 +1188,7 @@ fn tab_over_capacity(
 }
 
 pub(crate) fn ensure_tab_capacity(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &Connection,
     max: u32,
     collection: Option<&str>,
 ) -> Result<(), AppError> {
@@ -1171,7 +1206,7 @@ pub(crate) fn trash_count(tx: &rusqlite::Connection) -> Result<u32, AppError> {
     )
 }
 pub(crate) fn prune_protecting(
-    tx: &rusqlite::Transaction<'_>,
+    tx: &Connection,
     max: u32,
     keep: Option<&str>,
     protected: &str,

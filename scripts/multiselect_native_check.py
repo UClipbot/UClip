@@ -2,6 +2,7 @@
 import subprocess
 import tempfile
 import json
+import sqlite3
 import time
 from pathlib import Path
 
@@ -44,9 +45,15 @@ def run(invoke, execute, click, wait, env):
     assert execute('return !document.querySelector(".detail-panel")')
     click('[data-row-main]')
     execute('document.querySelectorAll("[data-row-main]")[1].dispatchEvent(new MouseEvent("click", {bubbles:true,ctrlKey:true}))')
-    subprocess.run(['xdotool', 'key', '--clearmodifiers', 'Delete'], env=env, check=True)
-    wait(lambda: execute('return document.querySelectorAll("[data-row-main]").length === 0'), 'native batch deletion')
-    click('.toast button')
+    database = next(Path(env['XDG_DATA_HOME']).rglob('foundation.sqlite3'))
+    with sqlite3.connect(database, isolation_level=None) as writer:
+        writer.execute('BEGIN IMMEDIATE')
+        key('Delete')
+        wait(lambda: execute('return !document.querySelector("[data-row-main]")'), 'batch is hidden before SQLite can commit', timeout=1.5)
+        assert writer.execute('SELECT count(*) FROM clips WHERE deleted=0').fetchone()[0] == 2
+        writer.rollback()
+    wait(lambda: execute('return !document.querySelector("[data-row-main]") && !!document.querySelector(".toast .text-button")'), 'native batch deletion committed with undo')
+    click('.toast .text-button')
     wait(lambda: execute('return document.querySelectorAll("[data-row-main]").length === 2'), 'native batch undo')
     # Reject an empty selection without modifying the system clipboard.
     click('[data-row-main]')

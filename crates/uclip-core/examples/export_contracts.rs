@@ -19,6 +19,7 @@ fn main() {
         QuickPasteSnapshot::decl(&config),
         ChangeClipDeletion::decl(&config),
         ClipDeletionSnapshot::decl(&config),
+        ClipDeletionBatch::decl(&config),
         PurgeSelectedTrash::decl(&config),
         EmptyTrash::decl(&config),
         PurgeTrash::decl(&config),

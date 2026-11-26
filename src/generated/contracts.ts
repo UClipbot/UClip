@@ -32,6 +32,8 @@ export type ChangeClipDeletion = { id: string, expectedRevision: string, deleted
 
 export type ClipDeletionSnapshot = { id: string, revision: string, deleted: boolean, };
 
+export type ClipDeletionBatch = { completed: Array<ClipDeletionSnapshot>, failure: AppError | null, };
+
 export type PurgeSelectedTrash = { expectedRevision: string, ids: Array<string>, };
 
 export type EmptyTrash = { expectedRevision: string, };

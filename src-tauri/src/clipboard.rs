@@ -31,6 +31,10 @@ enum Request {
         uclip_core::ChangeClipDeletion,
         Reply<uclip_core::ClipDeletionSnapshot>,
     ),
+    Deletions(
+        Vec<uclip_core::ChangeClipDeletion>,
+        Reply<uclip_core::ClipDeletionBatch>,
+    ),
     Stop(Reply<()>),
 }
 enum CopyRequest {
@@ -246,6 +250,9 @@ impl ClipboardService {
                         }
                         Ok(Request::Deletion(request, reply)) => {
                             let _ = reply.send(block(core.change_clip_deletion(request)));
+                        }
+                        Ok(Request::Deletions(requests, reply)) => {
+                            let _ = reply.send(block(core.change_clip_deletions(requests)));
                         }
                         Ok(Request::Stop(reply)) => {
                             let stopped = watch.stop();
@@ -464,6 +471,16 @@ impl ClipboardService {
         self.submit(Request::Deletion(request, tx))?;
         rx.await.map_err(|_| error())?
     }
+
+    pub async fn change_deletions(
+        &self,
+        requests: Vec<uclip_core::ChangeClipDeletion>,
+    ) -> Result<uclip_core::ClipDeletionBatch, AppError> {
+        let (tx, rx) = oneshot::channel();
+        self.submit(Request::Deletions(requests, tx))?;
+        rx.await.map_err(|_| error())?
+    }
+
     pub async fn stop(&self) -> Result<(), AppError> {
         let (tx, rx) = oneshot::channel();
         let sender = self.sender.clone();

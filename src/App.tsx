@@ -322,6 +322,9 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
     const targets = [...selectedClips];
     batchLock.current = true;
     setBatchBusy(true);
+    replaceSelection([]);
+    anchorIndex.current = null;
+    list.current?.focus({ preventScroll: true });
     try {
       if (!appearance.native) {
         const ids = new Set(targets.map((clip) => clip.id));
@@ -346,6 +349,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
             expectedRevision: clip.revision!,
             deleted: !clip.deleted,
           })),
+          new Map(selectionEntries.map(({ clip, index }) => [clip.id, index])),
         );
         const undo =
           outcome.completed.length && view !== 'trash'
@@ -392,8 +396,6 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
           undo,
         });
       }
-      replaceSelection([]);
-      list.current?.focus({ preventScroll: true });
     } catch (error) {
       setToast({ message: safeError(error).message });
     } finally {
@@ -1306,7 +1308,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               pending={searching}
               hidden={!!previewClip}
               total={total}
-              revision={live.revision}
+              revision={live.viewportRevision}
               items={itemsByPosition}
               onRangeChange={appearance.native ? live.requestRange : undefined}
               onVisibleImages={appearance.native ? live.setVisibleImages : undefined}
@@ -1472,6 +1474,11 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                 </div>
               ) : null}
             </HistoryViewport>
+            {live.savingDeletions && (
+              <span className="sr-only" role="status">
+                {t('saving_history_changes')}
+              </span>
+            )}
             {live.loadingWindow && (
               <span className="sr-only" role="status">
                 {t('loading_more_history')}
@@ -1535,7 +1542,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               (!live.status.available && !live.status.policy.enabled)
             }
             aria-pressed={appearance.native ? !!live.status?.policy.enabled : undefined}
-            aria-label={`${searching ? t('searching_2') : t('0_records', { 0: recordCount })} · ${captureLabel}`}
+            aria-label={`${live.savingDeletions ? t('saving_history_changes') : searching ? t('searching_2') : t('0_records', { 0: recordCount })} · ${captureLabel}`}
             title={captureLabel}
             onClick={() => void saveCapture(!live.status?.policy.enabled)}
           >

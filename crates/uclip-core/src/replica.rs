@@ -375,7 +375,7 @@ fn sync_payload_bytes(connection: &rusqlite::Connection) -> Result<i64, AppError
     )?)
 }
 
-pub(crate) fn check_capacity(tx: &Transaction<'_>) -> Result<(), AppError> {
+pub(crate) fn check_capacity(tx: &rusqlite::Connection) -> Result<(), AppError> {
     let entities: u32 = tx.query_row(
         "SELECT (SELECT count(*) FROM replica_entities) + (SELECT count(*) FROM replica_heads)",
         [],

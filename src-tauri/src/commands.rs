@@ -267,6 +267,24 @@ pub async fn change_clip_deletion(
 }
 
 #[tauri::command]
+pub async fn change_clip_deletions(
+    state: State<'_, AppState>,
+    request: Vec<uclip_core::ChangeClipDeletion>,
+) -> Result<uclip_core::ClipDeletionBatch, AppError> {
+    match &state.clipboard {
+        Ok(service) => service.change_deletions(request).await,
+        Err(_) => {
+            state
+                .core
+                .as_ref()
+                .map_err(Clone::clone)?
+                .change_clip_deletions(request)
+                .await
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn purge_trash(
     state: State<'_, AppState>,
     request: uclip_core::PurgeTrash,

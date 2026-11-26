@@ -3,11 +3,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { safeError } from './client';
 import { useClipDetail } from './useClipDetail';
+import { omitHistoryRows } from './selection';
 import type {
   ChangeClipDeletion,
   ChangeClipPin,
   ClipPinSnapshot,
   DeduplicationSnapshot,
+  ClipDeletionBatch,
   ClipDeletionSnapshot,
   ClipboardStatus,
   ClipDetail,
@@ -47,6 +49,11 @@ type HistorySnapshot = {
   total: number;
   partial: boolean;
   rows: ReadonlyMap<number, HistoryPage['items'][number]>;
+};
+type HistoryDeletion = {
+  key: string;
+  revision: string;
+  positions: ReadonlyMap<string, number>;
 };
 
 function firstMissing(snapshot: HistorySnapshot, range: HistoryRange) {
@@ -134,6 +141,7 @@ export function useHistory(
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [visibleImages, setVisibleImages] = useState<readonly string[]>([]);
   const [mutating, setMutating] = useState(false);
+  const [historyDeletion, setHistoryDeletion] = useState<HistoryDeletion>();
   const statusGeneration = useRef(0);
   const mutation = useRef(false);
   const mounted = useRef(true);
@@ -153,11 +161,22 @@ export function useHistory(
   const queryError = failure?.key === loadKey ? failure.message : '';
   const pending = native && !settingsOnly && (mutating || (!fresh && !queryError));
   const page = matching ?? (!queryError && result?.filters === filterScope ? result : undefined);
+  // Keep confirmed removals hidden while the viewport still displays an older snapshot.
+  const removedPositions =
+    historyDeletion &&
+    page?.key === historyDeletion.key &&
+    page.revision === historyDeletion.revision
+      ? historyDeletion.positions
+      : undefined;
   const displayedScope = page?.scope ?? queryScope;
   const requestRange = useCallback(
     ({ start, end }: HistoryRange) => setRange({ scope: displayedScope, start, end }),
     [displayedScope],
   );
+  const snapshotKey = result?.key;
+  useEffect(() => {
+    setHistoryDeletion((deletion) => (deletion?.key === snapshotKey ? deletion : undefined));
+  }, [snapshotKey]);
   const queryFields = useMemo<Omit<HistoryQuery, 'offset' | 'expectedRevision'>>(
     () => ({
       query,
@@ -312,7 +331,7 @@ export function useHistory(
     visit.id,
   ]);
   useEffect(() => {
-    if (!native || !page || trash || !visibleImages.length) return;
+    if (!native || !page || trash || mutating || !visibleImages.length) return;
     let active = true;
     void (async () => {
       for (const id of visibleImages) {
@@ -334,7 +353,7 @@ export function useHistory(
     return () => {
       active = false;
     };
-  }, [native, page, trash, visibleImages]);
+  }, [native, page, trash, mutating, visibleImages]);
   async function updatePolicy(request: UpdateCapturePolicy) {
     if (mutation.current) throw safeError({ code: 'busy' });
     mutation.current = true;
@@ -355,48 +374,6 @@ export function useHistory(
     statusGeneration.current++;
     try {
       return await invoke<string>('create_text', { text, collectionId });
-    } finally {
-      mutation.current = false;
-      if (mounted.current) {
-        setMutating(false);
-        setQueryEpoch((epoch) => epoch + 1);
-      }
-      await refresh();
-    }
-  }
-  async function changeDeletion(request: ChangeClipDeletion) {
-    if (mutation.current) throw safeError({ code: 'busy' });
-    mutation.current = true;
-    statusGeneration.current++;
-    setMutating(true);
-    try {
-      return await invoke<ClipDeletionSnapshot>('change_clip_deletion', { request });
-    } finally {
-      mutation.current = false;
-      if (mounted.current) {
-        setMutating(false);
-        setQueryEpoch((epoch) => epoch + 1);
-      }
-      await refresh();
-    }
-  }
-  async function changeDeletions(requests: ChangeClipDeletion[]) {
-    if (mutation.current) throw safeError({ code: 'busy' });
-    mutation.current = true;
-    statusGeneration.current++;
-    setMutating(true);
-    const completed: ClipDeletionSnapshot[] = [];
-    let failure: unknown;
-    try {
-      for (const request of requests) {
-        try {
-          completed.push(await invoke<ClipDeletionSnapshot>('change_clip_deletion', { request }));
-        } catch (error) {
-          failure = error;
-          break;
-        }
-      }
-      return { completed, failure };
     } finally {
       mutation.current = false;
       if (mounted.current) {
@@ -433,6 +410,32 @@ export function useHistory(
       await refresh();
     }
   }
+  async function changeDeletions(
+    request: ChangeClipDeletion[],
+    positions?: ReadonlyMap<string, number>,
+  ) {
+    if (mutation.current) throw safeError({ code: 'busy' });
+    const deletion = positions && page && { key: page.key, revision: page.revision, positions };
+    if (deletion) setHistoryDeletion(deletion);
+    try {
+      const outcome = await mutateHistory<ClipDeletionBatch>('change_clip_deletions', request);
+      if (deletion && outcome.failure) {
+        const confirmed = new Map<string, number>();
+        for (const { id } of outcome.completed) {
+          const position = deletion.positions.get(id);
+          if (position !== undefined) confirmed.set(id, position);
+        }
+        const confirmedDeletion = confirmed.size
+          ? { ...deletion, positions: confirmed }
+          : undefined;
+        setHistoryDeletion((current) => (current === deletion ? confirmedDeletion : current));
+      }
+      return outcome;
+    } catch (error) {
+      if (deletion) setHistoryDeletion((current) => (current === deletion ? undefined : current));
+      throw error;
+    }
+  }
   const locale = getLocale();
   const mapItem = useCallback(
     (item: HistoryPage['items'][number]): Clip => ({
@@ -464,7 +467,7 @@ export function useHistory(
     }),
     [trash, thumbnails, locale],
   );
-  const itemsByPosition = useMemo(
+  const cachedItems = useMemo(
     () =>
       new Map(
         [...(page?.rows ?? [])]
@@ -472,6 +475,13 @@ export function useHistory(
           .map(([index, item]) => [index, mapItem(item)]),
       ),
     [page, mapItem],
+  );
+  const { rows: itemsByPosition, total } = useMemo(
+    () =>
+      removedPositions
+        ? omitHistoryRows(cachedItems, removedPositions.values(), page?.total ?? 0)
+        : { rows: cachedItems, total: page?.total ?? 0 },
+    [cachedItems, page?.total, removedPositions],
   );
   const items = useMemo(() => [...itemsByPosition.values()], [itemsByPosition]);
   async function readRange(start: number, count: number) {
@@ -505,10 +515,16 @@ export function useHistory(
     statusError,
     detail,
     detailError,
-    total: page?.total ?? 0,
+    total,
     revision: page?.revision,
+    viewportRevision: removedPositions
+      ? `${page?.revision}:${removedPositions.size}`
+      : page?.revision,
     updatePolicy,
-    changeDeletion,
+    changeDeletion: (request: ChangeClipDeletion) =>
+      mutateHistory<ClipDeletionSnapshot>('change_clip_deletion', request),
+    changeDeletions,
+    savingDeletions: !!historyDeletion && mutating,
     createCollection: (name: string) =>
       mutateHistory<CollectionItem>('create_collection', { name }),
     renameCollection: (request: RenameCollection) =>
@@ -530,7 +546,6 @@ export function useHistory(
     createText,
     mutating,
     copy,
-    changeDeletions,
     refresh,
     retryQuery: () => {
       setFailure(undefined);

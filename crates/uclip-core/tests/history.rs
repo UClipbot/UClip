@@ -661,6 +661,105 @@ fn deletion_and_undo_are_durable_for_all_three_payload_types() {
     let s = Storage::open(&path).unwrap();
     assert_eq!(s.history(query("")).unwrap().total, 3);
 }
+
+#[test]
+fn batch_deletion_commits_only_the_prefix_before_a_conflict_and_can_undo_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("batch-delete.sqlite3");
+    let mut storage = Storage::open(&path).unwrap();
+    let images: Vec<_> = (0..4)
+        .map(|value| ClipPayload::Image {
+            width: 512,
+            height: 256,
+            rgba: vec![value; 512 * 256 * 4],
+        })
+        .collect();
+    let ids: Vec<_> = images
+        .iter()
+        .map(|image| storage.capture(image.clone()).unwrap().unwrap())
+        .collect();
+    for id in &ids {
+        storage.mark_used(id).unwrap();
+    }
+    let requests = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| ChangeClipDeletion {
+            id: id.clone(),
+            expected_revision: if index == 2 { "0" } else { "1" }.into(),
+            deleted: true,
+        })
+        .collect();
+    let revision: u64 = storage.history_revision().unwrap().parse().unwrap();
+    let deleted = storage.change_clip_deletions(requests).unwrap();
+    assert_eq!(deleted.failure.unwrap().code, ErrorCode::Conflict);
+    assert_eq!(deleted.completed.len(), 2);
+    assert_eq!(
+        storage.history_revision().unwrap(),
+        (revision + 2).to_string()
+    );
+    for (item, id) in deleted.completed.iter().zip(&ids) {
+        assert_eq!(&item.id, id);
+        assert_eq!(item.revision, "2");
+        assert!(item.deleted);
+    }
+
+    drop(storage);
+    let mut storage = Storage::open(&path).unwrap();
+    assert_eq!(storage.history(query("")).unwrap().total, 2);
+    for id in &ids[2..] {
+        assert!(storage.read_clip(id).is_ok());
+    }
+    let restored = storage
+        .change_clip_deletions(
+            deleted
+                .completed
+                .into_iter()
+                .map(|clip| ChangeClipDeletion {
+                    id: clip.id,
+                    expected_revision: clip.revision,
+                    deleted: false,
+                })
+                .collect(),
+        )
+        .unwrap();
+    assert!(restored.failure.is_none());
+    assert_eq!(restored.completed.len(), 2);
+    for (id, image) in ids.iter().zip(images) {
+        assert_eq!(storage.read_clip(id).unwrap(), image);
+    }
+}
+
+#[test]
+fn batch_restore_keeps_a_record_in_trash_if_its_update_exceeds_capacity() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut storage = Storage::open(&dir.path().join("batch-restore.sqlite3")).unwrap();
+    enabled(&mut storage, 1);
+    let mut requests = Vec::new();
+    for text in ["first", "second"] {
+        let id = storage.create_text(text.into()).unwrap();
+        let deleted = deletion(&mut storage, &id, "0", true).unwrap();
+        requests.push(ChangeClipDeletion {
+            id,
+            expected_revision: deleted.revision,
+            deleted: false,
+        });
+    }
+    let revision: u64 = storage.history_revision().unwrap().parse().unwrap();
+    let last = requests[1].id.clone();
+    let restored = storage.change_clip_deletions(requests).unwrap();
+    assert_eq!(restored.completed.len(), 1);
+    assert_eq!(restored.failure.unwrap().code, ErrorCode::LimitExceeded);
+    assert_eq!(
+        storage.history_revision().unwrap(),
+        (revision + 1).to_string()
+    );
+    let trash = storage.history_window(query(""), true, None).unwrap();
+    assert_eq!(trash.total, 1);
+    assert_eq!(trash.items[0].id, last);
+    assert_eq!(trash.items[0].revision, "1");
+}
+
 #[test]
 fn deletion_conflicts_and_failed_transactions_keep_the_record_and_cursor() {
     let dir = tempfile::tempdir().unwrap();
