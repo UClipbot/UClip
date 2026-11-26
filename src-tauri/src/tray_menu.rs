@@ -55,7 +55,6 @@ pub fn open(app: &AppHandle, cursor: Anchor) {
                     .always_on_top(true)
                     .skip_taskbar(true)
                     .resizable(false)
-                    .visible(false)
                     .build();
             let window = match window {
                 Ok(window) => window,
@@ -71,6 +70,11 @@ pub fn open(app: &AppHandle, cursor: Anchor) {
             }
             window
         };
+        if let Err(error) = crate::window_frame::wait_for_theme(&window).await {
+            let _ = window.destroy();
+            eprintln!("tray_menu_window_failed: {error}");
+            return;
+        }
         #[cfg(target_os = "linux")]
         let focus_window = window.clone();
         if let Err(error) = app.run_on_main_thread(move || {

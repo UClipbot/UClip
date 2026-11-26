@@ -10,6 +10,7 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-bootstrap",
+    "allow-window-theme-ready",
     "allow-clip-detail",
     "allow-get-hover-preview",
     "allow-hover-preview-presence",

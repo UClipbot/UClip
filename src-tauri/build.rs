@@ -51,6 +51,7 @@ fn main() {
             "start_window_drag",
             "close_window",
             "open_settings_window",
+            "window_theme_ready",
             "dismiss_tray_menu",
             "resize_tray_menu",
             "show_hover_preview",

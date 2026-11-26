@@ -58,8 +58,10 @@ impl PasteService {
                                 Err(_) => break,
                             };
                             if show {
-                                if let Some(window) =
-                                    app.as_ref().and_then(|a| a.get_webview_window("main"))
+                                if let Some(window) = app
+                                    .as_ref()
+                                    .and_then(|a| a.get_webview_window("main"))
+                                    .filter(crate::window_frame::theme_is_ready)
                                 {
                                     let _ = window
                                         .show()

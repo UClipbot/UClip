@@ -57,7 +57,9 @@ pub(crate) fn local_window<'a>(
     label: &str,
     page: &str,
 ) -> WebviewWindowBuilder<'a, tauri::Wry, tauri::AppHandle> {
+    app.state::<window_frame::ThemeReadiness>().track(label);
     let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
+        .visible(false)
         .on_navigation(local_navigation);
     #[cfg(target_os = "windows")]
     if let Some(arguments) = app.state::<graphics::Preferences>().webview2_browser_args() {
@@ -81,6 +83,7 @@ pub fn run() {
             });
         }))
         .manage(desktop::DesktopState::default())
+        .manage(window_frame::ThemeReadiness::default())
         .manage(hover_preview::PreviewState::default())
         .manage(quick_paste::QuickPasteState::default())
         .manage(auxiliary_window::SizeState::default())
@@ -142,6 +145,7 @@ pub fn run() {
             commands::start_window_drag,
             commands::close_window,
             commands::open_settings_window,
+            window_frame::window_theme_ready,
             commands::dismiss_tray_menu,
             tray_menu::resize_tray_menu,
             commands::show_hover_preview,
@@ -254,7 +258,13 @@ pub fn run() {
                         .build()
                         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
                     window_frame::prepare(&window, native_titlebar).await?;
+                    window_frame::wait_for_theme(&window).await?;
                     let _ = desktop::restore(&handle).await;
+                    #[cfg(not(target_os = "macos"))]
+                    window
+                        .show()
+                        .and_then(|_| window.set_focus())
+                        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
                     let _ = desktop::install_tray(&handle).await;
                     if let Ok(core) = &handle.state::<AppState>().core {
                         if let Ok(prefs) = core.quick_paste_preferences().await {

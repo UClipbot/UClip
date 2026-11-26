@@ -8,6 +8,7 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "allow-bootstrap",
+    "allow-window-theme-ready",
     "allow-resize-auxiliary-corner",
     "allow-window-resize-available",
     "allow-start-window-resize",

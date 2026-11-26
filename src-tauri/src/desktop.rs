@@ -233,6 +233,9 @@ pub fn register_shortcut(app: &tauri::AppHandle, value: &str) -> Result<(), AppE
 }
 pub fn show(app: &tauri::AppHandle, toggle: bool) -> Result<(), AppError> {
     let window = app.get_webview_window("main").ok_or_else(unavailable)?;
+    if !crate::window_frame::theme_is_ready(&window) {
+        return Ok(());
+    }
     if toggle
         && window.is_visible().unwrap_or(false)
         && window.is_focused().unwrap_or(false)

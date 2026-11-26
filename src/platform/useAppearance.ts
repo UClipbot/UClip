@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { isTauri } from '@tauri-apps/api/core';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
+import { invoke, isTauri } from '@tauri-apps/api/core';
 import { desktop, safeError } from './client';
 import { latestQuery } from './latest';
 import { useSettingsRefresh } from './useSettingsRefresh';
@@ -47,6 +55,8 @@ export function useAppearance() {
   const [systemDark, setSystemDark] = useState(
     () => matchMedia('(prefers-color-scheme: dark)').matches,
   );
+  const dark = theme === 'dark' || (theme === 'system' && systemDark);
+  const themeReady = native && (!!snapshot || !!error);
   const mutationPending = useRef(false);
   const gate = useMemo(latestQuery, []);
   const refresh = useCallback(() => {
@@ -85,9 +95,17 @@ export function useAppearance() {
     media.addEventListener('change', update);
     return () => media.removeEventListener('change', update);
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+  useEffect(() => {
+    if (!themeReady) return;
+    // Match the native background to the applied theme before the first show and after changes.
+    const background = getComputedStyle(document.documentElement)
+      .getPropertyValue('--background')
+      .trim();
+    void invoke('window_theme_ready', { background }).catch(() => {});
+  }, [themeReady, dark]);
   useEffect(() => {
     const update = () => setLocale(resolveLanguage(language, navigator.languages));
     update();
@@ -156,7 +174,7 @@ export function useAppearance() {
     showSearchByDefault: snapshot?.settings.showSearchByDefault ?? previewShowSearch,
     language,
     locale,
-    dark: theme === 'dark' || (theme === 'system' && systemDark),
+    dark,
     snapshot,
     error,
     saving,

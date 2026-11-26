@@ -641,7 +641,6 @@ pub async fn close_window(window: tauri::WebviewWindow) -> Result<(), AppError> 
 
 #[tauri::command]
 pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), AppError> {
-    use tauri::Manager;
     // Serialize this window's construction, including simultaneous menu/shortcut requests.
     static OPENING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _opening = OPENING.lock().await;
@@ -671,28 +670,32 @@ pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), AppError>
             .min_inner_size(f64::from(minimum.width), f64::from(minimum.height))
             .max_inner_size(maximum, maximum)
             .resizable(true);
-    let window =
-        if parent.is_visible().unwrap_or(false) && !parent.is_minimized().unwrap_or(true) {
-            builder
-                .parent(&parent)
-                .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
-        } else {
-            builder
-        }
+    let builder = if parent.is_visible().unwrap_or(false) && !parent.is_minimized().unwrap_or(true)
+    {
+        builder
+            .parent(&parent)
+            .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+    } else {
+        builder
+    };
+    let window = builder
         .build()
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
-    if let Err(error) = crate::window_frame::prepare(&window, false).await {
-        let _ = window.destroy();
-        return Err(error);
+    let result = async {
+        crate::window_frame::prepare(&window, false).await?;
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        crate::auxiliary_window::attach_resize_tracking(&window, kind)?;
+        crate::window_frame::wait_for_theme(&window).await?;
+        window
+            .show()
+            .and_then(|_| window.set_focus())
+            .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))
     }
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
-    crate::auxiliary_window::attach_resize_tracking(&window, kind)?;
-    #[cfg(target_os = "macos")]
-    window
-        .show()
-        .and_then(|_| window.set_focus())
-        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
-    Ok(())
+    .await;
+    if result.is_err() {
+        let _ = window.destroy();
+    }
+    result
 }
 
 #[tauri::command]

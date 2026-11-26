@@ -125,7 +125,6 @@ pub fn prepare_window(app: &tauri::AppHandle) -> Result<WebviewWindow, AppError>
         .inner_size(f64::from(size.width), f64::from(size.height))
         .min_inner_size(f64::from(minimum.width), f64::from(minimum.height))
         .max_inner_size(maximum, maximum)
-        .visible(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .minimizable(false)
@@ -283,6 +282,13 @@ async fn activate(app: &tauri::AppHandle, shortcut: Shortcut) -> Result<(), AppE
         .await
         .map_err(|_| unavailable())?;
     let window = prepare_window(app)?;
+    if let Err(error) = crate::window_frame::wait_for_theme(&window).await {
+        let _ = window.destroy();
+        return Err(error);
+    }
+    if state.binding() != Some(shortcut) {
+        return Ok(());
+    }
     let token = uuid::Uuid::new_v4().to_string();
     let final_key = code(shortcut);
     *state.session.lock().map_err(|_| unavailable())? = Some(Session {

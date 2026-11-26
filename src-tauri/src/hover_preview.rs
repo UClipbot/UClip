@@ -155,7 +155,6 @@ pub async fn show(
                 .skip_taskbar(true)
                 .minimizable(false)
                 .focused(false)
-                .visible(false)
                 .build()
                 .map_err(|_| unavailable())?;
         if let Err(error) = crate::window_frame::prepare(&window, false).await {
@@ -164,6 +163,10 @@ pub async fn show(
         }
         window
     };
+    if let Err(error) = crate::window_frame::wait_for_theme(&window).await {
+        let _ = window.destroy();
+        return Err(error);
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     let handle = app.clone();
     app.run_on_main_thread(move || {

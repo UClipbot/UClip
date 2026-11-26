@@ -1,8 +1,56 @@
 use crate::local_window;
-use tauri::{AppHandle, WebviewWindow, WebviewWindowBuilder, Wry};
-use uclip_core::AppError;
-#[cfg(target_os = "linux")]
-use {tauri::Manager, uclip_core::ErrorCode};
+use std::{collections::HashMap, sync::Mutex, time::Duration};
+use tauri::{webview::Color, AppHandle, Manager, WebviewWindow, WebviewWindowBuilder, Wry};
+use tokio::sync::watch;
+use uclip_core::{AppError, ErrorCode};
+
+#[derive(Default)]
+pub struct ThemeReadiness(Mutex<HashMap<String, watch::Sender<bool>>>);
+
+impl ThemeReadiness {
+    pub fn track(&self, label: &str) {
+        // Start a fresh signal before building, including when a label is reused.
+        if let Ok(mut windows) = self.0.lock() {
+            windows.insert(label.to_owned(), watch::Sender::new(false));
+        }
+    }
+
+    fn signal(window: &WebviewWindow) -> Result<watch::Sender<bool>, AppError> {
+        window
+            .state::<Self>()
+            .0
+            .lock()
+            .ok()
+            .and_then(|windows| windows.get(window.label()).cloned())
+            .ok_or_else(|| AppError::new(ErrorCode::Unavailable))
+    }
+}
+
+pub fn theme_is_ready(window: &WebviewWindow) -> bool {
+    ThemeReadiness::signal(window).is_ok_and(|ready| *ready.borrow())
+}
+
+pub async fn wait_for_theme(window: &WebviewWindow) -> Result<(), AppError> {
+    let mut ready = ThemeReadiness::signal(window)?.subscribe();
+    let applied =
+        tokio::time::timeout(Duration::from_secs(10), ready.wait_for(|ready| *ready)).await;
+    match applied {
+        Ok(Ok(_)) => Ok(()),
+        _ => Err(AppError::new(ErrorCode::Unavailable)),
+    }
+}
+
+#[tauri::command]
+pub fn window_theme_ready(window: WebviewWindow, background: String) -> Result<(), AppError> {
+    let ready = ThemeReadiness::signal(&window)?;
+    if background.is_ascii() {
+        if let Ok(color) = background.parse() {
+            set_theme_background(&window, color, *ready.borrow())?;
+        }
+    }
+    ready.send_replace(true);
+    Ok(())
+}
 
 pub fn builder<'a>(
     app: &'a AppHandle,
@@ -25,7 +73,6 @@ pub fn builder<'a>(
     #[cfg(target_os = "macos")]
     let (builder, mode) = (
         builder
-            .visible(false)
             .hidden_title(!native_titlebar)
             .title_bar_style(crate::desktop::title_bar_style(native_titlebar)),
         "system",
@@ -35,6 +82,42 @@ pub fn builder<'a>(
         "window.__UCLIP_WINDOW_FRAME__ = {{ mode: '{mode}', nativeTitlebar: {native_titlebar}, canUseNativeTitlebar: {} }};",
         crate::desktop::native_titlebar_enabled(true)
     ))
+}
+
+fn set_theme_background(
+    window: &WebviewWindow,
+    color: Color,
+    theme_changed: bool,
+) -> Result<(), AppError> {
+    #[cfg(target_os = "linux")]
+    {
+        if theme_changed {
+            window
+                .with_webview(|webview| {
+                    use gtk::prelude::*;
+                    let view = webview.inner();
+                    // WebKit can retain its previous frame while hidden. Recreate its native
+                    // surface on the next map while keeping the loaded document and state.
+                    if view.is_realized() && !view.is_mapped() {
+                        view.unrealize();
+                    }
+                })
+                .map_err(|_| AppError::new(ErrorCode::Unavailable))?;
+        }
+        if window.app_handle().state::<LinuxFrame>().composited || window.label() == "quick-paste" {
+            return Ok(());
+        }
+    }
+    // Opaque windows can draw their native background before the webview paints.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    window
+        .set_background_color(Some(color))
+        .map_err(|_| AppError::new(ErrorCode::Unavailable))?;
+    #[cfg(target_os = "windows")]
+    let _ = (window, color);
+    #[cfg(not(target_os = "linux"))]
+    let _ = theme_changed;
+    Ok(())
 }
 
 pub async fn prepare(window: &WebviewWindow, native_titlebar: bool) -> Result<(), AppError> {
