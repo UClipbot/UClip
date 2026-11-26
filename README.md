@@ -15,7 +15,7 @@ UClip is a local-first clipboard manager. Save what you copy, then quickly searc
 - **Pins and deduplication**: Keep useful content pinned and remove its unpinned duplicates from the pinned view.
 - **Collections**: Create and rename collections, and move or copy records between them.
 - **Trash**: Restore deleted records, permanently delete selected records, or empty Trash.
-- **Hover previews**: Read text, images and file references in a separate, resizable desktop window with the latest capture/save time. Hovering keeps your focus; click the preview to keep reading, or press Esc to close it.
+- **Hover previews**. Hover over a history item for 1.5 seconds to see its text, image, or file references and latest capture or save time in a separate, resizable window. The preview opens without taking focus. Click it to keep reading, or press Esc to close it.
 - **Custom shortcuts**: Adjust search, copy, preview, delete, and navigation shortcuts.
 - **Desktop integration**: Show the window from the tray or a shortcut, keep it always on top, pin it to prevent hiding on blur, and launch at login.
 - **Interface languages**: Simplified Chinese and English. The default follows your system language; change it in **Settings → Appearance → Language**. Your choice persists across restarts.
@@ -27,6 +27,10 @@ UClip is a local-first clipboard manager. Save what you copy, then quickly searc
 2. Copy content in other apps. New copies appear in your history.
 3. Open UClip from the target app with its main-window shortcut. On Linux X11 the default is Ctrl+Shift+V.
 4. Select one record and press Enter to paste it into the original app. If automatic paste is unavailable, UClip copies the record for manual paste.
+
+Use Ctrl+C on Windows and Linux or ⌘C on macOS to copy selected records. Right-click a record to access actions such as viewing its full content, organizing it, or deleting it.
+
+The desktop app runs as a single instance. Launch it again to bring the existing window forward. The development build from `npm run tauri:dev` can run alongside the installed app. On Linux, single-instance detection requires a session D-Bus.
 
 In **Settings → Shortcuts**, configure the main window and Quick Paste panel under **Global shortcuts**. Edit search, paste and navigation in the **Window shortcuts** group on the same page. In Quick Paste, press **1–5** to select a recent item. Use the main-window shortcut to expand the panel. You can also press the panel shortcut's final key again if it is a letter or another non-digit key. To include pinned items, use **Settings → Desktop → Show pinned items in Quick Paste**.
 
@@ -46,6 +50,8 @@ Synced items are ordered by capture or save time within the pinned and unpinned 
 Nextcloud WebDAV servers that advertise bulk upload receive encrypted history objects in batches. Other WebDAV servers use a limited number of simultaneous uploads. Sync resumes from objects verified on the server and keeps the same archive format across clients.
 
 In **Server storage**, choose **Sync server storage now** to request an immediate sync with the configured server.
+
+In **Settings → Sync**, choose **Open config and database folder** to locate the current desktop library.
 
 ## Common shortcuts
 
@@ -67,7 +73,7 @@ In **Server storage**, choose **Sync server storage now** to request an immediat
 | Linux Wayland | Local UI and history queries verified; capture and automatic paste are not supported yet |
 | Windows / macOS | Platform adapters exist; native acceptance testing is pending |
 
-UClip is in development. Migration from older data is pending.
+UClip is in development. See [Back up or migrate history](#back-up-or-migrate-history) for archive import and Cliporax migration.
 
 ## Command line and headless synchronization
 

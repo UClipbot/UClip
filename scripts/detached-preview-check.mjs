@@ -83,9 +83,9 @@ createRoot(document.getElementById('root')).render(<StrictMode>{new URLSearchPar
   const showAfterDelay = async (anchor) => {
     const count = (await shows()).length;
     await anchor.hover();
-    await page.clock.runFor(2000);
+    await page.clock.runFor(1200);
     assert.equal((await shows()).length, count);
-    await page.clock.runFor(550);
+    await page.clock.runFor(350);
     const calls = await shows();
     assert.equal(calls.length, count + 1);
     assert.equal(calls.at(-1).args.previousToken, undefined);
@@ -114,9 +114,9 @@ createRoot(document.getElementById('root')).render(<StrictMode>{new URLSearchPar
   await page.clock.runFor(180);
   assert.equal((await shows()).length, 4);
   assert.ok((await shows())[3].args.previousToken);
-  await page.clock.runFor(1800);
+  await page.clock.runFor(1020);
   assert.equal((await shows()).length, 4);
-  await page.clock.runFor(570);
+  await page.clock.runFor(350);
   assert.equal((await shows()).length, 5);
   assert.equal((await shows())[4].args.previousToken, undefined);
 

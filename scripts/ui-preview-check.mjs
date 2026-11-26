@@ -1,6 +1,7 @@
 // Optional browser verification tool; Playwright is not an application dependency.
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 const moduleIndex = process.argv.indexOf('--playwright-module');
 const urlIndex = process.argv.indexOf('--url');
 const appUrl = urlIndex < 0 ? 'http://localhost:1420' : process.argv[urlIndex + 1];
@@ -26,6 +27,10 @@ const rowMenu = async (id, name) => {
   await page.locator(`[data-clip-id="${id}"]`).hover();
   await page.locator(`[data-clip-id="${id}"] .row-more`).click();
   await page.getByRole('menuitem', { name, exact: true }).click();
+};
+const copyRow = async (id) => {
+  await page.locator(`[data-clip-id="${id}"] [data-row-main]`).click();
+  await page.keyboard.press('Control+c');
 };
 const selected = () => page.locator('.clip-row.selected').getAttribute('data-clip-id');
 const rows = page.locator('.clip-row');
@@ -87,7 +92,7 @@ try {
   await rows.first().locator('[data-row-main]').click();
   await search.press('Enter');
   assert.match(await clipboard(), /好的工具/);
-  await rowMenu('link-1', '复制');
+  await copyRow('link-1');
   assert.equal(await clipboard(), 'https://linear.app/features');
   await page.evaluate(() => navigator.clipboard.writeText('double-click sentinel'));
   await page.locator('[data-clip-id="link-1"] [data-row-main]').dblclick();
@@ -159,7 +164,7 @@ try {
   await page.locator('.action-menu button[value="image"]').click();
   assert.equal(await rows.count(), 1);
   assert.equal(await rows.first().getAttribute('data-clip-id'), 'image-1');
-  await rowMenu('image-1', '复制');
+  await copyRow('image-1');
   assert.match(await page.locator('.toast').textContent(), /图片复制尚未接入/);
   await page.locator('[aria-label="历史范围"]').click();
   await page.locator('.action-menu button[value="all"]').click();
@@ -194,7 +199,14 @@ try {
   await page.keyboard.press('Tab');
   assert.equal(await page.evaluate(() => document.activeElement.tagName), 'SUMMARY');
   await page.keyboard.press('Enter');
-  assert.equal(await page.locator('.about-section').evaluate((e) => e.open), true);
+  const about = page.locator('.about-section');
+  assert.equal(await about.evaluate((e) => e.open), true);
+  assert.equal(await about.locator('.about-version').innerText(), `版本 ${version}`);
+  assert.doesNotMatch(await about.innerText(), /待验证|Unverified/);
+  await page.keyboard.press('Tab');
+  const releases = about.getByRole('link', { name: '发布记录' });
+  assert.equal(await releases.evaluate((e) => e === document.activeElement), true);
+  assert.equal(await releases.getAttribute('href'), 'https://github.com/UClipbot/UClip/releases');
   await page.keyboard.press('Escape');
   await page.waitForFunction(() => document.activeElement === document.querySelector('.app-more'));
   assert.equal(
@@ -223,7 +235,7 @@ try {
   await page.locator('#clip-content').fill(content);
   await page.locator('.new-form .primary-button').click();
   const createdId = await rows.first().getAttribute('data-clip-id');
-  await rowMenu(createdId, '复制');
+  await copyRow(createdId);
   assert.equal(await clipboard(), content);
   await rowMenu(createdId, '移入回收站');
   await page.getByRole('button', { name: '撤销', exact: true }).click();

@@ -10,7 +10,7 @@ import { safeError } from '../platform/client';
 type Target = { id: string; revision?: string; anchor: HTMLElement };
 type HoveredRow = { id: string; anchor: HTMLElement; enteredAt: number };
 
-const OPEN_DELAY_MS = 2500;
+const OPEN_DELAY_MS = 1500;
 const SWITCH_DELAY_MS = 100;
 
 function sameRow(first: HoveredRow | null, second: HoveredRow) {

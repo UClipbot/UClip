@@ -23,6 +23,7 @@ import {
 import { useClipQuery } from './demo/useClipQuery';
 import { useHistory } from './platform/useHistory';
 import { KeyboardSettings } from './components/KeyboardSettings';
+import { AboutSettings } from './components/AboutSettings';
 import { SyncSettings } from './components/SyncSettings';
 import { WindowTitlebar } from './components/WindowTitlebar';
 import { useWindowFrame, windowFrame } from './platform/windowFrame';
@@ -68,22 +69,6 @@ const viewTitles: Record<View, string> = {
   trash: 'trash',
   ...collectionNames,
 };
-const stateNames = {
-  available: 'available',
-  unverified: 'unverified',
-  restricted: 'restricted',
-  permission_required: 'permission_required',
-  not_implemented: 'not_implemented',
-};
-const capabilityNames: Record<string, string> = {
-  clipboard_capture: 'clipboard_capture',
-  clipboard_write: 'system_clipboard_write',
-  global_shortcut: 'global_shortcut',
-  paste_to_app: 'paste_to_original_app',
-  tray: 'system_tray',
-  sync: 'sync_settings',
-};
-
 export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const appearance = useAppearance();
   const [clips, setClips] = useState<Clip[]>(() => initialClips.map((clip) => ({ ...clip })));
@@ -1639,40 +1624,6 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
         <ActionMenu anchor={menu.anchor} onClose={() => setMenu(null)}>
           {menuClip ? (
             <>
-              {appearance.native && !menuClip.deleted && (
-                <button
-                  role="menuitem"
-                  disabled={
-                    !ready || batchBusy || !live.status?.pasteAvailable || !live.status.pasteTarget
-                  }
-                  onClick={() =>
-                    menuAction(
-                      () =>
-                        void (selectedClips.length > 1
-                          ? copySelected(true)
-                          : copyClip(menuClip, true)),
-                    )
-                  }
-                >
-                  <Icon name="arrow" size={15} />
-                  {t(selectedClips.length > 1 ? 'paste_selected' : 'paste_to_original_app_2')}
-                </button>
-              )}
-              {!menuClip.deleted && (
-                <button
-                  role="menuitem"
-                  data-testid="copy-history-item"
-                  disabled={!ready || batchBusy}
-                  onClick={() =>
-                    menuAction(
-                      () => void (selectedClips.length > 1 ? copySelected() : copyClip(menuClip)),
-                    )
-                  }
-                >
-                  <Icon name="copy" size={15} />
-                  {t('copy')}
-                </button>
-              )}
               {selectedClips.length <= 1 && (
                 <>
                   {(!appearance.native || !menuClip.deleted) && (
@@ -1760,7 +1711,9 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                   </button>
                 </>
               )}
-              <div className="menu-separator" />
+              {(selectedClips.length <= 1 || (appearance.native && !menuClip.deleted)) && (
+                <div className="menu-separator" />
+              )}
               <button
                 role="menuitem"
                 className={menuClip.deleted ? '' : 'destructive'}
@@ -2201,24 +2154,26 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               <WindowResizeHandles os={os} onError={(message) => setToast({ message })} />
             </>
           )}
-          {settingsWindow && (appearance.error || live.statusError || live.status?.error) && (
-            <p className="settings-feedback" role="alert">
-              {t(
-                appearance.error ||
-                  live.statusError ||
-                  (live.status?.error ? safeError(live.status.error).message : ''),
-              )}
-              <button
-                className="text-button"
-                onClick={() => {
-                  void appearance.refresh();
-                  void live.refresh();
-                }}
-              >
-                {t('refresh_status')}
-              </button>
-            </p>
-          )}
+          {settingsWindow &&
+            settingsPage !== 'about' &&
+            (appearance.error || live.statusError || live.status?.error) && (
+              <p className="settings-feedback" role="alert">
+                {t(
+                  appearance.error ||
+                    live.statusError ||
+                    (live.status?.error ? safeError(live.status.error).message : ''),
+                )}
+                <button
+                  className="text-button"
+                  onClick={() => {
+                    void appearance.refresh();
+                    void live.refresh();
+                  }}
+                >
+                  {t('refresh_status')}
+                </button>
+              </p>
+            )}
           <div className={settingsWindow ? 'settings-layout' : undefined}>
             {settingsWindow && (
               <nav className="settings-nav" aria-label={t('settings_categories')}>
@@ -2231,7 +2186,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                     ['desktop', t('desktop'), 'monitor'],
                     ['keyboard', t('shortcuts'), 'keyboard'],
                     ['appearance', t('appearance'), 'sun'],
-                    ['about', t('about_and_status'), 'info'],
+                    ['about', t('about'), 'info'],
                   ] as const
                 ).map(([id, label, icon]) => (
                   <button
@@ -2524,37 +2479,16 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                 </p>
               </section>
               {settingsWindow && settingsPage === 'sync' && <SyncSettings />}
-              <details
-                className="about-section"
-                open={settingsWindow || undefined}
-                hidden={settingsWindow && settingsPage !== 'about'}
-              >
-                <summary>{t('about_and_status')}</summary>
-                <p>UClip · 0.1.0</p>
-                <p>
-                  {appearance.native
-                    ? t('about_sync_availability')
-                    : t('this_is_a_browser_preview_all_records_are_in_memory_samples')}
-                </p>
-                {appearance.snapshot?.platform.capabilities.map((item) => (
-                  <div className="capability-row" key={item.id}>
-                    <span>{t(capabilityNames[item.id] ?? item.id)}</span>
-                    <span>{t(stateNames[item.state])}</span>
-                  </div>
-                ))}
-                {appearance.native && (
-                  <button
-                    className="secondary-button"
-                    disabled={appearance.loading || appearance.saving}
-                    onClick={() => {
-                      void appearance.refresh();
-                      void live.refresh();
-                    }}
-                  >
-                    {t('refresh_service_status')}
-                  </button>
-                )}
-              </details>
+              {settingsWindow ? (
+                settingsPage === 'about' && (
+                  <AboutSettings native version={appearance.snapshot?.appVersion} />
+                )
+              ) : (
+                <details className="about-section">
+                  <summary>{t('about')}</summary>
+                  <AboutSettings native={false} />
+                </details>
+              )}
             </div>
           </div>
         </Modal>

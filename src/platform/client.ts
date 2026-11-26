@@ -85,6 +85,8 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 }
 
 export const desktop = {
+  openProjectPage: (page: 'releases' | 'source' | 'issues') =>
+    call<void>('open_project_page', { page }),
   async bootstrap(): Promise<BootstrapSnapshot> {
     const snapshot = await call<BootstrapSnapshot>('bootstrap');
     if (snapshot.contractVersion !== 3) {

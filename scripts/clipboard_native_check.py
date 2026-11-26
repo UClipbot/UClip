@@ -143,8 +143,7 @@ with open(sys.argv[1], 'wb', buffering=0) as output:
         wait(lambda: self.execute('return document.querySelectorAll(".clip-row").length===1'), 'real history visible')
         row = f'[data-clip-id="{item["id"]}"]'
         self.click(f'{row} [data-row-main]')
-        self.click(f'{row} .row-more')
-        self.click('[data-testid="copy-history-item"]')
+        self.key('key', '--clearmodifiers', 'ctrl+c')
         wait(lambda: self.execute('return document.querySelector(".toast")?.textContent.includes("已复制")'), 'UI copy')
         self.received('text',self.text)
         time.sleep(0.2); assert self.query()['total']==1

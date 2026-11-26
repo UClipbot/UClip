@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{ffi::OsStr, path::Path};
 use uclip_core::{
     AppError, CapabilityState as State, ErrorCode, PlatformCapability, PlatformReport,
 };
@@ -9,15 +9,25 @@ pub fn open_directory(directory: &Path) -> Result<(), AppError> {
     }
 
     #[cfg(target_os = "linux")]
-    let opened = {
-        use gtk::gio::{self, prelude::FileExt};
+    {
+        use gtk::gio::{prelude::FileExt, File};
 
-        let uri = gio::File::for_path(directory).uri();
-        gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>).is_ok()
-    };
+        open_system_target(OsStr::new(File::for_path(directory).uri().as_str()))
+    }
+    #[cfg(not(target_os = "linux"))]
+    open_system_target(directory.as_os_str())
+}
+
+pub fn open_system_target(target: &OsStr) -> Result<(), AppError> {
+    #[cfg(target_os = "linux")]
+    let opened = target.to_str().is_some_and(|uri| {
+        use gtk::gio;
+
+        gio::AppInfo::launch_default_for_uri(uri, None::<&gio::AppLaunchContext>).is_ok()
+    });
     #[cfg(target_os = "macos")]
     let opened = std::process::Command::new("/usr/bin/open")
-        .arg(directory)
+        .arg(target)
         .status()
         .is_ok_and(|status| status.success());
     #[cfg(target_os = "windows")]
@@ -28,12 +38,12 @@ pub fn open_directory(directory: &Path) -> Result<(), AppError> {
             Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
         };
 
-        let wide_directory: Vec<u16> = directory.as_os_str().encode_wide().chain([0]).collect();
+        let wide_target: Vec<u16> = target.encode_wide().chain([0]).collect();
         let result = unsafe {
             ShellExecuteW(
                 None,
                 w!("open"),
-                PCWSTR::from_raw(wide_directory.as_ptr()),
+                PCWSTR::from_raw(wide_target.as_ptr()),
                 PCWSTR::null(),
                 PCWSTR::null(),
                 SW_SHOWNORMAL,

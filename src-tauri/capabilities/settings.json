@@ -16,6 +16,7 @@
     "allow-update-sync",
     "allow-sync-pairing-code",
     "allow-open-data-directory",
+    "allow-open-project-page",
     "allow-clipboard-status",
     "allow-update-capture-policy",
     "allow-desktop-status",

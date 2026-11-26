@@ -100,10 +100,7 @@ try {
   await textRows.nth(1).click({ modifiers: ['Control'] });
   await textRows.nth(0).click({ button: 'right' });
   assert.equal(await page.locator('.clip-row.selected').count(), 2);
-  assert.equal(await page.getByRole('menuitem').count(), 2);
-  await page.getByTestId('copy-history-item').click();
-  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), copied);
-  await textRows.nth(0).click({ button: 'right' });
+  assert.equal(await page.getByRole('menuitem').count(), 1);
   await page.getByTestId('delete-history-item').click();
   await page.waitForFunction(
     (before) => document.querySelectorAll('[data-row-main]').length === before - 2,

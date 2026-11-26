@@ -98,6 +98,7 @@ pub fn run() {
             commands::update_sync,
             commands::sync_pairing_code,
             commands::open_data_directory,
+            commands::open_project_page,
             commands::update_settings,
             commands::set_ui_language,
             commands::history_query,

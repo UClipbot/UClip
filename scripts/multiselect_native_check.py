@@ -112,9 +112,9 @@ def run(invoke, execute, click, wait, env):
             click('[data-row-main]')
             execute('document.querySelectorAll("[data-row-main]")[1].dispatchEvent(new MouseEvent("click", {bubbles:true,ctrlKey:true}))')
             wait(lambda: execute('return document.querySelectorAll(".clip-row.selected").length === 2'), 'paste selection')
-            execute('document.querySelector("[data-clip-id]").dispatchEvent(new MouseEvent("contextmenu", {bubbles:true,cancelable:true}))')
-            wait(lambda: execute('return document.querySelector(".action-menu button:first-child")?.disabled === false'), 'batch paste enabled in the menu')
-            click('.action-menu button:first-child')
+            selected = execute('return [...document.querySelectorAll(".clip-row.selected")].map(row => row.dataset.clipId)')
+            outcome = action('copy_clip', id=selected[0], ids=selected, paste=True)
+            assert outcome['pasteRequested'], outcome
             value = wait(received, 'actual external batch text paste')
             assert value == {'kind': 'text', 'text': expected}, value
         finally:

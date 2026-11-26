@@ -36,6 +36,24 @@ pub async fn sync_pairing_code(state: State<'_, AppState>) -> Result<String, App
 #[tauri::command]
 pub async fn open_data_directory(app: tauri::AppHandle) -> Result<(), AppError> {
     let directory = crate::paths::data_dir(&app)?;
+    with_system_opener(app, move || platform::open_directory(&directory)).await
+}
+
+#[tauri::command]
+pub async fn open_project_page(app: tauri::AppHandle, page: String) -> Result<(), AppError> {
+    let url = match page.as_str() {
+        "releases" => "https://github.com/UClipbot/UClip/releases",
+        "source" => "https://github.com/UClipbot/UClip",
+        "issues" => "https://github.com/UClipbot/UClip/issues",
+        _ => return Err(AppError::new(uclip_core::ErrorCode::InvalidInput)),
+    };
+    with_system_opener(app, move || platform::open_system_target(url.as_ref())).await
+}
+
+async fn with_system_opener(
+    app: tauri::AppHandle,
+    open: impl FnOnce() -> Result<(), AppError> + Send + 'static,
+) -> Result<(), AppError> {
     let unavailable = |_| AppError::new(uclip_core::ErrorCode::Unavailable);
 
     #[cfg(target_os = "windows")]
@@ -43,15 +61,18 @@ pub async fn open_data_directory(app: tauri::AppHandle) -> Result<(), AppError> 
         // Windows shell extensions can require the UI thread's COM apartment.
         let (send, receive) = tokio::sync::oneshot::channel();
         app.run_on_main_thread(move || {
-            let _ = send.send(platform::open_directory(&directory));
+            let _ = send.send(open());
         })
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?;
         receive.await.map_err(unavailable)?
     }
     #[cfg(not(target_os = "windows"))]
-    tauri::async_runtime::spawn_blocking(move || platform::open_directory(&directory))
-        .await
-        .map_err(unavailable)?
+    {
+        let _ = app;
+        tauri::async_runtime::spawn_blocking(open)
+            .await
+            .map_err(unavailable)?
+    }
 }
 
 #[tauri::command]
