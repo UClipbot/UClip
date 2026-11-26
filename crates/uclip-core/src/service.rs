@@ -107,15 +107,22 @@ impl CoreService {
             .map_err(|_| AppError::new(ErrorCode::Unavailable))?
     }
 
-    pub(crate) async fn operation<T: Send + 'static>(
+    fn submit_operation<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&mut Storage) -> Result<T, AppError> + Send + 'static,
-    ) -> Result<T, AppError> {
+    ) -> Result<oneshot::Receiver<Result<T, AppError>>, AppError> {
         let (reply, response) = oneshot::channel();
         self.submit(Request::Operation(Box::new(move |storage| {
             let _ = reply.send(storage.and_then(operation));
         })))?;
-        response
+        Ok(response)
+    }
+
+    pub(crate) async fn operation<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Storage) -> Result<T, AppError> + Send + 'static,
+    ) -> Result<T, AppError> {
+        self.submit_operation(operation)?
             .await
             .map_err(|_| AppError::new(ErrorCode::Unavailable))?
     }
@@ -144,7 +151,7 @@ impl CoreService {
         &self,
         profile: String,
         mode: crate::SyncJoinMode,
-    ) -> Result<(), AppError> {
+    ) -> Result<Option<PathBuf>, AppError> {
         self.operation(move |s| s.join_replica_profile(profile, mode))
             .await
     }
@@ -285,8 +292,16 @@ impl CoreService {
         payload: crate::ClipPayload,
         source_app: Option<String>,
     ) -> Result<Option<String>, AppError> {
-        self.operation(move |s| s.capture_with_source(payload, source_app))
+        self.submit_capture(payload, source_app)?
             .await
+            .map_err(|_| AppError::new(ErrorCode::Unavailable))?
+    }
+    pub fn submit_capture(
+        &self,
+        payload: crate::ClipPayload,
+        source_app: Option<String>,
+    ) -> Result<oneshot::Receiver<Result<Option<String>, AppError>>, AppError> {
+        self.submit_operation(move |s| s.capture_with_source(payload, source_app))
     }
     pub async fn history(
         &self,

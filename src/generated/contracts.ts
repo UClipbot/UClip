@@ -130,7 +130,7 @@ export type SyncRemoteProgress = { "stage": "queued" } | { "stage": "connecting"
 
 export type SyncCapacity = { usedBytes: number, limitBytes: number, };
 
-export type SyncStatus = { paired: boolean, lanEnabled: boolean, role: SyncRole, peers: number, lanLastSync: string | null, lanError: AppError | null, remote: SyncRemoteSettings | null, remoteSyncing: boolean, remoteProgress: SyncRemoteProgress | null, remoteLastSync: string | null, remoteSyncedRecords: number | null, localOnlyRecords: number | null, capacity: SyncCapacity | null, remoteError: AppError | null, };
+export type SyncStatus = { paired: boolean, pairingActive: boolean, historyBackupFolder: string | null, lanEnabled: boolean, role: SyncRole, peers: number, lanLastSync: string | null, lanError: AppError | null, remote: SyncRemoteSettings | null, remoteSyncing: boolean, remoteProgress: SyncRemoteProgress | null, remoteLastSync: string | null, remoteSyncedRecords: number | null, localOnlyRecords: number | null, capacity: SyncCapacity | null, remoteError: AppError | null, };
 
 export type SyncJoinMode = "merge" | "replace" | "new_records";
 

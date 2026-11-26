@@ -1080,13 +1080,14 @@ impl Storage {
         from_now: bool,
     ) -> Result<(), AppError> {
         self.write_replica_profile(profile, from_now, None)
+            .map(|_| ())
     }
 
     pub fn join_replica_profile(
         &mut self,
         profile: String,
         mode: crate::SyncJoinMode,
-    ) -> Result<(), AppError> {
+    ) -> Result<Option<std::path::PathBuf>, AppError> {
         self.write_replica_profile(
             profile,
             matches!(mode, crate::SyncJoinMode::NewRecords),
@@ -1099,25 +1100,37 @@ impl Storage {
         profile: String,
         from_now: bool,
         join: Option<crate::SyncJoinMode>,
-    ) -> Result<(), AppError> {
+    ) -> Result<Option<std::path::PathBuf>, AppError> {
         if profile.len() > 16384 {
             return Err(invalid());
         }
-        let tx = self.connection.transaction()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if join.is_some() && enrolled(&tx)? {
             return Err(AppError::new(ErrorCode::Conflict));
         }
-        if matches!(join, Some(crate::SyncJoinMode::Replace)) {
+        let removed = if matches!(join, Some(crate::SyncJoinMode::Replace)) {
             // Delete before enrolling so local removals never become group tombstones.
-            tx.execute_batch("DELETE FROM clips; DELETE FROM collections;")?;
-        }
+            tx.execute("DELETE FROM clips", [])? + tx.execute("DELETE FROM collections", [])?
+        } else {
+            0
+        };
         enroll(&tx, from_now)?;
         tx.execute(
             "UPDATE replica_state SET profile=?1 WHERE singleton=1",
             [profile],
         )?;
+        let backup = if removed > 0 {
+            // The destructive changes are still private to this transaction.
+            // The backup connection reads the complete pre-join library.
+            let path = std::path::Path::new(tx.path().ok_or_else(storage_error)?);
+            Some(crate::archive::backup(path)?)
+        } else {
+            None
+        };
         tx.commit()?;
-        Ok(())
+        Ok(backup)
     }
 
     pub fn replica_inventory(&mut self) -> Result<Vec<ReplicaStamp>, AppError> {

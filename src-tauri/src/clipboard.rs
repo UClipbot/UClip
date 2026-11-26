@@ -2,12 +2,13 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clipboard_rs::{common::RustImage, RustImageData};
 use std::{
+    collections::VecDeque,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, SyncSender},
         Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use uclip_core::{
     AppError, CapturePolicy, ClipDetail, ClipPayload, ClipboardStatus, CopyResult, CoreService,
@@ -31,10 +32,6 @@ enum Request {
         uclip_core::ChangeClipDeletion,
         Reply<uclip_core::ClipDeletionSnapshot>,
     ),
-    Deletions(
-        Vec<uclip_core::ChangeClipDeletion>,
-        Reply<uclip_core::ClipDeletionBatch>,
-    ),
     Stop(Reply<()>),
 }
 enum CopyRequest {
@@ -57,6 +54,121 @@ struct State {
     available: bool,
     error: Option<AppError>,
 }
+
+impl State {
+    fn capture_finished(&mut self, saved: bool) {
+        if saved
+            || self
+                .error
+                .as_ref()
+                .is_some_and(|error| matches!(error.code, ErrorCode::Clipboard | ErrorCode::Busy))
+        {
+            self.error = None;
+        }
+    }
+
+    fn report_capture(&mut self, result: Result<bool, AppError>) {
+        match result {
+            Ok(saved) => self.capture_finished(saved),
+            Err(error) => self.error = Some(error),
+        }
+    }
+}
+
+const CAPTURE_RETRY: Duration = Duration::from_millis(500);
+const MAX_PENDING_CAPTURES: usize = 32;
+const MAX_PENDING_CAPTURE_BYTES: usize = 64 * 1024 * 1024;
+type CaptureResult = Result<Option<String>, AppError>;
+
+#[derive(Default)]
+struct CaptureQueue {
+    pending: VecDeque<(Captured, usize)>,
+    bytes: usize,
+    in_flight: Option<oneshot::Receiver<CaptureResult>>,
+    retry_at: Option<Instant>,
+}
+
+fn capture_rejected(error: &AppError) -> bool {
+    matches!(
+        error.code,
+        ErrorCode::LimitExceeded | ErrorCode::InvalidInput | ErrorCode::InvalidPattern
+    )
+}
+
+impl CaptureQueue {
+    fn push(&mut self, snapshot: Captured) -> Result<(), AppError> {
+        let bytes = match &snapshot.payload {
+            ClipPayload::Text(text) => text.len(),
+            ClipPayload::Image { rgba, .. } => rgba.len(),
+            ClipPayload::Files(paths) => paths.iter().map(String::len).sum(),
+        };
+        if self.pending.len() >= MAX_PENDING_CAPTURES
+            || self.bytes + bytes > MAX_PENDING_CAPTURE_BYTES
+        {
+            return Err(AppError::new(ErrorCode::Busy));
+        }
+        self.bytes += bytes;
+        self.pending.push_back((snapshot, bytes));
+        Ok(())
+    }
+
+    fn advance(&mut self, core: &CoreService) -> Option<CaptureResult> {
+        let snapshot = &self.pending.front()?.0;
+        let outcome = if let Some(reply) = &mut self.in_flight {
+            match reply.try_recv() {
+                Ok(outcome) => outcome,
+                Err(oneshot::error::TryRecvError::Empty) => return None,
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    Err(AppError::new(ErrorCode::Unavailable))
+                }
+            }
+        } else {
+            if self.retry_at.is_some_and(|retry| Instant::now() < retry) {
+                return None;
+            }
+            match core.submit_capture(snapshot.payload.clone(), snapshot.source_app.clone()) {
+                Ok(reply) => {
+                    self.in_flight = Some(reply);
+                    return None;
+                }
+                Err(error) => Err(error),
+            }
+        };
+        self.in_flight = None;
+        if outcome
+            .as_ref()
+            .err()
+            .is_some_and(|error| !capture_rejected(error))
+        {
+            self.retry_at = Some(Instant::now() + CAPTURE_RETRY);
+        } else if let Some((_, bytes)) = self.pending.pop_front() {
+            self.bytes -= bytes;
+            self.retry_at = None;
+        }
+        Some(outcome)
+    }
+
+    fn flush(self, core: &CoreService) -> Result<(), AppError> {
+        let mut pending = self.pending.into_iter();
+        if let Some(reply) = self.in_flight {
+            let outcome = block(reply).map_err(|_| AppError::new(ErrorCode::Unavailable))?;
+            if outcome.is_ok() || outcome.as_ref().err().is_some_and(capture_rejected) {
+                pending.next();
+            }
+        }
+        for (snapshot, _) in pending {
+            if let Err(error) =
+                block(core.capture_with_source(snapshot.payload, snapshot.source_app))
+            {
+                if !capture_rejected(&error) {
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct ClipboardService {
     sender: SyncSender<Request>,
@@ -115,10 +227,8 @@ impl ClipboardService {
                 let marker = uuid::Uuid::new_v4().to_string().into_bytes();
                 let mut enabled = block(core.capture_policy()).is_ok_and(|p| p.enabled);
                 let mut seen = watch.generation().unwrap_or(0);
-                let mut failed_attempts = 0u32;
-                let mut attempted_generation = seen;
-                let mut rejected_generation = None;
-                let mut pending_payload: Option<(u64, Captured)> = None;
+                let mut read_retry = None;
+                let mut captures = CaptureQueue::default();
                 if let Ok(mut s) = state.lock() {
                     s.available = true;
                 }
@@ -134,10 +244,9 @@ impl ClipboardService {
                                 enabled = policy.enabled;
                                 if !was_enabled || !enabled {
                                     seen = watch.generation().unwrap_or(seen);
-                                    pending_payload = None;
+                                    captures = CaptureQueue::default();
                                 }
-                                failed_attempts = 0;
-                                rejected_generation = None;
+                                read_retry = None;
                                 if let Ok(mut s) = state.lock() {
                                     s.error = None;
                                 }
@@ -251,25 +360,32 @@ impl ClipboardService {
                         Ok(Request::Deletion(request, reply)) => {
                             let _ = reply.send(block(core.change_clip_deletion(request)));
                         }
-                        Ok(Request::Deletions(requests, reply)) => {
-                            let _ = reply.send(block(core.change_clip_deletions(requests)));
-                        }
                         Ok(Request::Stop(reply)) => {
                             let stopped = watch.stop();
                             paste.stop();
-                            let _ = reply.send(stopped);
+                            let flushed = captures.flush(&core);
+                            let _ = reply.send(stopped.and(flushed));
                             break;
                         }
                         Err(mpsc::RecvTimeoutError::Disconnected) => {
                             let _ = watch.stop();
                             paste.stop();
+                            let _ = captures.flush(&core);
                             break;
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
+                    if let Some(outcome) = captures.advance(&core) {
+                        if let Ok(mut s) = state.lock() {
+                            s.report_capture(outcome.map(|id| id.is_some()));
+                        }
+                    }
                     let observed = match watch.generation() {
                         Ok(g) => {
                             if let Ok(mut s) = state.lock() {
+                                if !s.available {
+                                    s.error = None;
+                                }
                                 s.available = true;
                             }
                             g
@@ -286,73 +402,42 @@ impl ClipboardService {
                         seen = observed;
                         continue;
                     }
-                    if pending_payload.is_none()
-                        && (observed == seen || rejected_generation == Some(observed))
+                    if observed == seen
+                        || read_retry.is_some_and(|(generation, at)| generation == observed && Instant::now() < at)
                     {
                         continue;
                     }
-                    let attempt_generation = pending_payload
-                        .as_ref()
-                        .map_or(observed, |(generation, _)| *generation);
-                    if attempt_generation != attempted_generation {
-                        rejected_generation = None;
-                        failed_attempts = 0;
-                        attempted_generation = attempt_generation;
-                    }
-                    // Failure does not advance the cursor; retry is bounded per wake, with backoff.
-                    if failed_attempts > 0 && !failed_attempts.is_multiple_of(25) {
-                        failed_attempts += 1;
-                        continue;
-                    }
-                    // Retain one bounded complete snapshot on write failure. A later OS
-                    // clipboard change cannot replace an already-read, uncommitted payload.
-                    let captured = (|| {
-                        if pending_payload.is_none() {
-                            if let Some(payload) =
-                                stable_read(&context, &marker, &mut watch, observed)?
-                            {
-                                pending_payload = Some((observed, payload));
-                            } else {
+                    let captured = stable_read(&context, &marker, &mut watch, observed)
+                        .and_then(|snapshot| {
+                            let Some(snapshot) = snapshot else { return Ok(false) };
+                            if matches!(&snapshot.payload, ClipPayload::Text(text)
+                                if crate::sync::is_pairing_code(text)
+                                    || sync.as_ref().is_some_and(|service| service.is_local_pairing_pin(text))) {
                                 return Ok(false);
                             }
-                        }
-                        let snapshot = &pending_payload.as_ref().expect("snapshot ready").1;
-                        if matches!(&snapshot.payload, ClipPayload::Text(text)
-                            if crate::sync::is_pairing_code(text)
-                                || sync.as_ref().is_some_and(|service| service.is_local_pairing_pin(text))) {
-                            return Ok(false);
-                        }
-                        block(core.capture_with_source(
-                            snapshot.payload.clone(),
-                            snapshot.source_app.clone(),
-                        ))
-                        .map(|id| id.is_some())
-                    })();
+                            captures.push(snapshot)?;
+                            Ok(true)
+                        });
                     match captured {
-                        Ok(saved) => {
-                            seen = attempt_generation;
-                            pending_payload = None;
-                            failed_attempts = 0;
-                            // A skipped/empty clipboard must not erase a rejection before the UI polls it.
-                            if saved {
+                        Ok(queued) => {
+                            seen = observed;
+                            read_retry = None;
+                            // An empty clipboard confirms access has recovered. Keep content
+                            // rejections visible if the clipboard changes without a new save.
+                            if !queued {
                                 if let Ok(mut s) = state.lock() {
-                                    s.error = None;
+                                    s.capture_finished(false);
                                 }
                             }
                         }
                         Err(e) => {
-                            if matches!(
-                                e.code,
-                                ErrorCode::LimitExceeded
-                                    | ErrorCode::InvalidInput
-                                    | ErrorCode::InvalidPattern
-                            ) {
-                                rejected_generation = Some(attempt_generation);
-                                pending_payload = None;
+                            if capture_rejected(&e) {
+                                seen = observed;
+                            } else {
+                                read_retry = Some((observed, Instant::now() + CAPTURE_RETRY));
                             }
-                            failed_attempts = failed_attempts.saturating_add(1);
                             if let Ok(mut s) = state.lock() {
-                                s.error = Some(e);
+                                s.report_capture(Err(e));
                             }
                         }
                     }
@@ -469,15 +554,6 @@ impl ClipboardService {
     ) -> Result<uclip_core::ClipDeletionSnapshot, AppError> {
         let (tx, rx) = oneshot::channel();
         self.submit(Request::Deletion(request, tx))?;
-        rx.await.map_err(|_| error())?
-    }
-
-    pub async fn change_deletions(
-        &self,
-        requests: Vec<uclip_core::ChangeClipDeletion>,
-    ) -> Result<uclip_core::ClipDeletionBatch, AppError> {
-        let (tx, rx) = oneshot::channel();
-        self.submit(Request::Deletions(requests, tx))?;
         rx.await.map_err(|_| error())?
     }
 
@@ -605,6 +681,28 @@ fn stable_read(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_clipboard_clears_transient_errors_and_keeps_content_rejections() {
+        let mut state = State {
+            available: true,
+            error: Some(error()),
+        };
+        state.capture_finished(false);
+        assert!(state.error.is_none());
+
+        state.error = Some(AppError::new(ErrorCode::Busy));
+        state.capture_finished(false);
+        assert!(state.error.is_none());
+
+        state.error = Some(AppError::new(ErrorCode::LimitExceeded));
+        state.capture_finished(false);
+        assert_eq!(state.error.as_ref().unwrap().code, ErrorCode::LimitExceeded);
+
+        state.capture_finished(true);
+        assert!(state.error.is_none());
+    }
+
     #[test]
     fn local_uris_decode_once_and_remote_or_ambiguous_uris_are_refused() {
         let dir = std::env::temp_dir();

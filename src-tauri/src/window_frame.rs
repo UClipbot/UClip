@@ -192,7 +192,7 @@ fn update_shape(window: &gtk::Window) {
     // X11 without compositing uses a window shape for the same radius as the CSS.
     let width = native.width();
     let height = native.height();
-    let radius = 13.min(width / 2).min(height / 2);
+    let radius = 10.min(width / 2).min(height / 2);
     let mut rows = Vec::with_capacity((2 * radius + 1) as usize);
     rows.push(cairo::RectangleInt::new(
         0,

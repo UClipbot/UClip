@@ -127,4 +127,27 @@ def run(invoke, execute, click, wait, env):
         finally:
             receiver.terminate()
             receiver.wait(timeout=5)
+
+    page = action('history_query', request={'query':'', 'regex':False, 'kind':None, 'collectionId':None, 'offset':0, 'expectedRevision':None})
+    requested = [{'id': item['id'], 'expectedRevision': item['revision'], 'deleted': True} for item in page['items']]
+    with sqlite3.connect(database, isolation_level=None) as writer:
+        writer.execute('BEGIN IMMEDIATE')
+        execute("""window.__TAURI_INTERNALS__.invoke('change_clip_deletions', {request: arguments[0]})
+          .then(result => window.batchCaptureCheck = result, error => window.batchCaptureCheck = {error});""", [requested])
+        time.sleep(.15)
+        copied_texts = ['first copy during batch', 'second copy during batch']
+        for text in copied_texts:
+            subprocess.run(['xclip', '-selection', 'clipboard'], input=text, text=True, env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            wait(lambda: clipboard_text() == text, 'native clipboard fixture written', timeout=.5)
+            time.sleep(.15)
+        assert execute('return !window.batchCaptureCheck'), 'the batch must still be waiting for the writer'
+        writer.rollback()
+    result = wait(lambda: execute('return window.batchCaptureCheck'), 'batch finishes')
+    assert not result['failure'] and len(result['completed']) == len(requested), result
+    def recorded_copies():
+        with sqlite3.connect(database) as db:
+            return db.execute('SELECT count(*) FROM clips WHERE deleted=0 AND text IN (?, ?)', copied_texts).fetchone()[0] == 2
+    wait(recorded_copies, 'both clipboard changes are recorded after the batch')
     print('PASS: native Ctrl+C merged text clipboard without history insertion, blank deselection, Delete/undo, rejected batch leaves clipboard intact, real second-delete revision conflict and partial undo; actual merged text received by external GTK app', flush=True)
+    print('PASS: two native clipboard changes are retained while a batch is waiting for SQLite', flush=True)

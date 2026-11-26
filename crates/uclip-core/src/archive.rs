@@ -117,7 +117,7 @@ fn snapshot(path: &Path, copy: &Path) -> Result<(), AppError> {
 
 /// The caller holds the SQLite write reservation while a second connection backs up
 /// the last committed state, including any pages already committed to the WAL.
-fn backup(path: &Path) -> Result<PathBuf, AppError> {
+pub(crate) fn backup(path: &Path) -> Result<PathBuf, AppError> {
     let folder = path.with_file_name(format!("clip-history-backup-{}", Uuid::new_v4()));
     let io_error = |_| AppError::new(ErrorCode::Storage);
     #[cfg(unix)]

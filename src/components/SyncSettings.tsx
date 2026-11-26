@@ -93,6 +93,10 @@ export function SyncSettings() {
     return () => clearTimeout(timer);
   }, [visibleCode]);
 
+  useEffect(() => {
+    if (!status?.pairingActive) setVisibleCode('');
+  }, [status?.pairingActive]);
+
   async function perform(operation: () => Promise<void>, request?: UpdateSync) {
     if (saving.current) return;
     saving.current = true;
@@ -209,6 +213,11 @@ export function SyncSettings() {
         </p>
       )}
       {!status && !loadingError && <p role="status">{t('sync_loading')}</p>}
+      {status?.historyBackupFolder && (
+        <p className="settings-feedback" role="status">
+          {t('sync_history_backup_saved_0', { 0: status.historyBackupFolder })}
+        </p>
+      )}
       {capacity && (
         <div className="sync-capacity">
           <span id="sync-capacity-label" className="settings-feedback">
@@ -361,14 +370,18 @@ export function SyncSettings() {
             className="secondary-button"
             disabled={busy || !status.lanEnabled}
             onClick={() => {
-              if (visibleCode) void update({ action: 'stop_pairing' });
+              if (status.pairingActive) void update({ action: 'stop_pairing' });
               else
-                void perform(async () => setVisibleCode(await invoke<string>('sync_pairing_code')));
+                void perform(async () => {
+                  const nextCode = await invoke<string>('sync_pairing_code');
+                  setStatus((current) => (current ? { ...current, pairingActive: true } : current));
+                  setVisibleCode(nextCode);
+                });
             }}
           >
-            {t(visibleCode ? 'sync_hide_code' : 'sync_show_code')}
+            {t(status.pairingActive ? 'sync_hide_code' : 'sync_show_code')}
           </button>
-          {visibleCode && (
+          {status.pairingActive && visibleCode && (
             <div className="new-form sync-form">
               <label htmlFor="sync-show-code">{t('sync_pairing_code')}</label>
               <input

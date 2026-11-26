@@ -625,6 +625,10 @@ pub struct SyncCapacity {
 #[serde(rename_all = "camelCase")]
 pub struct SyncStatus {
     pub paired: bool,
+    #[serde(default)]
+    pub pairing_active: bool,
+    #[serde(default)]
+    pub history_backup_folder: Option<String>,
     pub lan_enabled: bool,
     pub role: SyncRole,
     pub peers: u32,

@@ -23,7 +23,15 @@ fn replacing_history_and_saving_the_join_profile_commit_together() {
         })
         .unwrap();
     let clip = local
-        .create_text_in_collection("Local record".into(), Some(collection.id))
+        .create_text_in_collection("Local record".into(), Some(collection.id.clone()))
+        .unwrap();
+    let deleted = local.create_text("Deleted local record".into()).unwrap();
+    local
+        .change_clip_deletion(ChangeClipDeletion {
+            id: deleted.clone(),
+            expected_revision: "0".into(),
+            deleted: true,
+        })
         .unwrap();
     let sql = rusqlite::Connection::open(&path).unwrap();
     sql.execute_batch("CREATE TRIGGER reject_pairing BEFORE UPDATE OF profile ON replica_state BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
@@ -32,12 +40,35 @@ fn replacing_history_and_saving_the_join_profile_commit_together() {
     assert!(local.replica_profile().unwrap().is_none());
     assert_eq!(local.collections().unwrap().items.len(), 1);
     assert_eq!(history_items(&local, false)[0].id, clip);
+    assert_eq!(history_items(&local, true)[0].id, deleted);
+    assert_eq!(
+        directory
+            .path()
+            .read_dir()
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .count(),
+        0
+    );
     sql.execute_batch("DROP TRIGGER reject_pairing;").unwrap();
-    local.join_replica_profile("joined".into(), mode).unwrap();
+    let backup = local
+        .join_replica_profile("joined".into(), mode)
+        .unwrap()
+        .unwrap();
     assert_eq!(local.replica_profile().unwrap().as_deref(), Some("joined"));
     assert!(local.collections().unwrap().items.is_empty());
     assert!(history_items(&local, false).is_empty());
     assert!(local.replica_inventory().unwrap().is_empty());
+    let backup = Storage::open(&backup).unwrap();
+    assert!(backup.replica_profile().unwrap().is_none());
+    assert!(backup.replica_device().is_ok());
+    assert_eq!(backup.collections().unwrap().items[0].id, collection.id);
+    assert_eq!(
+        backup.read_clip(&clip).unwrap(),
+        ClipPayload::Text("Local record".into())
+    );
+    assert_eq!(history_items(&backup, true)[0].id, deleted);
     assert_eq!(
         local
             .join_replica_profile("other".into(), mode)

@@ -30,8 +30,9 @@ export const english = {
   sync_merge_local: 'Merge with local history',
   sync_replace_local: 'Replace local history',
   sync_replace_local_description:
-    'This permanently deletes this device’s clipboard history, trash, and collections, then downloads the sync group’s history.',
+    'UClip will back up this device’s history, trash, and collections before replacing them with the sync group’s history.',
   sync_confirm_replace_local: 'Delete local history and join',
+  sync_history_backup_saved_0: 'The original history was backed up to {0} in the data directory.',
   sync_lan_enabled: 'Sync and receive files on the local network',
   sync_lan_off: 'Local network sync is off.',
   sync_lan_discovering: 'Looking for paired devices…',
@@ -477,8 +478,9 @@ export const chinese: Record<keyof typeof english, string> = {
   sync_merge_local: '合并本地历史',
   sync_replace_local: '替换本地历史',
   sync_replace_local_description:
-    '此操作会永久删除此设备的剪贴板历史、回收站和分类，然后下载同步组的历史。',
+    'UClip 会先备份此设备的剪贴板历史、回收站和分类，再使用同步组的历史替换本地记录。',
   sync_confirm_replace_local: '删除本地历史并加入',
+  sync_history_backup_saved_0: '原有历史已备份到数据目录中的 {0} 文件夹。',
   sync_lan_enabled: '在局域网同步和接收文件',
   sync_lan_off: '局域网同步已关闭。',
   sync_lan_discovering: '正在查找已配对设备…',

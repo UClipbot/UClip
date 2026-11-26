@@ -353,8 +353,8 @@ struct Runtime {
     running: bool,
     lan: Option<Result<Arc<Lan>, AppError>>,
     remote: Option<Result<RemoteWorker, AppError>>,
-    pairing_offer: Option<pairing::Offer>,
     pending_join: Option<PendingJoin>,
+    history_backup_folder: Option<String>,
 }
 
 struct PendingJoin {
@@ -371,8 +371,8 @@ impl Runtime {
             running,
             lan: None,
             remote: None,
-            pairing_offer: None,
             pending_join: None,
+            history_backup_folder: None,
         }
     }
 
@@ -404,6 +404,7 @@ pub struct SyncService {
     device: Uuid,
     incoming: PathBuf,
     runtime: Arc<Mutex<Runtime>>,
+    pairing_offer: Arc<Mutex<Option<pairing::Offer>>>,
     preparing_join: Arc<Mutex<()>>,
     transfer: Arc<AtomicBool>,
     _lock: Arc<fs::File>,
@@ -455,6 +456,8 @@ impl SyncService {
         let (capacity, local_only_records) = Self::usage(core, paired)?;
         Ok(SyncStatus {
             paired,
+            pairing_active: false,
+            history_backup_folder: None,
             lan_enabled: profile.lan,
             role: SyncRole::Off,
             peers: 0,
@@ -497,6 +500,7 @@ impl SyncService {
             device,
             incoming,
             runtime: Arc::new(Mutex::new(runtime)),
+            pairing_offer: Arc::new(Mutex::new(None)),
             preparing_join: Arc::new(Mutex::new(())),
             transfer: Arc::new(AtomicBool::new(false)),
             _lock: lock.into(),
@@ -529,10 +533,17 @@ impl SyncService {
         let paired = state.profile.code.is_some();
         let lan_enabled = state.profile.lan;
         let remote = state.profile.view();
+        let history_backup_folder = state.history_backup_folder.clone();
+        let pairing_active = self
+            .pairing_offer
+            .lock()
+            .is_ok_and(|offer| offer.as_ref().is_some_and(pairing::Offer::active));
         drop(state);
         let (capacity, local_only_records) = Self::usage(&self.core, paired)?;
         Ok(SyncStatus {
             paired,
+            pairing_active,
+            history_backup_folder,
             lan_enabled,
             role,
             peers,
@@ -618,7 +629,7 @@ impl SyncService {
                 return self.status();
             }
             UpdateSync::StopPairing => {
-                state.pairing_offer = None;
+                self.end_pairing();
                 drop(state);
                 return self.status();
             }
@@ -653,13 +664,18 @@ impl SyncService {
         };
         let encoded = serde_json::to_string(&next).map_err(|_| storage())?;
         if let Some(mode) = join_mode {
-            block(self.core.join_replica_profile(encoded, mode))?;
+            let backup = block(self.core.join_replica_profile(encoded, mode))?;
+            state.history_backup_folder = backup
+                .as_deref()
+                .and_then(Path::parent)
+                .and_then(Path::file_name)
+                .map(|folder| folder.to_string_lossy().into_owned());
         } else {
             block(self.core.save_replica_profile(encoded, from_now))?;
         }
         state.profile = next;
         state.pending_join = None;
-        state.pairing_offer = None;
+        self.end_pairing();
         if state.running && lan {
             if let Some(Ok(old)) = &state.lan {
                 old.stop();
@@ -675,24 +691,29 @@ impl SyncService {
     }
 
     pub fn start_pairing(&self) -> Result<String, AppError> {
-        let mut state = self.runtime.lock().map_err(|_| storage())?;
+        let state = self.runtime.lock().map_err(|_| storage())?;
         if !state.running || !state.profile.lan || state.profile.key()?.is_none() {
             return Err(AppError::new(ErrorCode::Restricted));
         }
         let (offer, code) = pairing::start(state.profile.clone())?;
-        state.pairing_offer = Some(offer);
+        *self.pairing_offer.lock().map_err(|_| storage())? = Some(offer);
         Ok(code)
+    }
+
+    fn end_pairing(&self) {
+        if let Ok(mut offer) = self.pairing_offer.lock() {
+            offer.take();
+        }
     }
 
     pub fn is_local_pairing_pin(&self, text: &str) -> bool {
         let text = text.trim();
         text.len() == 8
-            && self.runtime.lock().is_ok_and(|state| {
-                state
-                    .pairing_offer
-                    .as_ref()
-                    .is_some_and(|offer| offer.matches(text))
-            })
+            && text.bytes().all(|byte| byte.is_ascii_digit())
+            && self
+                .pairing_offer
+                .lock()
+                .is_ok_and(|offer| offer.as_ref().is_some_and(|offer| offer.matches(text)))
     }
 
     pub fn prepare_join(&self, code: &str) -> Result<SyncJoinPreview, AppError> {
@@ -763,7 +784,7 @@ impl SyncService {
                 lan.stop();
             }
             state.remote.take();
-            state.pairing_offer.take();
+            self.end_pairing();
             state.pending_join.take();
         }
     }
@@ -916,6 +937,45 @@ mod tests {
             .paired
         );
         assert!(block(core.read_clip(record)).is_ok());
+    }
+
+    #[test]
+    fn a_verified_replacement_keeps_a_recoverable_library_when_the_source_is_offline() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = block(CoreService::open(directory.path().join("db.sqlite3"))).unwrap();
+        let record = block(core.create_text("Keep a recovery copy".into())).unwrap();
+        let sync = SyncService::configure(core.clone(), directory.path()).unwrap();
+        sync.runtime.lock().unwrap().pending_join = Some(PendingJoin {
+            id: "verified-join".into(),
+            profile: Profile {
+                code: Some(format_code(&[7; 32])),
+                lan: true,
+                remote: None,
+            },
+            expires: Instant::now() + Duration::from_secs(60),
+            verified_on_lan: true,
+        });
+        let status = sync
+            .update(UpdateSync::FinishJoin {
+                id: "verified-join".into(),
+                mode: SyncJoinMode::Replace,
+            })
+            .unwrap();
+        assert!(status.paired && status.peers == 0);
+        assert_eq!(
+            block(core.read_clip(record.clone())).unwrap_err().code,
+            ErrorCode::NotFound
+        );
+        let backup = directory
+            .path()
+            .join(status.history_backup_folder.unwrap())
+            .join("foundation.sqlite3");
+        let backup = uclip_core::Storage::open(&backup).unwrap();
+        assert_eq!(
+            backup.read_clip(&record).unwrap(),
+            uclip_core::ClipPayload::Text("Keep a recovery copy".into())
+        );
+        assert!(backup.replica_profile().unwrap().is_none());
     }
 
     #[test]

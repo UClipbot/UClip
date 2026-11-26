@@ -4,7 +4,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -37,6 +37,10 @@ pub(super) struct Offer {
 }
 
 impl Offer {
+    pub fn active(&self) -> bool {
+        self.expires > Instant::now() && !self.stop.load(Ordering::Acquire)
+    }
+
     pub fn matches(&self, text: &str) -> bool {
         self.expires > Instant::now() && self.pin == text
     }
@@ -104,6 +108,15 @@ fn channel(mut stream: TcpStream, pin: &str, initiator: bool) -> Result<Wire, Ap
     )
 }
 
+fn send_profile(wire: &mut Wire, profile: &Profile, stop: &AtomicBool, expires: Instant) {
+    if Instant::now() < expires
+        && !stop.load(Ordering::Acquire)
+        && wire.send(profile, MAX_PROFILE).is_ok()
+    {
+        stop.store(true, Ordering::Release);
+    }
+}
+
 pub(super) fn start(profile: Profile) -> Result<(Offer, String), AppError> {
     let pin = pin()?;
     let secret = pin.clone();
@@ -124,6 +137,7 @@ pub(super) fn start(profile: Profile) -> Result<(Offer, String), AppError> {
             let group = SocketAddrV4::new(GROUP, PORT);
             let mut announce = Instant::now();
             let mut attempts = 0;
+            let sending = Arc::new(Mutex::new(()));
             while !stop.load(Ordering::Acquire) && Instant::now() < expires {
                 if attempts < MAX_ATTEMPTS {
                     if Instant::now() >= announce {
@@ -135,21 +149,28 @@ pub(super) fn start(profile: Profile) -> Result<(Offer, String), AppError> {
                         let stop = stop.clone();
                         let profile = profile.clone();
                         let secret = secret.clone();
+                        let sending = sending.clone();
                         let _ = thread::Builder::new()
                             .name("uclip-pairing-session".into())
                             .spawn(move || {
-                                if let Ok(mut wire) = channel(stream, &secret, false) {
-                                    if Instant::now() < expires
-                                        && !stop.swap(true, Ordering::AcqRel)
-                                    {
-                                        let _ = wire.send(&*profile, MAX_PROFILE);
-                                    }
-                                }
+                                let Ok(mut wire) = channel(stream, &secret, false) else {
+                                    return;
+                                };
+                                let Ok(_sending) = sending.lock() else {
+                                    return;
+                                };
+                                // Serialize delivery so a fully sent profile consumes the offer
+                                // once, while a failed send still permits another attempt.
+                                send_profile(&mut wire, &profile, &stop, expires);
                             });
                     }
+                // Each accepted session holds a clone, including those still authenticating.
+                } else if Arc::strong_count(&sending) == 1 {
+                    break;
                 }
                 thread::sleep(TICK);
             }
+            stop.store(true, Ordering::Release);
         })
         .map_err(|_| unavailable())?;
     Ok((
@@ -215,5 +236,34 @@ mod tests {
             assert_eq!(channel(stream, client_pin, true).is_ok(), accepted);
             assert_eq!(server.join().unwrap(), accepted);
         }
+    }
+
+    #[test]
+    fn the_offer_stays_active_until_the_profile_is_sent() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut wire = channel(stream, "01234567", false).unwrap();
+            let offer = Offer {
+                stop: Arc::new(AtomicBool::new(false)),
+                pin: "01234567".into(),
+                expires: Instant::now() + OFFER_LIFETIME,
+            };
+            let too_large = Profile {
+                code: Some("x".repeat(MAX_PROFILE + 1)),
+                ..Profile::default()
+            };
+            send_profile(&mut wire, &too_large, &offer.stop, offer.expires);
+            assert!(offer.active());
+            send_profile(&mut wire, &Profile::default(), &offer.stop, offer.expires);
+            assert!(!offer.active());
+            assert!(offer.matches("01234567"));
+        });
+        let stream = TcpStream::connect(address).unwrap();
+        let mut wire = channel(stream, "01234567", true).unwrap();
+        let profile: Profile = wire.receive(MAX_PROFILE).unwrap();
+        assert!(profile.code.is_none());
+        server.join().unwrap();
     }
 }
