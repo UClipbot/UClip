@@ -633,6 +633,22 @@ pub struct SyncStatus {
     pub remote_error: Option<AppError>,
 }
 
+#[derive(Clone, Copy, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncJoinMode {
+    Merge,
+    Replace,
+    NewRecords,
+}
+
+#[derive(Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncJoinPreview {
+    pub id: String,
+    pub remote: Option<SyncRemoteSettings>,
+    pub verified_on_lan: bool,
+}
+
 #[derive(Deserialize, TS)]
 #[serde(
     tag = "action",
@@ -644,6 +660,9 @@ pub enum UpdateSync {
     CreateFromNow,
     Join { code: String },
     JoinFromNow { code: String },
+    FinishJoin { id: String, mode: SyncJoinMode },
+    CancelJoin { id: String },
+    StopPairing,
     Lan { enabled: bool },
     Remote { remote: Option<SyncRemoteInput> },
     SyncRemoteNow,

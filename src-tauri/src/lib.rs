@@ -100,6 +100,7 @@ pub fn run() {
             commands::sync_status,
             commands::update_sync,
             commands::sync_pairing_code,
+            commands::prepare_sync_join,
             commands::open_data_directory,
             commands::open_project_page,
             commands::update_settings,

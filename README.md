@@ -40,9 +40,9 @@ Search and filters are shown by default. Change this in Settings → Appearance.
 
 ## Sync history
 
-1. In **Settings → Sync**, create a group on one device. Show the pairing code and enter it under **Join sync group** on each other device. A paired group shares all existing and future history, including its collections, pins, and Trash.
-2. Devices discover each other on the same IPv4 local network. The first established host coordinates the merge. Another online device takes over when the host leaves. Keep local network access enabled for UClip in your firewall.
-3. For devices that are online at different times, select **WebDAV** or **SFTP** under **Server storage** on both devices. Use the same pairing code and remote directory. WebDAV uses HTTPS and supports HTTP Basic authentication. SFTP uses password authentication and verifies the SSH host key against the SHA-256 fingerprint you provide. The server stores encrypted history. Leave local network sync on to use both paths at the same time.
+1. In **Settings → Sync**, create a group on one device and generate an eight-digit pairing code. Enter the code on another device on the same network within two minutes. The code can be used once and securely transfers the sync key and any saved WebDAV or SFTP credentials. Choose whether to merge existing history or replace it with the group's history.
+2. Devices discover each other on the same IPv4 local network. The host coordinates changes directly, on a roughly one-second cycle while both devices are online. Another online device takes over when the host leaves. Keep local network access enabled for UClip in your firewall.
+3. If devices are online at different times, configure **WebDAV** or **SFTP** under **Server storage** before generating the pairing code. WebDAV uses HTTPS and supports HTTP Basic authentication. SFTP uses password authentication and verifies the SSH host key against the SHA-256 fingerprint you provide. The server stores encrypted history, and local network sync runs independently of server storage.
 4. To paste a file from another device, select its item in history and copy or paste it as usual. UClip retrieves the original from the online source over the local network. Transfers support regular files and folders, up to 256 MiB per paste. UClip caches received copies locally and removes copies older than 24 hours at startup or before a later transfer.
 
 Synced items are ordered by capture or save time within the pinned and unpinned groups. A conflict between edits, moves to Trash, and restores keeps the latest operation. Permanent deletion takes precedence for the same record, including restores made while a device was offline. LAN sync and server storage use protocol version 4. Shared history has a 2 GiB payload limit. See **Settings → Sync** for the shared history usage on this device. Synced items are retained across devices independently of the local capture count setting.
@@ -103,7 +103,7 @@ uclip sync code
 uclip serve
 ```
 
-Treat the pairing code like a password and enter it on other devices. To reuse an existing group, pass its code to `uclip sync join` through stdin. `uclip sync remote < profile.json` accepts a WebDAV or SFTP profile through stdin. Use `uclip sync remote --help` for the format, and `uclip sync status` to inspect saved settings without credentials. LAN discovery uses IPv4 multicast, and the headless peer follows the same host election as desktop peers. Run one sync process per library and stop it before changing sync settings. `serve` handles Ctrl+C and Unix SIGTERM, so a service manager can supervise it directly.
+Pass the eight-digit LAN code or the long group key from `uclip sync code` to `uclip sync join` through stdin. `uclip sync remote < profile.json` accepts a WebDAV or SFTP profile through stdin. Use `uclip sync remote --help` for the format, and `uclip sync status` to inspect saved settings without credentials. LAN discovery uses IPv4 multicast, and the headless peer follows the same host election as desktop peers. Run one sync process per library and stop it before changing sync settings. `serve` handles Ctrl+C and Unix SIGTERM, so a service manager can supervise it directly.
 
 ## Back up or migrate history
 

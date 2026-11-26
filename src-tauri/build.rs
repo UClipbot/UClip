@@ -6,6 +6,7 @@ fn main() {
             "sync_status",
             "update_sync",
             "sync_pairing_code",
+            "prepare_sync_join",
             "open_data_directory",
             "open_project_page",
             "update_settings",

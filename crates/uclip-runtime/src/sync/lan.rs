@@ -28,8 +28,8 @@ use super::{
     wire::Wire,
 };
 
-const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 79, 67);
-const PORT: u16 = 41764;
+pub(super) const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 79, 67);
+pub(super) const PORT: u16 = 41764;
 const DISCOVERY: Duration = Duration::from_millis(2200);
 const ANNOUNCE: Duration = Duration::from_millis(500);
 const LEASE: Duration = Duration::from_secs(4);
@@ -94,7 +94,7 @@ pub(super) fn derive(key: &[u8; 32], label: &[u8]) -> Result<[u8; 32], AppError>
     Ok(mac.finalize().into_bytes().into())
 }
 
-fn discovery_socket(port: u16) -> std::io::Result<UdpSocket> {
+pub(super) fn discovery_socket(port: u16) -> std::io::Result<UdpSocket> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_reuse_address(true)?;
     socket.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)).into())?;

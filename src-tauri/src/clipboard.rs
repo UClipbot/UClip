@@ -89,7 +89,7 @@ impl ClipboardService {
             state: state.clone(),
             core: core.clone(),
             paste: paste.clone(),
-            sync,
+            sync: sync.clone(),
         };
         std::thread::Builder::new()
             .name("uclip-clipboard".into())
@@ -310,7 +310,9 @@ impl ClipboardService {
                             }
                         }
                         let snapshot = &pending_payload.as_ref().expect("snapshot ready").1;
-                        if matches!(&snapshot.payload, ClipPayload::Text(text) if crate::sync::is_pairing_code(text)) {
+                        if matches!(&snapshot.payload, ClipPayload::Text(text)
+                            if crate::sync::is_pairing_code(text)
+                                || sync.as_ref().is_some_and(|service| service.is_local_pairing_pin(text))) {
                             return Ok(false);
                         }
                         block(core.capture_with_source(

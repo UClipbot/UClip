@@ -1,8 +1,10 @@
 use std::{io, path::Path, time::Duration};
 
 use clap::Subcommand;
-use uclip_core::{AppError, CoreService, ErrorCode, SyncRemoteInput, SyncStatus, UpdateSync};
-use uclip_runtime::sync::SyncService;
+use uclip_core::{
+    AppError, CoreService, ErrorCode, SyncJoinMode, SyncRemoteInput, SyncStatus, UpdateSync,
+};
+use uclip_runtime::sync::{is_pairing_code, SyncService};
 
 use crate::i18n::{messages, text};
 
@@ -51,6 +53,19 @@ pub async fn configure(
         SyncCommand::Join { from_now } => {
             let bytes = crate::history::read_bounded(io::stdin().lock(), 128)?;
             let code = String::from_utf8(bytes).map_err(|_| crate::invalid())?;
+            if !is_pairing_code(&code) {
+                let service = SyncService::configure(core.clone(), directory)?;
+                let pairing = service.prepare_join(&code)?;
+                let mode = if from_now {
+                    SyncJoinMode::NewRecords
+                } else {
+                    SyncJoinMode::Merge
+                };
+                return crate::print_json(&service.update(UpdateSync::FinishJoin {
+                    id: pairing.id,
+                    mode,
+                })?);
+            }
             if from_now {
                 UpdateSync::JoinFromNow { code }
             } else {

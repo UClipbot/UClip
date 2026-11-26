@@ -2,6 +2,7 @@ mod archive;
 mod dav;
 mod files;
 mod lan;
+mod pairing;
 mod sftp;
 mod transport;
 mod wire;
@@ -15,14 +16,14 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use uclip_core::{
-    AppError, CoreService, ErrorCode, FileTicket, SyncRemoteInput, SyncRemoteProgress,
-    SyncRemoteSettings, SyncRole, SyncStatus, UpdateSync,
+    AppError, CoreService, ErrorCode, FileTicket, SyncJoinMode, SyncJoinPreview, SyncRemoteInput,
+    SyncRemoteProgress, SyncRemoteSettings, SyncRole, SyncStatus, UpdateSync,
 };
 use uuid::Uuid;
 
@@ -352,6 +353,15 @@ struct Runtime {
     running: bool,
     lan: Option<Result<Arc<Lan>, AppError>>,
     remote: Option<Result<RemoteWorker, AppError>>,
+    pairing_offer: Option<pairing::Offer>,
+    pending_join: Option<PendingJoin>,
+}
+
+struct PendingJoin {
+    id: String,
+    profile: Profile,
+    expires: Instant,
+    verified_on_lan: bool,
 }
 
 impl Runtime {
@@ -361,6 +371,8 @@ impl Runtime {
             running,
             lan: None,
             remote: None,
+            pairing_offer: None,
+            pending_join: None,
         }
     }
 
@@ -392,6 +404,7 @@ pub struct SyncService {
     device: Uuid,
     incoming: PathBuf,
     runtime: Arc<Mutex<Runtime>>,
+    preparing_join: Arc<Mutex<()>>,
     transfer: Arc<AtomicBool>,
     _lock: Arc<fs::File>,
 }
@@ -484,6 +497,7 @@ impl SyncService {
             device,
             incoming,
             runtime: Arc::new(Mutex::new(runtime)),
+            preparing_join: Arc::new(Mutex::new(())),
             transfer: Arc::new(AtomicBool::new(false)),
             _lock: lock.into(),
         })
@@ -554,6 +568,7 @@ impl SyncService {
             action,
             UpdateSync::CreateFromNow | UpdateSync::JoinFromNow { .. }
         );
+        let mut join_mode = None;
         let (lan, remote) = match action {
             UpdateSync::Create | UpdateSync::CreateFromNow => {
                 if next.code.is_some() {
@@ -574,6 +589,38 @@ impl SyncService {
                 next.code = Some(code);
                 next.lan = true;
                 (true, false)
+            }
+            UpdateSync::FinishJoin { id, mode } => {
+                if next.code.is_some() {
+                    return Err(AppError::new(ErrorCode::Conflict));
+                }
+                let pending = state
+                    .pending_join
+                    .as_ref()
+                    .filter(|pending| pending.id == id && pending.expires > Instant::now())
+                    .ok_or_else(|| AppError::new(ErrorCode::SyncAuthentication))?;
+                if matches!(mode, SyncJoinMode::Replace) && !pending.verified_on_lan {
+                    return Err(AppError::new(ErrorCode::Restricted));
+                }
+                next = pending.profile.clone();
+                join_mode = Some(mode);
+                (true, true)
+            }
+            UpdateSync::CancelJoin { id } => {
+                if state
+                    .pending_join
+                    .as_ref()
+                    .is_some_and(|pending| pending.id == id)
+                {
+                    state.pending_join = None;
+                }
+                drop(state);
+                return self.status();
+            }
+            UpdateSync::StopPairing => {
+                state.pairing_offer = None;
+                drop(state);
+                return self.status();
             }
             UpdateSync::Lan { enabled } => {
                 if next.code.is_none() {
@@ -605,8 +652,14 @@ impl SyncService {
             }
         };
         let encoded = serde_json::to_string(&next).map_err(|_| storage())?;
-        block(self.core.save_replica_profile(encoded, from_now))?;
+        if let Some(mode) = join_mode {
+            block(self.core.join_replica_profile(encoded, mode))?;
+        } else {
+            block(self.core.save_replica_profile(encoded, from_now))?;
+        }
         state.profile = next;
+        state.pending_join = None;
+        state.pairing_offer = None;
         if state.running && lan {
             if let Some(Ok(old)) = &state.lan {
                 old.stop();
@@ -619,6 +672,79 @@ impl SyncService {
         }
         drop(state);
         self.status()
+    }
+
+    pub fn start_pairing(&self) -> Result<String, AppError> {
+        let mut state = self.runtime.lock().map_err(|_| storage())?;
+        if !state.running || !state.profile.lan || state.profile.key()?.is_none() {
+            return Err(AppError::new(ErrorCode::Restricted));
+        }
+        let (offer, code) = pairing::start(state.profile.clone())?;
+        state.pairing_offer = Some(offer);
+        Ok(code)
+    }
+
+    pub fn is_local_pairing_pin(&self, text: &str) -> bool {
+        let text = text.trim();
+        text.len() == 8
+            && self.runtime.lock().is_ok_and(|state| {
+                state
+                    .pairing_offer
+                    .as_ref()
+                    .is_some_and(|offer| offer.matches(text))
+            })
+    }
+
+    pub fn prepare_join(&self, code: &str) -> Result<SyncJoinPreview, AppError> {
+        let _preparing = self
+            .preparing_join
+            .try_lock()
+            .map_err(|error| match error {
+                std::sync::TryLockError::WouldBlock => AppError::new(ErrorCode::Busy),
+                std::sync::TryLockError::Poisoned(_) => storage(),
+            })?;
+        {
+            let mut state = self.runtime.lock().map_err(|_| storage())?;
+            if state.profile.code.is_some() {
+                return Err(AppError::new(ErrorCode::Conflict));
+            }
+            state.pending_join = None;
+        }
+        let (mut profile, verified_on_lan) = if let Ok(key) = decode_code(code) {
+            // Existing groups remain joinable with their long key, including offline setups.
+            (
+                Profile {
+                    code: Some(format_code(&key)),
+                    lan: true,
+                    remote: None,
+                },
+                false,
+            )
+        } else {
+            (pairing::receive(code.trim())?, true)
+        };
+        profile.code = Some(format_code(&profile.key()?.ok_or_else(invalid)?));
+        if let Some(remote) = &profile.remote {
+            validate_remote(remote)?;
+        }
+        profile.lan = true;
+        let id = Uuid::new_v4().to_string();
+        let remote = profile.view();
+        let mut state = self.runtime.lock().map_err(|_| storage())?;
+        if state.profile.code.is_some() {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        state.pending_join = Some(PendingJoin {
+            id: id.clone(),
+            profile,
+            expires: Instant::now() + Duration::from_secs(300),
+            verified_on_lan,
+        });
+        Ok(SyncJoinPreview {
+            id,
+            remote,
+            verified_on_lan,
+        })
     }
 
     pub fn pairing_code(&self) -> Result<String, AppError> {
@@ -637,6 +763,8 @@ impl SyncService {
                 lan.stop();
             }
             state.remote.take();
+            state.pairing_offer.take();
+            state.pending_join.take();
         }
     }
 
@@ -762,6 +890,149 @@ mod tests {
     ) -> Result<bool, AppError> {
         super::archive_round(core, store, key, device, stop, |_| {})
             .map(|records| records.is_some())
+    }
+
+    #[test]
+    fn offline_group_keys_cannot_replace_local_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = block(CoreService::open(directory.path().join("db.sqlite3"))).unwrap();
+        let record = block(core.create_text("Keep this clip".into())).unwrap();
+        let sync = SyncService::configure(core.clone(), directory.path()).unwrap();
+        let code = format_code(&[7; 32]);
+        let verified = sync.prepare_join(&code).unwrap();
+        assert!(!verified.verified_on_lan);
+        assert!(matches!(
+            sync.update(UpdateSync::FinishJoin { id: verified.id.clone(), mode: SyncJoinMode::Replace }),
+            Err(error) if error.code == ErrorCode::Restricted
+        ));
+        assert!(!sync.status().unwrap().paired);
+        assert!(block(core.read_clip(record.clone())).is_ok());
+        assert!(
+            sync.update(UpdateSync::FinishJoin {
+                id: verified.id,
+                mode: SyncJoinMode::Merge
+            })
+            .unwrap()
+            .paired
+        );
+        assert!(block(core.read_clip(record)).is_ok());
+    }
+
+    #[test]
+    #[ignore = "requires local IPv4 multicast"]
+    fn short_lan_pairing_copies_credentials_and_applies_the_selected_history_mode() {
+        use uclip_core::ClipPayload;
+
+        let directory = tempfile::tempdir().unwrap();
+        let pair = |name: &str| {
+            let path = directory.path().join(name);
+            fs::create_dir(&path).unwrap();
+            let core = block(CoreService::open(path.join("db.sqlite3"))).unwrap();
+            let sync = SyncService::start(core.clone(), &path).unwrap();
+            (path, core, sync)
+        };
+        for (backend, remote, mode) in [
+            (
+                "webdav",
+                SyncRemoteInput::Webdav {
+                    url: "https://127.0.0.1:1/uclip/".into(),
+                    username: "pairing-fixture".into(),
+                    password: "fixture-webdav-password".into(),
+                },
+                SyncJoinMode::Merge,
+            ),
+            (
+                "sftp",
+                SyncRemoteInput::Sftp {
+                    host: "127.0.0.1".into(),
+                    port: 1,
+                    directory: "/pairing-fixture".into(),
+                    username: "pairing-fixture".into(),
+                    password: "fixture-sftp-password".into(),
+                    host_key: format!("SHA256:{}", "A".repeat(43)),
+                },
+                SyncJoinMode::Replace,
+            ),
+        ] {
+            let (_, host_core, host) = pair(&format!("{backend}-host"));
+            let (path, client_core, client) = pair(&format!("{backend}-client"));
+            let shared = block(host_core.create_text("from the host".into())).unwrap();
+            let local = block(client_core.create_text("from the client".into())).unwrap();
+            let remote_data = serde_json::to_value(&remote).unwrap();
+            host.update(UpdateSync::Create).unwrap();
+            host.update(UpdateSync::Remote {
+                remote: Some(remote),
+            })
+            .unwrap();
+            let code = host.start_pairing().unwrap();
+            assert_eq!(code.len(), 8);
+            assert!(host.is_local_pairing_pin(&code));
+            let wrong_code = format!(
+                "{}{}",
+                if &code[..1] == "0" { "1" } else { "0" },
+                &code[1..]
+            );
+            assert!(
+                matches!(client.prepare_join(&wrong_code), Err(error) if error.code == ErrorCode::SyncAuthentication)
+            );
+            let verified = client.prepare_join(&code).unwrap();
+            assert!(pairing::receive(&code).is_err());
+            assert!(!client.status().unwrap().paired);
+            assert_eq!(
+                block(client_core.read_clip(local.clone())).unwrap(),
+                ClipPayload::Text("from the client".into())
+            );
+            let preview = serde_json::to_value(&verified).unwrap();
+            assert!(preview["remote"].get("password").is_none());
+            assert_eq!(preview["remote"]["kind"], backend);
+            let client_status = client
+                .update(UpdateSync::FinishJoin {
+                    id: verified.id,
+                    mode,
+                })
+                .unwrap();
+            assert!(client_status.paired && client_status.lan_enabled);
+            assert_eq!(client.pairing_code().unwrap(), host.pairing_code().unwrap());
+            let saved = Profile::load(&client_core).unwrap();
+            assert_eq!(
+                serde_json::to_value(saved.remote.unwrap()).unwrap(),
+                remote_data
+            );
+            let keep_local = matches!(mode, SyncJoinMode::Merge);
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while block(client_core.read_clip(shared.clone())).is_err()
+                || (keep_local && block(host_core.read_clip(local.clone())).is_err())
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "initial LAN reconciliation timed out"
+                );
+                thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(
+                block(client_core.read_clip(local.clone())).is_ok(),
+                keep_local
+            );
+            let updated = block(host_core.create_text("a live LAN update".into())).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while block(client_core.read_clip(updated.clone())).is_err() {
+                assert!(
+                    Instant::now() < deadline,
+                    "LAN update did not arrive independently of remote storage"
+                );
+                thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(block(host_core.read_clip(local)).is_ok(), keep_local);
+            host.stop();
+            client.stop();
+            drop(client);
+            let reopened = SyncService::configure(client_core, &path).unwrap();
+            assert!(reopened.status().unwrap().lan_enabled);
+            assert_eq!(
+                reopened.pairing_code().unwrap(),
+                host.pairing_code().unwrap()
+            );
+        }
     }
 
     #[test]

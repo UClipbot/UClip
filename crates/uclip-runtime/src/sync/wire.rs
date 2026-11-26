@@ -55,21 +55,30 @@ impl Wire {
     pub fn connect(address: SocketAddr, key: &[u8; 32]) -> Result<Self, AppError> {
         let stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
             .map_err(|_| unavailable())?;
-        Self::handshake(stream, key, true)
+        Self::handshake(stream, key, true, b"uclip-lan/v4")
     }
 
     pub fn accept(stream: TcpStream, key: &[u8; 32]) -> Result<Self, AppError> {
-        Self::handshake(stream, key, false)
+        Self::handshake(stream, key, false, b"uclip-lan/v4")
     }
 
-    fn handshake(mut stream: TcpStream, key: &[u8; 32], initiator: bool) -> Result<Self, AppError> {
+    pub fn pairing(stream: TcpStream, key: &[u8; 32], initiator: bool) -> Result<Self, AppError> {
+        Self::handshake(stream, key, initiator, b"uclip-pairing/v1")
+    }
+
+    fn handshake(
+        mut stream: TcpStream,
+        key: &[u8; 32],
+        initiator: bool,
+        prologue: &[u8],
+    ) -> Result<Self, AppError> {
         stream
             .set_read_timeout(Some(STEP_TIMEOUT))
             .and_then(|()| stream.set_write_timeout(Some(STEP_TIMEOUT)))
             .and_then(|()| stream.set_nodelay(true))
             .map_err(|_| unavailable())?;
         let builder = Builder::new(NOISE_SUITE.parse().map_err(|_| invalid())?)
-            .prologue(b"uclip-lan/v4")
+            .prologue(prologue)
             .map_err(|_| invalid())?
             .psk(0, key)
             .map_err(|_| authentication())?;

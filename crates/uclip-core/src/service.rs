@@ -140,6 +140,15 @@ impl CoreService {
             .await
     }
 
+    pub async fn join_replica_profile(
+        &self,
+        profile: String,
+        mode: crate::SyncJoinMode,
+    ) -> Result<(), AppError> {
+        self.operation(move |s| s.join_replica_profile(profile, mode))
+            .await
+    }
+
     pub async fn replica_inventory(&self) -> Result<Vec<crate::ReplicaStamp>, AppError> {
         self.operation(|s| s.replica_inventory()).await
     }

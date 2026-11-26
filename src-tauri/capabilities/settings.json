@@ -16,6 +16,7 @@
     "allow-sync-status",
     "allow-update-sync",
     "allow-sync-pairing-code",
+    "allow-prepare-sync-join",
     "allow-open-data-directory",
     "allow-open-project-page",
     "allow-clipboard-status",

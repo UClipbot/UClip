@@ -5,7 +5,7 @@ export const english = {
   sync_open_data_directory_failed: 'Could not open the config and database folder.',
   sync_loading: 'Reading sync settings…',
   sync_share_history:
-    'Creating or joining a group shares your existing history and future changes with paired devices. Paired devices can request files from your history while you are online.',
+    'Pair devices on the same local network to sync clipboard changes. Paired devices can request files from your history while you are online.',
   sync_create_group: 'Create sync group',
   sync_existing_history_over_limit:
     'Your history exceeds the sync group limit of 25,000 entities or 2 GiB.',
@@ -15,9 +15,23 @@ export const english = {
   sync_join_from_now: 'Join group and sync new records only',
   sync_join_group: 'Join sync group',
   sync_pairing_code: 'Pairing code',
-  sync_show_code: 'Show pairing code',
-  sync_hide_code: 'Hide pairing code',
-  sync_code_privacy: 'Share this code only with devices you trust with your clipboard history.',
+  sync_show_code: 'Generate pairing code',
+  sync_hide_code: 'End pairing',
+  sync_code_privacy:
+    'This 8-digit code expires after two minutes or one successful pairing. The receiving device gets the sync key and any saved WebDAV or SFTP credentials.',
+  sync_verify_pairing_code: 'Verify pairing code',
+  sync_pairing_failed:
+    'Pairing failed. Check the code and make sure both devices are on the same network. Generate a new code if it expired.',
+  sync_pairing_verified: 'Code verified. Choose what to do with this device’s clipboard history.',
+  sync_group_key_ready:
+    'Group key entered. Use a local network pairing code to replace this device’s clipboard history.',
+  sync_pairing_verified_storage_0:
+    'Code verified. {0} settings will be copied. Choose what to do with this device’s clipboard history.',
+  sync_merge_local: 'Merge with local history',
+  sync_replace_local: 'Replace local history',
+  sync_replace_local_description:
+    'This permanently deletes this device’s clipboard history, trash, and collections, then downloads the sync group’s history.',
+  sync_confirm_replace_local: 'Delete local history and join',
   sync_lan_enabled: 'Sync and receive files on the local network',
   sync_lan_off: 'Local network sync is off.',
   sync_lan_discovering: 'Looking for paired devices…',
@@ -439,7 +453,7 @@ export const chinese: Record<keyof typeof english, string> = {
   sync_open_data_directory_failed: '无法打开配置和数据库目录。',
   sync_loading: '正在读取同步设置…',
   sync_share_history:
-    '创建或加入后，配对设备会双向合并现有历史和后续变更。你在线时，配对设备可以请求历史中的文件。',
+    '同一局域网内的设备配对后即可同步剪贴板变更。你在线时，配对设备可以请求历史中的文件。',
   sync_create_group: '创建同步组',
   sync_existing_history_over_limit: '现有历史超出了同步组容量。每组最多 25,000 个对象、2 GiB。',
   sync_create_from_now_description:
@@ -448,9 +462,22 @@ export const chinese: Record<keyof typeof english, string> = {
   sync_join_from_now: '加入同步组，仅同步新记录',
   sync_join_group: '加入同步组',
   sync_pairing_code: '配对码',
-  sync_show_code: '显示配对码',
-  sync_hide_code: '隐藏配对码',
-  sync_code_privacy: '仅将配对码交给可以访问你剪贴板历史的可信设备。',
+  sync_show_code: '生成配对码',
+  sync_hide_code: '结束配对',
+  sync_code_privacy:
+    '8 位配对码在两分钟后或配对成功后失效。接收设备将获得同步密钥和已保存的 WebDAV 或 SFTP 凭据。',
+  sync_verify_pairing_code: '验证配对码',
+  sync_pairing_failed:
+    '配对失败。请检查配对码，并确认两台设备连接到同一局域网。配对码过期时请重新生成。',
+  sync_pairing_verified: '配对码已验证。请选择如何处理此设备的剪贴板历史。',
+  sync_group_key_ready: '已输入同步组密钥。如需替换此设备的剪贴板历史，请使用局域网配对码。',
+  sync_pairing_verified_storage_0:
+    '配对码已验证。将复制 {0} 配置，请选择如何处理此设备的剪贴板历史。',
+  sync_merge_local: '合并本地历史',
+  sync_replace_local: '替换本地历史',
+  sync_replace_local_description:
+    '此操作会永久删除此设备的剪贴板历史、回收站和分类，然后下载同步组的历史。',
+  sync_confirm_replace_local: '删除本地历史并加入',
   sync_lan_enabled: '在局域网同步和接收文件',
   sync_lan_off: '局域网同步已关闭。',
   sync_lan_discovering: '正在查找已配对设备…',

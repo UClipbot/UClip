@@ -60,6 +60,8 @@ fn main() {
         SyncRemoteProgress::decl(&config),
         SyncCapacity::decl(&config),
         SyncStatus::decl(&config),
+        SyncJoinMode::decl(&config),
+        SyncJoinPreview::decl(&config),
         UpdateSync::decl(&config),
         ErrorCode::decl(&config),
         AppError::decl(&config),

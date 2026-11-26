@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef, useState } from 'react';
 import type {
+  SyncJoinMode,
+  SyncJoinPreview,
   SyncRemoteInput,
   SyncRemoteProgress,
   SyncStatus,
@@ -42,6 +44,8 @@ export function SyncSettings() {
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [code, setCode] = useState('');
   const [visibleCode, setVisibleCode] = useState('');
+  const [pendingJoin, setPendingJoin] = useState<SyncJoinPreview | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [historyOverLimit, setHistoryOverLimit] = useState<'create' | 'join' | null>(null);
@@ -83,7 +87,13 @@ export function SyncSettings() {
     }
   }, [initialized, status]);
 
-  async function perform(operation: () => Promise<void>, action?: UpdateSync['action']) {
+  useEffect(() => {
+    if (!visibleCode) return;
+    const timer = setTimeout(() => setVisibleCode(''), 120_000);
+    return () => clearTimeout(timer);
+  }, [visibleCode]);
+
+  async function perform(operation: () => Promise<void>, request?: UpdateSync) {
     if (saving.current) return;
     saving.current = true;
     generation.current++;
@@ -93,9 +103,14 @@ export function SyncSettings() {
       await operation();
     } catch (failure) {
       const reason = safeError(failure);
-      if ((action === 'create' || action === 'join') && reason.code === 'limit_exceeded') {
-        setHistoryOverLimit(action);
+      const merge = request?.action === 'finish_join' && request.mode === 'merge';
+      if ((request?.action === 'create' || merge) && reason.code === 'limit_exceeded') {
+        setHistoryOverLimit(merge ? 'join' : 'create');
         setError('sync_existing_history_over_limit');
+      } else if (request?.action === 'finish_join' && reason.code === 'sync_authentication') {
+        setPendingJoin(null);
+        setConfirmReplace(false);
+        setError('sync_pairing_failed');
       } else {
         setError(reason.message);
       }
@@ -107,9 +122,47 @@ export function SyncSettings() {
 
   const update = (request: UpdateSync) =>
     perform(async () => {
-      setStatus(await invoke<SyncStatus>('update_sync', { request }));
-      if (request.action === 'join' || request.action === 'join_from_now') setCode('');
-    }, request.action);
+      const next = await invoke<SyncStatus>('update_sync', { request });
+      setStatus(next);
+      if (request.action === 'finish_join' || request.action === 'cancel_join') {
+        setPendingJoin(null);
+        setConfirmReplace(false);
+        setHistoryOverLimit(null);
+      }
+      if (request.action === 'finish_join') {
+        setCode('');
+        setKind(next.remote?.kind ?? 'off');
+      }
+      if (
+        request.action === 'stop_pairing' ||
+        request.action === 'lan' ||
+        request.action === 'remote'
+      ) {
+        setVisibleCode('');
+      }
+    }, request);
+
+  function prepareJoin() {
+    return perform(async () => {
+      try {
+        const verified = await invoke<SyncJoinPreview>('prepare_sync_join', { code: code.trim() });
+        setPendingJoin(verified);
+        setHistoryOverLimit(null);
+        setCode('');
+      } catch (failure) {
+        const reason = safeError(failure);
+        if (reason.code === 'sync_authentication' || reason.code === 'sync_connection') {
+          setError('sync_pairing_failed');
+          return;
+        }
+        throw failure;
+      }
+    });
+  }
+
+  function finishJoin(mode: SyncJoinMode) {
+    if (pendingJoin) void update({ action: 'finish_join', id: pendingJoin.id, mode });
+  }
 
   async function openDataDirectory() {
     setDirectoryState('opening');
@@ -174,14 +227,16 @@ export function SyncSettings() {
       {status && !status.paired && (
         <>
           <p>{t('sync_share_history')}</p>
-          <button
-            className="secondary-button"
-            disabled={busy}
-            onClick={() => void update({ action: 'create' })}
-          >
-            {t('sync_create_group')}
-          </button>
-          {historyOverLimit === 'create' && (
+          {!pendingJoin && (
+            <button
+              className="secondary-button"
+              disabled={busy}
+              onClick={() => void update({ action: 'create' })}
+            >
+              {t('sync_create_group')}
+            </button>
+          )}
+          {!pendingJoin && historyOverLimit === 'create' && (
             <div>
               <p>{t('sync_create_from_now_description')}</p>
               <button
@@ -193,41 +248,97 @@ export function SyncSettings() {
               </button>
             </div>
           )}
-          <form
-            className="new-form sync-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void update({ action: 'join', code });
-            }}
-          >
-            <label htmlFor="sync-join-code">{t('sync_pairing_code')}</label>
-            <input
-              id="sync-join-code"
-              type="password"
-              value={code}
-              maxLength={64}
-              autoComplete="off"
-              onChange={(event) => setCode(event.target.value)}
-              spellCheck={false}
-              required
-            />
-            <button className="secondary-button" disabled={busy || !code.trim()}>
-              {t('sync_join_group')}
-            </button>
-            {historyOverLimit === 'join' && (
-              <>
-                <p>{t('sync_create_from_now_description')}</p>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  disabled={busy || !code.trim()}
-                  onClick={() => void update({ action: 'join_from_now', code })}
-                >
-                  {t('sync_join_from_now')}
-                </button>
-              </>
-            )}
-          </form>
+          {!pendingJoin ? (
+            <form
+              className="new-form sync-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void prepareJoin();
+              }}
+            >
+              <label htmlFor="sync-join-code">{t('sync_pairing_code')}</label>
+              <input
+                id="sync-join-code"
+                type="password"
+                value={code}
+                maxLength={64}
+                autoComplete="off"
+                onChange={(event) => setCode(event.target.value)}
+                spellCheck={false}
+                required
+              />
+              <button className="secondary-button" disabled={busy || !code.trim()}>
+                {t('sync_verify_pairing_code')}
+              </button>
+            </form>
+          ) : (
+            <div className="new-form sync-form" role="group" aria-label={t('sync_join_group')}>
+              <p role="status">
+                {pendingJoin.remote
+                  ? t('sync_pairing_verified_storage_0', {
+                      0: pendingJoin.remote.kind === 'webdav' ? 'WebDAV' : 'SFTP',
+                    })
+                  : t(pendingJoin.verifiedOnLan ? 'sync_pairing_verified' : 'sync_group_key_ready')}
+              </p>
+              {confirmReplace ? (
+                <>
+                  <p>{t('sync_replace_local_description')}</p>
+                  <button
+                    className="secondary-button destructive"
+                    disabled={busy}
+                    onClick={() => finishJoin('replace')}
+                  >
+                    {t('sync_confirm_replace_local')}
+                  </button>
+                  <button
+                    className="secondary-button"
+                    disabled={busy}
+                    onClick={() => setConfirmReplace(false)}
+                  >
+                    {t('cancel')}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="secondary-button"
+                    disabled={busy}
+                    onClick={() => finishJoin('merge')}
+                  >
+                    {t('sync_merge_local')}
+                  </button>
+                  {pendingJoin.verifiedOnLan && (
+                    <button
+                      className="secondary-button"
+                      disabled={busy}
+                      onClick={() => setConfirmReplace(true)}
+                    >
+                      {t('sync_replace_local')}
+                    </button>
+                  )}
+                  {historyOverLimit === 'join' && (
+                    <>
+                      <p>{t('sync_create_from_now_description')}</p>
+                      <button
+                        className="secondary-button"
+                        disabled={busy}
+                        onClick={() => finishJoin('new_records')}
+                      >
+                        {t('sync_join_from_now')}
+                      </button>
+                    </>
+                  )}
+                  <button
+                    className="secondary-button"
+                    disabled={busy}
+                    onClick={() => void update({ action: 'cancel_join', id: pendingJoin.id })}
+                  >
+                    {t('cancel')}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </>
       )}
       {status?.paired && (
@@ -248,9 +359,9 @@ export function SyncSettings() {
           </p>
           <button
             className="secondary-button"
-            disabled={busy}
+            disabled={busy || !status.lanEnabled}
             onClick={() => {
-              if (visibleCode) setVisibleCode('');
+              if (visibleCode) void update({ action: 'stop_pairing' });
               else
                 void perform(async () => setVisibleCode(await invoke<string>('sync_pairing_code')));
             }}

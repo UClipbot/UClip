@@ -13,6 +13,41 @@ fn storage(path: &Path) -> Storage {
 }
 
 #[test]
+fn replacing_history_and_saving_the_join_profile_commit_together() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("join.sqlite3");
+    let mut local = Storage::open(&path).unwrap();
+    let collection = local
+        .create_collection(CreateCollection {
+            name: "Local".into(),
+        })
+        .unwrap();
+    let clip = local
+        .create_text_in_collection("Local record".into(), Some(collection.id))
+        .unwrap();
+    let sql = rusqlite::Connection::open(&path).unwrap();
+    sql.execute_batch("CREATE TRIGGER reject_pairing BEFORE UPDATE OF profile ON replica_state BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+    let mode = uclip_core::SyncJoinMode::Replace;
+    assert!(local.join_replica_profile("joined".into(), mode).is_err());
+    assert!(local.replica_profile().unwrap().is_none());
+    assert_eq!(local.collections().unwrap().items.len(), 1);
+    assert_eq!(history_items(&local, false)[0].id, clip);
+    sql.execute_batch("DROP TRIGGER reject_pairing;").unwrap();
+    local.join_replica_profile("joined".into(), mode).unwrap();
+    assert_eq!(local.replica_profile().unwrap().as_deref(), Some("joined"));
+    assert!(local.collections().unwrap().items.is_empty());
+    assert!(history_items(&local, false).is_empty());
+    assert!(local.replica_inventory().unwrap().is_empty());
+    assert_eq!(
+        local
+            .join_replica_profile("other".into(), mode)
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+}
+
+#[test]
 fn remote_collection_deletion_keeps_unshared_records_in_active_local_history() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("source.sqlite3");

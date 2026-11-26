@@ -130,7 +130,11 @@ export type SyncCapacity = { usedBytes: number, limitBytes: number, };
 
 export type SyncStatus = { paired: boolean, lanEnabled: boolean, role: SyncRole, peers: number, lanLastSync: string | null, lanError: AppError | null, remote: SyncRemoteSettings | null, remoteSyncing: boolean, remoteProgress: SyncRemoteProgress | null, remoteLastSync: string | null, remoteSyncedRecords: number | null, localOnlyRecords: number | null, capacity: SyncCapacity | null, remoteError: AppError | null, };
 
-export type UpdateSync = { "action": "create" } | { "action": "create_from_now" } | { "action": "join", code: string, } | { "action": "join_from_now", code: string, } | { "action": "lan", enabled: boolean, } | { "action": "remote", remote: SyncRemoteInput | null, } | { "action": "sync_remote_now" };
+export type SyncJoinMode = "merge" | "replace" | "new_records";
+
+export type SyncJoinPreview = { id: string, remote: SyncRemoteSettings | null, verifiedOnLan: boolean, };
+
+export type UpdateSync = { "action": "create" } | { "action": "create_from_now" } | { "action": "join", code: string, } | { "action": "join_from_now", code: string, } | { "action": "finish_join", id: string, mode: SyncJoinMode, } | { "action": "cancel_join", id: string, } | { "action": "stop_pairing" } | { "action": "lan", enabled: boolean, } | { "action": "remote", remote: SyncRemoteInput | null, } | { "action": "sync_remote_now" };
 
 export type ErrorCode = "storage" | "unsupported_schema" | "foreign_database" | "conflict" | "invalid_input" | "busy" | "unavailable" | "limit_exceeded" | "invalid_pattern" | "not_found" | "clipboard" | "missing_file" | "restricted" | "target_lost" | "shortcut_conflict" | "query_timeout" | "excluded" | "duplicate_name" | "sync_connection" | "sync_authentication" | "sync_data" | "file_peer_offline";
 

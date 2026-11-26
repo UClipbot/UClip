@@ -1079,10 +1079,38 @@ impl Storage {
         profile: String,
         from_now: bool,
     ) -> Result<(), AppError> {
+        self.write_replica_profile(profile, from_now, None)
+    }
+
+    pub fn join_replica_profile(
+        &mut self,
+        profile: String,
+        mode: crate::SyncJoinMode,
+    ) -> Result<(), AppError> {
+        self.write_replica_profile(
+            profile,
+            matches!(mode, crate::SyncJoinMode::NewRecords),
+            Some(mode),
+        )
+    }
+
+    fn write_replica_profile(
+        &mut self,
+        profile: String,
+        from_now: bool,
+        join: Option<crate::SyncJoinMode>,
+    ) -> Result<(), AppError> {
         if profile.len() > 16384 {
             return Err(invalid());
         }
         let tx = self.connection.transaction()?;
+        if join.is_some() && enrolled(&tx)? {
+            return Err(AppError::new(ErrorCode::Conflict));
+        }
+        if matches!(join, Some(crate::SyncJoinMode::Replace)) {
+            // Delete before enrolling so local removals never become group tombstones.
+            tx.execute_batch("DELETE FROM clips; DELETE FROM collections;")?;
+        }
         enroll(&tx, from_now)?;
         tx.execute(
             "UPDATE replica_state SET profile=?1 WHERE singleton=1",

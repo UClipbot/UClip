@@ -28,7 +28,18 @@ pub async fn update_sync(
 #[tauri::command]
 pub async fn sync_pairing_code(state: State<'_, AppState>) -> Result<String, AppError> {
     let sync = state.sync.as_ref().map_err(Clone::clone)?.clone();
-    tauri::async_runtime::spawn_blocking(move || sync.pairing_code())
+    tauri::async_runtime::spawn_blocking(move || sync.start_pairing())
+        .await
+        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+}
+
+#[tauri::command]
+pub async fn prepare_sync_join(
+    state: State<'_, AppState>,
+    code: String,
+) -> Result<uclip_core::SyncJoinPreview, AppError> {
+    let sync = state.sync.as_ref().map_err(Clone::clone)?.clone();
+    tauri::async_runtime::spawn_blocking(move || sync.prepare_join(&code))
         .await
         .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
 }
