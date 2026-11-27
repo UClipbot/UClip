@@ -508,6 +508,13 @@ impl SyncService {
     }
 
     pub fn status(&self) -> Result<SyncStatus, AppError> {
+        let mut status = self.live_status()?;
+        (status.capacity, status.local_only_records) = Self::usage(&self.core, status.paired)?;
+        Ok(status)
+    }
+
+    /// Read the sync workers' state without waiting for the history database.
+    pub fn live_status(&self) -> Result<SyncStatus, AppError> {
         let state = self.runtime.lock().map_err(|_| storage())?;
         let (role, peers, last_sync, lan_error) = match &state.lan {
             Some(Ok(lan)) => {
@@ -538,8 +545,6 @@ impl SyncService {
             .pairing_offer
             .lock()
             .is_ok_and(|offer| offer.as_ref().is_some_and(pairing::Offer::active));
-        drop(state);
-        let (capacity, local_only_records) = Self::usage(&self.core, paired)?;
         Ok(SyncStatus {
             paired,
             pairing_active,
@@ -554,8 +559,8 @@ impl SyncService {
             remote_progress,
             remote_last_sync: remote_success.map(|(time, _)| time.to_string()),
             remote_synced_records: remote_success.map(|(_, records)| records),
-            local_only_records,
-            capacity,
+            local_only_records: None,
+            capacity: None,
             remote_error,
         })
     }

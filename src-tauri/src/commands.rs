@@ -7,11 +7,32 @@ use uclip_core::{
 use crate::{paths::DATA_PROFILE, platform, AppState};
 
 #[tauri::command]
-pub async fn sync_status(state: State<'_, AppState>) -> Result<uclip_core::SyncStatus, AppError> {
+pub async fn sync_status(
+    state: State<'_, AppState>,
+    include_usage: Option<bool>,
+) -> Result<uclip_core::SyncStatus, AppError> {
     let sync = state.sync.as_ref().map_err(Clone::clone)?.clone();
-    tauri::async_runtime::spawn_blocking(move || sync.status())
+    tauri::async_runtime::spawn_blocking(move || {
+        if include_usage.unwrap_or(true) {
+            sync.status()
+        } else {
+            sync.live_status()
+        }
+    })
+    .await
+    .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
+}
+
+#[tauri::command]
+pub async fn sync_history_usage(
+    state: State<'_, AppState>,
+) -> Result<(uclip_core::SyncCapacity, u32), AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .replica_usage()
         .await
-        .map_err(|_| AppError::new(uclip_core::ErrorCode::Unavailable))?
 }
 
 #[tauri::command]

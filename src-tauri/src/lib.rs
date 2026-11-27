@@ -98,6 +98,7 @@ pub fn run() {
             commands::bootstrap,
             commands::get_settings,
             commands::sync_status,
+            commands::sync_history_usage,
             commands::update_sync,
             commands::sync_pairing_code,
             commands::prepare_sync_join,

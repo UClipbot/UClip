@@ -4,6 +4,7 @@ fn main() {
             "bootstrap",
             "get_settings",
             "sync_status",
+            "sync_history_usage",
             "update_sync",
             "sync_pairing_code",
             "prepare_sync_join",

@@ -2485,7 +2485,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                         : t('the_browser_remembers_language_and_appearance_preferences'))}
                 </p>
               </section>
-              {settingsWindow && settingsPage === 'sync' && <SyncSettings />}
+              {settingsWindow && <SyncSettings active={settingsPage === 'sync'} />}
               {settingsWindow ? (
                 settingsPage === 'about' && (
                   <AboutSettings native version={appearance.snapshot?.appVersion} />

@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type {
+  SyncCapacity,
   SyncJoinMode,
   SyncJoinPreview,
   SyncRemoteInput,
@@ -40,52 +41,124 @@ function remoteProgressLabel(progress: SyncRemoteProgress) {
   }
 }
 
-export function SyncSettings() {
+type SyncOperation = () => Promise<void>;
+
+export function SyncSettings({ active }: { active: boolean }) {
   const [status, setStatus] = useState<SyncStatus | null>(null);
-  const [code, setCode] = useState('');
-  const [visibleCode, setVisibleCode] = useState('');
-  const [pendingJoin, setPendingJoin] = useState<SyncJoinPreview | null>(null);
-  const [confirmReplace, setConfirmReplace] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [historyOverLimit, setHistoryOverLimit] = useState<'create' | 'join' | null>(null);
   const [loadingError, setLoadingError] = useState('');
-  const [directoryState, setDirectoryState] = useState<'idle' | 'opening' | 'failed'>('idle');
-  const [kind, setKind] = useState<RemoteKind>('off');
-  const [initialized, setInitialized] = useState(false);
+  const [usageError, setUsageError] = useState('');
+  const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const saving = useRef(false);
+  const needsStatus = active || !status;
+  const readsUsage = active && !!status?.paired;
 
   useEffect(() => {
+    if (!needsStatus || busy) return;
     let running = true;
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
       const requested = generation.current;
       const current = () => running && !saving.current && requested === generation.current;
       try {
-        const next = await invoke<SyncStatus>('sync_status');
+        const next = await invoke<SyncStatus>('sync_status', { includeUsage: false });
         if (current()) {
-          setStatus(next);
+          setStatus((previous) => ({
+            ...next,
+            capacity: next.paired ? (previous?.capacity ?? null) : null,
+            localOnlyRecords: next.paired ? (previous?.localOnlyRecords ?? null) : null,
+          }));
           setLoadingError('');
         }
       } catch (failure) {
         if (current()) setLoadingError(safeError(failure).message);
       }
-      if (running) timer = setTimeout(refresh, 1200);
+      if (running && active) timer = setTimeout(refresh, 1200);
     };
     void refresh();
     return () => {
       running = false;
       clearTimeout(timer);
     };
-  }, []);
+  }, [active, busy, needsStatus]);
 
   useEffect(() => {
-    if (status && !initialized) {
-      setKind(status.remote?.kind ?? 'off');
-      setInitialized(true);
+    if (!readsUsage || busy) return;
+    let running = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      const requested = generation.current;
+      const current = () => running && !saving.current && requested === generation.current;
+      try {
+        const [capacity, localOnlyRecords] =
+          await invoke<[SyncCapacity, number]>('sync_history_usage');
+        if (current()) {
+          setStatus((previous) =>
+            previous?.paired ? { ...previous, capacity, localOnlyRecords } : previous,
+          );
+          setUsageError('');
+        }
+      } catch (failure) {
+        if (current()) setUsageError(safeError(failure).message);
+      }
+      if (running) timer = setTimeout(refresh, 6000);
+    };
+    void refresh();
+    return () => {
+      running = false;
+      clearTimeout(timer);
+    };
+  }, [busy, readsUsage]);
+
+  async function run(operation: SyncOperation) {
+    if (saving.current) return;
+    saving.current = true;
+    generation.current++;
+    setBusy(true);
+    try {
+      await operation();
+    } finally {
+      saving.current = false;
+      setBusy(false);
     }
-  }, [initialized, status]);
+  }
+
+  return active ? (
+    <SyncSettingsForm
+      status={status}
+      setStatus={setStatus}
+      loadingError={loadingError}
+      usageError={usageError}
+      busy={busy}
+      run={run}
+    />
+  ) : null;
+}
+
+function SyncSettingsForm({
+  status,
+  setStatus,
+  loadingError,
+  usageError,
+  busy,
+  run,
+}: {
+  status: SyncStatus | null;
+  setStatus: Dispatch<SetStateAction<SyncStatus | null>>;
+  loadingError: string;
+  usageError: string;
+  busy: boolean;
+  run: (operation: SyncOperation) => Promise<void>;
+}) {
+  const [code, setCode] = useState('');
+  const [visibleCode, setVisibleCode] = useState('');
+  const [pendingJoin, setPendingJoin] = useState<SyncJoinPreview | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [error, setError] = useState('');
+  const [historyOverLimit, setHistoryOverLimit] = useState<'create' | 'join' | null>(null);
+  const [directoryState, setDirectoryState] = useState<'idle' | 'opening' | 'failed'>('idle');
+  const [kindOverride, setKind] = useState<RemoteKind | null>(null);
+  const kind = kindOverride ?? status?.remote?.kind ?? 'off';
 
   useEffect(() => {
     if (!visibleCode) return;
@@ -97,32 +170,26 @@ export function SyncSettings() {
     if (!status?.pairingActive) setVisibleCode('');
   }, [status?.pairingActive]);
 
-  async function perform(operation: () => Promise<void>, request?: UpdateSync) {
-    if (saving.current) return;
-    saving.current = true;
-    generation.current++;
-    setBusy(true);
-    setError('');
-    try {
-      await operation();
-    } catch (failure) {
-      const reason = safeError(failure);
-      const merge = request?.action === 'finish_join' && request.mode === 'merge';
-      if ((request?.action === 'create' || merge) && reason.code === 'limit_exceeded') {
-        setHistoryOverLimit(merge ? 'join' : 'create');
-        setError('sync_existing_history_over_limit');
-      } else if (request?.action === 'finish_join' && reason.code === 'sync_authentication') {
-        setPendingJoin(null);
-        setConfirmReplace(false);
-        setError('sync_pairing_failed');
-      } else {
-        setError(reason.message);
+  const perform = (operation: SyncOperation, request?: UpdateSync) =>
+    run(async () => {
+      setError('');
+      try {
+        await operation();
+      } catch (failure) {
+        const reason = safeError(failure);
+        const merge = request?.action === 'finish_join' && request.mode === 'merge';
+        if ((request?.action === 'create' || merge) && reason.code === 'limit_exceeded') {
+          setHistoryOverLimit(merge ? 'join' : 'create');
+          setError('sync_existing_history_over_limit');
+        } else if (request?.action === 'finish_join' && reason.code === 'sync_authentication') {
+          setPendingJoin(null);
+          setConfirmReplace(false);
+          setError('sync_pairing_failed');
+        } else {
+          setError(reason.message);
+        }
       }
-    } finally {
-      saving.current = false;
-      setBusy(false);
-    }
-  }
+    });
 
   const update = (request: UpdateSync) =>
     perform(async () => {
@@ -135,7 +202,7 @@ export function SyncSettings() {
       }
       if (request.action === 'finish_join') {
         setCode('');
-        setKind(next.remote?.kind ?? 'off');
+        setKind(null);
       }
       if (
         request.action === 'stop_pairing' ||
@@ -196,7 +263,7 @@ export function SyncSettings() {
   const progress = status?.remoteProgress;
   const countedProgress = progress && 'total' in progress ? progress : null;
   const pairingError = error === 'sync_pairing_start_failed';
-  const settingsError = (pairingError ? '' : error) || loadingError;
+  const settingsError = (pairingError ? '' : error) || loadingError || (capacity ? usageError : '');
   const lanError = status?.lanError;
   const lanErrorMessage =
     lanError &&
@@ -241,18 +308,25 @@ export function SyncSettings() {
           {t('sync_history_backup_saved_0', { 0: status.historyBackupFolder })}
         </p>
       )}
-      {capacity && (
+      {status?.paired && (
         <div className="sync-capacity">
-          <span id="sync-capacity-label" className="settings-feedback">
-            {t('sync_history_usage_0_1', {
-              0: formatBytes(capacity.usedBytes),
-              1: formatBytes(capacity.limitBytes),
-            })}
+          <span
+            id="sync-capacity-label"
+            className="settings-feedback"
+            role={!capacity && usageError ? 'alert' : undefined}
+          >
+            {capacity
+              ? t('sync_history_usage_0_1', {
+                  0: formatBytes(capacity.usedBytes),
+                  1: formatBytes(capacity.limitBytes),
+                })
+              : t(usageError || 'sync_history_usage_loading')}
           </span>
           <meter
             aria-labelledby="sync-capacity-label"
-            value={capacity.usedBytes}
-            max={capacity.limitBytes}
+            aria-hidden={!capacity}
+            value={capacity?.usedBytes ?? 0}
+            max={capacity?.limitBytes ?? 1}
           />
         </div>
       )}
