@@ -57,6 +57,7 @@ fn names_are_bounded_unique_and_renaming_preserves_identity_and_membership() {
     }
     let a = category(&mut s, "  Work 🦀  ");
     assert_eq!(a.name, "Work 🦀");
+    assert_eq!(a.item_count, 0);
     assert_eq!(
         s.create_collection(CreateCollection {
             name: "work 🦀".into()
@@ -77,6 +78,7 @@ fn names_are_bounded_unique_and_renaming_preserves_identity_and_membership() {
         })
         .unwrap();
     assert_eq!(renamed.id, a.id);
+    assert_eq!(renamed.item_count, 1);
     assert_eq!(s.history(query(Some(&a.id))).unwrap().items[0].id, id);
     assert_eq!(
         s.rename_collection(RenameCollection {
@@ -123,6 +125,15 @@ fn moving_keeps_identity_pin_and_order_and_copying_creates_unpinned_independent_
     let mut s = Storage::open(&dir.path().join("collections.sqlite3")).unwrap();
     let a = category(&mut s, "A");
     let b = category(&mut s, "B");
+    let counts = |storage: &Storage| {
+        storage
+            .collections()
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.item_count)
+            .collect::<Vec<_>>()
+    };
     let source = s.create_text("正文 🦀\n  ".into()).unwrap();
     let original = s.history(query(None)).unwrap().items[0].clone();
     s.change_clip_pin(ChangeClipPin {
@@ -136,6 +147,7 @@ fn moving_keeps_identity_pin_and_order_and_copying_creates_unpinned_independent_
     let first = s.history(query(Some(&a.id))).unwrap().items[0].clone();
     assert!(first.pinned);
     assert_eq!(first.captured_at, original.captured_at);
+    assert_eq!(counts(&s), [1, 0]);
     let copied = transfer(
         &mut s,
         &source,
@@ -147,6 +159,7 @@ fn moving_keeps_identity_pin_and_order_and_copying_creates_unpinned_independent_
     assert_ne!(copied.id, source);
     let second = s.history(query(Some(&b.id))).unwrap().items[0].clone();
     assert!(second.manual && !second.pinned);
+    assert_eq!(counts(&s), [1, 1]);
     assert_eq!(
         s.read_clip(&source).unwrap(),
         s.read_clip(&copied.id).unwrap()
@@ -159,12 +172,28 @@ fn moving_keeps_identity_pin_and_order_and_copying_creates_unpinned_independent_
     assert_eq!(detached.id, source);
     assert_eq!(s.history(query(Some(&a.id))).unwrap().total, 0);
     assert_eq!(s.history(query(None)).unwrap().total, 2);
+    assert_eq!(counts(&s), [0, 1]);
     assert_eq!(
         transfer(&mut s, &source, "1", Some(&b.id), TransferMode::Move)
             .unwrap_err()
             .code,
         ErrorCode::Conflict
     );
+    let deleted = s
+        .change_clip_deletion(ChangeClipDeletion {
+            id: second.id.clone(),
+            expected_revision: second.revision,
+            deleted: true,
+        })
+        .unwrap();
+    assert_eq!(counts(&s), [0, 0]);
+    s.change_clip_deletion(ChangeClipDeletion {
+        id: second.id,
+        expected_revision: deleted.revision,
+        deleted: false,
+    })
+    .unwrap();
+    assert_eq!(counts(&s), [0, 1]);
 }
 
 #[test]

@@ -143,6 +143,7 @@ export function useHistory(
   const [mutating, setMutating] = useState(false);
   const [historyDeletion, setHistoryDeletion] = useState<HistoryDeletion>();
   const statusGeneration = useRef(0);
+  const collectionsRevision = useRef<string>(undefined);
   const mutation = useRef(false);
   const mounted = useRef(true);
   const cache = useRef(new Map<string, string>());
@@ -190,19 +191,20 @@ export function useHistory(
   const refresh = useCallback(async () => {
     if (!native || mutation.current) return;
     const generation = ++statusGeneration.current;
+    const current = () => mounted.current && generation === statusGeneration.current;
     try {
-      const [next, categories] = await Promise.all([
-        invoke<ClipboardStatus>('clipboard_status'),
-        settingsOnly ? Promise.resolve(null) : invoke<CollectionsSnapshot>('collections_list'),
-      ]);
-      if (mounted.current && generation === statusGeneration.current) {
-        setStatus(next);
+      const next = await invoke<ClipboardStatus>('clipboard_status');
+      if (!current()) return;
+      setStatus(next);
+      if (!settingsOnly && collectionsRevision.current !== next.historyRevision) {
+        const categories = await invoke<CollectionsSnapshot>('collections_list');
+        if (!current()) return;
+        collectionsRevision.current = categories.revision;
         setCollections(categories);
-        setStatusError('');
       }
+      setStatusError('');
     } catch (error) {
-      if (mounted.current && generation === statusGeneration.current)
-        setStatusError(safeError(error).message);
+      if (current()) setStatusError(safeError(error).message);
     }
   }, [native, settingsOnly]);
   useEffect(() => {

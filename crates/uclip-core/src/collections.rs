@@ -40,8 +40,11 @@ pub(crate) fn ensure_collection(connection: &Connection, id: &str) -> Result<(),
 
 impl Storage {
     pub fn collections(&self) -> Result<CollectionsSnapshot, AppError> {
-        let mut statement = self.connection.prepare(
-            "SELECT id,name,revision FROM collections WHERE deleted=0 ORDER BY sequence,id",
+        let snapshot = self.connection.unchecked_transaction()?;
+        let mut statement = snapshot.prepare(
+            "SELECT c.id,c.name,c.revision,
+                    (SELECT count(*) FROM clips WHERE collection=c.id AND deleted=0)
+             FROM collections c WHERE c.deleted=0 ORDER BY c.sequence,c.id",
         )?;
         let items = statement
             .query_map([], |r| {
@@ -49,6 +52,7 @@ impl Storage {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     revision: r.get::<_, i64>(2)?.to_string(),
+                    item_count: r.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -94,6 +98,7 @@ impl Storage {
             id,
             name,
             revision: "0".into(),
+            item_count: 0,
         })
     }
 
@@ -128,11 +133,17 @@ impl Storage {
             "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
             [],
         )?;
+        let item_count = tx.query_row(
+            "SELECT count(*) FROM clips WHERE collection=?1 AND deleted=0",
+            [&request.id],
+            |row| row.get(0),
+        )?;
         tx.commit()?;
         Ok(CollectionItem {
             id: request.id,
             name,
             revision: (revision + 1).to_string(),
+            item_count,
         })
     }
 

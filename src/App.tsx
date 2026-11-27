@@ -1,4 +1,4 @@
-import { t, formatHistoryTime } from './i18n';
+import { t, formatHistoryTime, getLocale } from './i18n';
 import { selectionRange } from './platform/selection';
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { WindowResizeGrip } from './components/WindowResizeGrip';
@@ -50,7 +50,7 @@ import type {
 } from './generated/contracts';
 
 type Toast = { message: string; undo?: () => void };
-type Menu = { anchor: HTMLElement; clipId?: string };
+type Menu = { anchor: HTMLElement; clipId?: string; collectionId?: string };
 type AppView = View | `collection:${string}`;
 type AppModal =
   | 'settings'
@@ -84,7 +84,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   const [oldest, setOldest] = useState(false);
   const [grid, setGrid] = useState(false);
   const [collectionsOpen, setCollectionsOpen] = useState(false);
-  const [collectionWidth, setCollectionWidth] = useState(168);
+  const [collectionWidth, setCollectionWidth] = useState(184);
   const [selectedId, setSelectedId] = useState('note-1');
   const [selection, setSelection] = useState<{
     scope: string;
@@ -175,14 +175,19 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
     settingsWindow,
   );
   const currentCollection = live.collections.find((item) => item.id === nativeCollectionId);
-  const scopeOptions = appearance.native
-    ? [
-        { value: 'all', label: t('all_history') },
-        { value: 'pinned', label: t('pinned') },
-        ...live.collections.map((item) => ({ value: `collection:${item.id}`, label: item.name })),
-        { value: 'trash', label: t('trash') },
-      ]
-    : Object.entries(viewTitles).map(([value, label]) => ({ value, label: t(label) }));
+  const scopeOptions: { value: string; label: string; collection?: CollectionItem }[] =
+    appearance.native
+      ? [
+          { value: 'all', label: t('all_history') },
+          { value: 'pinned', label: t('pinned') },
+          ...live.collections.map((collection) => ({
+            value: `collection:${collection.id}`,
+            label: collection.name,
+            collection,
+          })),
+          { value: 'trash', label: t('trash') },
+        ]
+      : Object.entries(viewTitles).map(([value, label]) => ({ value, label: t(label) }));
   const demoResult = useClipQuery(
     clips,
     appearance.native ? 'all' : (view as View),
@@ -468,6 +473,9 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
         }
       : previewBase;
   const menuClip = menu?.clipId ? result.items.find((clip) => clip.id === menu.clipId) : undefined;
+  const menuCollection = menu?.collectionId
+    ? live.collections.find((collection) => collection.id === menu.collectionId)
+    : undefined;
   useEffect(() => {
     if (menu && !menu.anchor.isConnected) setMenu(null);
   });
@@ -724,6 +732,35 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
     setCollectionError('');
     openModal('collection');
   }
+  function collectionActions(collection: CollectionItem, current = false) {
+    return (
+      <>
+        <button
+          role="menuitem"
+          data-testid="rename-collection"
+          disabled={live.mutating}
+          onClick={() => openCollectionEditor(collection)}
+        >
+          <Icon name="folder" size={15} />
+          {t(current ? 'rename_current_collection' : 'rename_collection')}
+        </button>
+        <button
+          role="menuitem"
+          data-testid="delete-collection"
+          className="destructive"
+          disabled={live.mutating}
+          onClick={() => {
+            setEditingCollection(collection);
+            setCollectionError('');
+            openModal('delete-collection');
+          }}
+        >
+          <Icon name="trash" size={15} />
+          {t(current ? 'delete_current_collection' : 'delete_collection')}
+        </button>
+      </>
+    );
+  }
   async function saveCollection(event: FormEvent) {
     event.preventDefault();
     if (live.mutating) return;
@@ -756,8 +793,10 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
         id: editingCollection.id,
         expectedRevision: editingCollection.revision,
       });
-      clearFilters();
-      setPreview(null);
+      if (editingCollection.id === nativeCollectionId) {
+        clearFilters();
+        setPreview(null);
+      }
       closeModal();
       setToast({ message: t('collection_deleted_records', { 0: count }) });
     } catch (error) {
@@ -863,7 +902,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
   }, [toast]);
   useEffect(() => {
     if (preview && !previewClip && !result.pending) closePreview();
-    if (menu?.clipId && !menuClip) setMenu(null);
+    if ((menu?.clipId && !menuClip) || (menu?.collectionId && !menuCollection)) setMenu(null);
   });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -1244,36 +1283,81 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               className="collection-sidebar"
               style={{ '--collection-width': `${collectionWidth}px` } as CSSProperties}
             >
+              <div className="collection-sidebar-heading">
+                <span>{t('collections')}</span>
+                <button
+                  className="icon-button collection-sidebar-action"
+                  type="button"
+                  aria-label={t('new_collection')}
+                  title={t('new_collection')}
+                  disabled={live.mutating}
+                  onClick={() => openCollectionEditor(null)}
+                >
+                  <Icon name="plus" size={16} />
+                </button>
+              </div>
               <div className="collection-sidebar-items">
-                {scopeOptions.map(({ value, label }) => (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-current={view === value ? 'page' : undefined}
-                    title={label}
-                    onClick={() => setView(value as AppView)}
-                  >
-                    <Icon
-                      name={
-                        value === 'all'
-                          ? 'history'
-                          : value === 'trash'
-                            ? 'trash'
-                            : value === 'pinned'
-                              ? 'pin'
-                              : 'folder'
-                      }
-                      size={15}
-                    />
-                    <span>{label}</span>
-                  </button>
+                {scopeOptions.map(({ value, label, collection }) => (
+                  <div className="collection-sidebar-row" key={value}>
+                    <button
+                      className="collection-sidebar-link"
+                      type="button"
+                      aria-current={view === value ? 'page' : undefined}
+                      title={label}
+                      onClick={() => setView(value as AppView)}
+                    >
+                      <Icon
+                        name={
+                          value === 'all'
+                            ? 'history'
+                            : value === 'trash'
+                              ? 'trash'
+                              : value === 'pinned'
+                                ? 'pin'
+                                : 'folder'
+                        }
+                        size={15}
+                      />
+                      <span className="collection-sidebar-name">{label}</span>
+                      {collection && (
+                        <>
+                          <span className="collection-sidebar-count" aria-hidden="true">
+                            {collection.itemCount.toLocaleString(getLocale())}
+                          </span>
+                          <span className="sr-only">
+                            {t('0_records', { 0: collection.itemCount })}
+                          </span>
+                        </>
+                      )}
+                    </button>
+                    {collection && (
+                      <button
+                        className="icon-button collection-sidebar-action"
+                        type="button"
+                        aria-label={t('collection_options_0', { 0: label })}
+                        title={t('collection_options_0', { 0: label })}
+                        aria-haspopup="menu"
+                        aria-expanded={menu?.collectionId === collection.id}
+                        disabled={live.mutating}
+                        onClick={(event) =>
+                          setMenu(
+                            menu?.anchor === event.currentTarget
+                              ? null
+                              : { anchor: event.currentTarget, collectionId: collection.id },
+                          )
+                        }
+                      >
+                        <Icon name="more" size={16} />
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
               <input
                 aria-label={t('collection_sidebar_width')}
                 title={t('collection_sidebar_width')}
                 type="range"
-                min={128}
+                min={156}
                 max={280}
                 value={collectionWidth}
                 onChange={(event) => setCollectionWidth(Number(event.target.value))}
@@ -1619,7 +1703,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               className="icon-button app-more"
               aria-label={t('more_options')}
               aria-haspopup="menu"
-              aria-expanded={!!menu && !menu.clipId}
+              aria-expanded={!!menu && !menu.clipId && !menu.collectionId}
               onClick={(event) => openMenu(event.currentTarget)}
             >
               <Icon name="more" size={20} />
@@ -1627,9 +1711,11 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
           </div>
         </footer>
       </div>
-      {menu && (
+      {menu && (!menu.collectionId || menuCollection) && (
         <ActionMenu anchor={menu.anchor} onClose={() => setMenu(null)}>
-          {menuClip ? (
+          {menuCollection ? (
+            collectionActions(menuCollection)
+          ) : menuClip ? (
             <>
               {selectedClips.length <= 1 && (
                 <>
@@ -1781,33 +1867,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                     <Icon name="folder" size={15} />
                     {t('new_collection')}
                   </button>
-                  {currentCollection && (
-                    <>
-                      <button
-                        role="menuitem"
-                        data-testid="rename-collection"
-                        disabled={live.mutating}
-                        onClick={() => menuAction(() => openCollectionEditor(currentCollection))}
-                      >
-                        <Icon name="folder" size={15} />
-                        {t('rename_current_collection')}
-                      </button>
-                      <button
-                        role="menuitem"
-                        data-testid="delete-collection"
-                        className="destructive"
-                        disabled={live.mutating}
-                        onClick={() => {
-                          setEditingCollection(currentCollection);
-                          setCollectionError('');
-                          openModal('delete-collection');
-                        }}
-                      >
-                        <Icon name="trash" size={15} />
-                        {t('delete_current_collection')}
-                      </button>
-                    </>
-                  )}
+                  {currentCollection && collectionActions(currentCollection, true)}
                 </>
               )}
               {appearance.native && view === 'pinned' && (
@@ -1952,7 +2012,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
       )}
       {modal === 'delete-collection' && editingCollection && (
         <Modal
-          title={t('delete_current_collection')}
+          title={t('delete_collection')}
           description={t('collection_delete_confirmation', { 0: editingCollection.name })}
           onClose={() => {
             if (!live.mutating) closeModal();

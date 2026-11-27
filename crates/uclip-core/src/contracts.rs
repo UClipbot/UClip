@@ -367,6 +367,7 @@ pub struct CollectionItem {
     pub id: String,
     pub name: String,
     pub revision: String,
+    pub item_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
