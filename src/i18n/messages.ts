@@ -20,6 +20,8 @@ export const english = {
   sync_code_privacy:
     'This 8-digit code expires after two minutes or one successful pairing. The receiving device gets the sync key and any saved WebDAV or SFTP credentials.',
   sync_verify_pairing_code: 'Verify pairing code',
+  sync_pairing_start_failed:
+    'Could not start pairing. Check your local network connection and try again.',
   sync_pairing_failed:
     'Pairing failed. Check the code and make sure both devices are on the same network. Generate a new code if it expired.',
   sync_pairing_verified: 'Code verified. Choose what to do with this device’s clipboard history.',
@@ -36,6 +38,9 @@ export const english = {
   sync_lan_enabled: 'Sync and receive files on the local network',
   sync_lan_off: 'Local network sync is off.',
   sync_lan_discovering: 'Looking for paired devices…',
+  sync_lan_start_failed:
+    'Could not start local network discovery. Check your connection, then turn local network sync off and back on.',
+  sync_lan_connection_failed: 'Could not connect to the local network host.',
   sync_lan_host: 'Hosting on this device · {0} nearby',
   sync_lan_client: 'Syncing with the local network host · {0} nearby',
   sync_last_0: 'Last sync {0}',
@@ -469,6 +474,7 @@ export const chinese: Record<keyof typeof english, string> = {
   sync_code_privacy:
     '8 位配对码在两分钟后或配对成功后失效。接收设备将获得同步密钥和已保存的 WebDAV 或 SFTP 凭据。',
   sync_verify_pairing_code: '验证配对码',
+  sync_pairing_start_failed: '无法开始配对。请检查局域网连接后重试。',
   sync_pairing_failed:
     '配对失败。请检查配对码，并确认两台设备连接到同一局域网。配对码过期时请重新生成。',
   sync_pairing_verified: '配对码已验证。请选择如何处理此设备的剪贴板历史。',
@@ -484,6 +490,8 @@ export const chinese: Record<keyof typeof english, string> = {
   sync_lan_enabled: '在局域网同步和接收文件',
   sync_lan_off: '局域网同步已关闭。',
   sync_lan_discovering: '正在查找已配对设备…',
+  sync_lan_start_failed: '无法启动局域网发现。请检查网络连接，再关闭并重新开启局域网同步。',
+  sync_lan_connection_failed: '无法连接局域网主机。',
   sync_lan_host: '本机担任主机 · 附近 {0} 台设备',
   sync_lan_client: '正在与局域网主机同步 · 附近 {0} 台设备',
   sync_last_0: '上次同步 {0}',

@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     io::{Read, Write},
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -15,7 +15,7 @@ use spake2::{Ed25519Group, Identity, Password, Spake2};
 use uclip_core::{AppError, ErrorCode};
 
 use super::{
-    lan::{derive, discovery_socket, GROUP, PORT},
+    lan::{derive, discovery_sockets, DISCOVERY_BUFFER_SIZE, DISCOVERY_PORTS, GROUP},
     transport::{invalid, unavailable},
     wire::Wire,
     Profile,
@@ -27,6 +27,7 @@ const MAX_ATTEMPTS: usize = 8;
 const MAX_OFFERS: usize = 6;
 const MAX_PROFILE: usize = 16_384;
 const OFFER_LIFETIME: Duration = Duration::from_secs(120);
+const ANNOUNCE: Duration = Duration::from_millis(200);
 const DISCOVERY_TIME: Duration = Duration::from_millis(900);
 const TICK: Duration = Duration::from_millis(50);
 
@@ -117,16 +118,29 @@ fn send_profile(wire: &mut Wire, profile: &Profile, stop: &AtomicBool, expires: 
     }
 }
 
+fn advertise(udp: &UdpSocket, packet: &[u8]) -> bool {
+    let mut sent = false;
+    for port in DISCOVERY_PORTS {
+        sent |= udp.send_to(packet, SocketAddrV4::new(GROUP, port)).is_ok();
+    }
+    sent
+}
+
 pub(super) fn start(profile: Profile) -> Result<(Offer, String), AppError> {
     let pin = pin()?;
     let secret = pin.clone();
     let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).map_err(|_| unavailable())?;
     listener.set_nonblocking(true).map_err(|_| unavailable())?;
     let port = listener.local_addr().map_err(|_| unavailable())?.port();
-    let udp = discovery_socket(PORT).map_err(|_| unavailable())?;
+    // The offer only sends UDP announcements. Leave the discovery ports to receivers.
+    let udp = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).map_err(|_| unavailable())?;
+    udp.set_nonblocking(true).map_err(|_| unavailable())?;
     let mut packet = [0; OFFER_BYTES];
     packet[..OFFER.len()].copy_from_slice(OFFER);
     packet[OFFER.len()..].copy_from_slice(&port.to_be_bytes());
+    if !advertise(&udp, &packet) {
+        return Err(unavailable());
+    }
     let cancelled = Arc::new(AtomicBool::new(false));
     let stop = cancelled.clone();
     let profile = Arc::new(profile);
@@ -134,15 +148,14 @@ pub(super) fn start(profile: Profile) -> Result<(Offer, String), AppError> {
     thread::Builder::new()
         .name("uclip-pairing-offer".into())
         .spawn(move || {
-            let group = SocketAddrV4::new(GROUP, PORT);
-            let mut announce = Instant::now();
+            let mut announce = Instant::now() + ANNOUNCE;
             let mut attempts = 0;
             let sending = Arc::new(Mutex::new(()));
             while !stop.load(Ordering::Acquire) && Instant::now() < expires {
                 if attempts < MAX_ATTEMPTS {
                     if Instant::now() >= announce {
-                        let _ = udp.send_to(&packet, group);
-                        announce = Instant::now() + Duration::from_millis(200);
+                        advertise(&udp, &packet);
+                        announce = Instant::now() + ANNOUNCE;
                     }
                     if let Ok((stream, _)) = listener.accept() {
                         attempts += 1;
@@ -183,27 +196,40 @@ pub(super) fn start(profile: Profile) -> Result<(Offer, String), AppError> {
     ))
 }
 
+fn discover_offers(sockets: &[(UdpSocket, SocketAddrV4)]) -> HashSet<SocketAddr> {
+    let mut endpoints = HashSet::new();
+    let expires = Instant::now() + DISCOVERY_TIME;
+    let mut packet = [0; DISCOVERY_BUFFER_SIZE];
+    'discovery: while Instant::now() < expires {
+        for (udp, _) in sockets {
+            for _ in 0..64 {
+                let Ok((length, source)) = udp.recv_from(&mut packet) else {
+                    break;
+                };
+                if length != OFFER_BYTES || !source.is_ipv4() || !packet.starts_with(OFFER) {
+                    continue;
+                }
+                let port = u16::from_be_bytes([packet[OFFER.len()], packet[OFFER.len() + 1]]);
+                if port != 0 {
+                    endpoints.insert(SocketAddr::new(source.ip(), port));
+                    if endpoints.len() == MAX_OFFERS {
+                        break 'discovery;
+                    }
+                }
+            }
+        }
+        thread::sleep(TICK);
+    }
+    endpoints
+}
+
 pub(super) fn receive(pin: &str) -> Result<Profile, AppError> {
     if pin.len() != 8 || !pin.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(invalid());
     }
-    let udp = discovery_socket(PORT).map_err(|_| unavailable())?;
-    let mut endpoints = HashSet::new();
-    let expires = Instant::now() + DISCOVERY_TIME;
-    while Instant::now() < expires && endpoints.len() < MAX_OFFERS {
-        let mut packet = [0; OFFER_BYTES + 1];
-        match udp.recv_from(&mut packet) {
-            Ok((OFFER_BYTES, source)) if source.is_ipv4() && packet.starts_with(OFFER) => {
-                let port = u16::from_be_bytes([packet[OFFER.len()], packet[OFFER.len() + 1]]);
-                if port != 0 {
-                    endpoints.insert(SocketAddr::new(source.ip(), port));
-                }
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(TICK),
-            Err(_) => return Err(unavailable()),
-        }
-    }
+    let sockets = discovery_sockets(DISCOVERY_PORTS).map_err(|_| unavailable())?;
+    let endpoints = discover_offers(&sockets);
+    drop(sockets);
     if endpoints.is_empty() {
         return Err(unavailable());
     }
@@ -222,6 +248,27 @@ pub(super) fn receive(pin: &str) -> Result<Profile, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_ignores_longer_datagrams_before_a_valid_offer() {
+        let udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        udp.set_nonblocking(true).unwrap();
+        let SocketAddr::V4(address) = udp.local_addr().unwrap() else {
+            panic!("expected an IPv4 socket");
+        };
+        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let mut packet = [0; 128];
+        packet[..OFFER.len()].copy_from_slice(OFFER);
+        packet[OFFER.len()..OFFER_BYTES].copy_from_slice(&1234_u16.to_be_bytes());
+        sender.send_to(&packet, address).unwrap();
+        packet[OFFER.len()..OFFER_BYTES].copy_from_slice(&5678_u16.to_be_bytes());
+        sender.send_to(&packet[..OFFER_BYTES], address).unwrap();
+
+        assert_eq!(
+            discover_offers(&[(udp, address)]),
+            HashSet::from([SocketAddr::from((Ipv4Addr::LOCALHOST, 5678))])
+        );
+    }
 
     #[test]
     fn the_encrypted_channel_requires_the_same_pin() {

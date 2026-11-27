@@ -146,6 +146,19 @@ export function SyncSettings() {
       }
     }, request);
 
+  function generatePairingCode() {
+    return perform(async () => {
+      try {
+        const nextCode = await invoke<string>('sync_pairing_code');
+        setStatus((current) => (current ? { ...current, pairingActive: true } : current));
+        setVisibleCode(nextCode);
+      } catch (failure) {
+        if (safeError(failure).code !== 'sync_connection') throw failure;
+        setError('sync_pairing_start_failed');
+      }
+    });
+  }
+
   function prepareJoin() {
     return perform(async () => {
       try {
@@ -182,6 +195,16 @@ export function SyncSettings() {
   const capacity = status?.capacity;
   const progress = status?.remoteProgress;
   const countedProgress = progress && 'total' in progress ? progress : null;
+  const pairingError = error === 'sync_pairing_start_failed';
+  const settingsError = (pairingError ? '' : error) || loadingError;
+  const lanError = status?.lanError;
+  const lanErrorMessage =
+    lanError &&
+    t(
+      lanError.code === 'sync_connection'
+        ? 'sync_lan_connection_failed'
+        : safeError(lanError).message,
+    );
   const roleMessage = {
     off: 'sync_lan_off',
     discovering: 'sync_lan_discovering',
@@ -207,9 +230,9 @@ export function SyncSettings() {
           {t('sync_open_data_directory_failed')}
         </p>
       )}
-      {(error || loadingError) && (
+      {settingsError && (
         <p className="settings-feedback" role="alert">
-          {t(error || loadingError)}
+          {t(settingsError)}
         </p>
       )}
       {!status && !loadingError && <p role="status">{t('sync_loading')}</p>}
@@ -362,25 +385,31 @@ export function SyncSettings() {
             />
           </label>
           <p className="settings-feedback" role="status">
-            {t(roleMessage[status.role], { 0: status.peers })}
-            {status.lanError ? ` · ${t(safeError(status.lanError).message)}` : ''}
-            {status.lanLastSync ? ` · ${lastSync(status.lanLastSync)}` : ''}
+            {status.role === 'discovering' && lanError?.code === 'sync_connection'
+              ? t('sync_lan_start_failed')
+              : [
+                  t(roleMessage[status.role], { 0: status.peers }),
+                  lanErrorMessage,
+                  lastSync(status.lanLastSync),
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
           </p>
           <button
             className="secondary-button"
             disabled={busy || !status.lanEnabled}
             onClick={() => {
               if (status.pairingActive) void update({ action: 'stop_pairing' });
-              else
-                void perform(async () => {
-                  const nextCode = await invoke<string>('sync_pairing_code');
-                  setStatus((current) => (current ? { ...current, pairingActive: true } : current));
-                  setVisibleCode(nextCode);
-                });
+              else void generatePairingCode();
             }}
           >
             {t(status.pairingActive ? 'sync_hide_code' : 'sync_show_code')}
           </button>
+          {pairingError && (
+            <p className="settings-feedback" role="alert">
+              {t('sync_pairing_start_failed')}
+            </p>
+          )}
           {status.pairingActive && visibleCode && (
             <div className="new-form sync-form">
               <label htmlFor="sync-show-code">{t('sync_pairing_code')}</label>

@@ -29,7 +29,10 @@ use super::{
 };
 
 pub(super) const GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 79, 67);
-pub(super) const PORT: u16 = 41764;
+// Keep the original port for existing peers and use a second port if it is unavailable.
+pub(super) const DISCOVERY_PORTS: [u16; 2] = [41764, 24764];
+// Winsock reports an error for datagrams larger than the receive buffer.
+pub(super) const DISCOVERY_BUFFER_SIZE: usize = 65_536;
 const DISCOVERY: Duration = Duration::from_millis(2200);
 const ANNOUNCE: Duration = Duration::from_millis(500);
 const LEASE: Duration = Duration::from_secs(4);
@@ -94,7 +97,7 @@ pub(super) fn derive(key: &[u8; 32], label: &[u8]) -> Result<[u8; 32], AppError>
     Ok(mac.finalize().into_bytes().into())
 }
 
-pub(super) fn discovery_socket(port: u16) -> std::io::Result<UdpSocket> {
+fn discovery_socket(port: u16) -> std::io::Result<(UdpSocket, SocketAddrV4)> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_reuse_address(true)?;
     socket.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)).into())?;
@@ -102,7 +105,17 @@ pub(super) fn discovery_socket(port: u16) -> std::io::Result<UdpSocket> {
     socket.set_multicast_ttl_v4(1)?;
     socket.set_multicast_loop_v4(true)?;
     socket.set_nonblocking(true)?;
-    Ok(socket.into())
+    Ok((socket.into(), SocketAddrV4::new(GROUP, port)))
+}
+
+pub(super) fn discovery_sockets(
+    [primary, alternate]: [u16; 2],
+) -> std::io::Result<Vec<(UdpSocket, SocketAddrV4)>> {
+    match (discovery_socket(primary), discovery_socket(alternate)) {
+        (Ok(primary), Ok(alternate)) => Ok(vec![primary, alternate]),
+        (Ok(socket), Err(_)) | (Err(_), Ok(socket)) => Ok(vec![socket]),
+        (Err(error), Err(_)) => Err(error),
+    }
 }
 
 fn announce(
@@ -199,16 +212,16 @@ impl Drop for WorkSlot {
 
 impl Lan {
     pub fn start(core: CoreService, device: Uuid, key: [u8; 32]) -> Result<Self, AppError> {
-        Self::start_on_port(core, device, key, PORT)
+        Self::start_on_ports(core, device, key, DISCOVERY_PORTS)
     }
 
-    fn start_on_port(
+    fn start_on_ports(
         core: CoreService,
         device: Uuid,
         key: [u8; 32],
-        discovery_port: u16,
+        discovery_ports: [u16; 2],
     ) -> Result<Self, AppError> {
-        let udp = discovery_socket(discovery_port).map_err(|_| unavailable())?;
+        let discovery = discovery_sockets(discovery_ports).map_err(|_| unavailable())?;
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).map_err(|_| unavailable())?;
         listener.set_nonblocking(true).map_err(|_| unavailable())?;
         let port = listener.local_addr().map_err(|_| unavailable())?.port();
@@ -231,34 +244,35 @@ impl Lan {
             .name("uclip-lan".into())
             .spawn(move || {
                 let started = Instant::now();
-                let group = SocketAddrV4::new(GROUP, discovery_port);
                 let mut next_announce = started;
                 let mut next_exchange = started;
                 let serving = Arc::new(AtomicUsize::new(0));
                 let working = Arc::new(AtomicBool::new(false));
                 let mut host = false;
+                let mut buf = [0; DISCOVERY_BUFFER_SIZE];
                 while !stop.load(Ordering::Acquire) {
                     let now = Instant::now();
-                    let mut buf = [0; PACKET_BYTES + 1];
-                    for _ in 0..64 {
-                        let Ok((length, address)) = udp.recv_from(&mut buf) else {
-                            break;
-                        };
-                        let Some(peer) = discover(&buf[..length], address, &signing) else {
-                            continue;
-                        };
-                        if peer.device == device {
-                            continue;
-                        }
-                        if let Ok(mut state) = state.lock() {
-                            let accept = state
-                                .peers
-                                .get(&peer.device)
-                                .map_or(state.peers.len() < MAX_PEERS, |old| {
-                                    old.session != peer.session || old.uptime < peer.uptime
-                                });
-                            if accept {
-                                state.peers.insert(peer.device, peer);
+                    for (udp, _) in &discovery {
+                        for _ in 0..64 {
+                            let Ok((length, address)) = udp.recv_from(&mut buf) else {
+                                break;
+                            };
+                            let Some(peer) = discover(&buf[..length], address, &signing) else {
+                                continue;
+                            };
+                            if peer.device == device {
+                                continue;
+                            }
+                            if let Ok(mut state) = state.lock() {
+                                let accept = state
+                                    .peers
+                                    .get(&peer.device)
+                                    .map_or(state.peers.len() < MAX_PEERS, |old| {
+                                        old.session != peer.session || old.uptime < peer.uptime
+                                    });
+                                if accept {
+                                    state.peers.insert(peer.device, peer);
+                                }
                             }
                         }
                     }
@@ -292,7 +306,9 @@ impl Lan {
                             now.saturating_duration_since(started),
                             &signing,
                         ) {
-                            let _ = udp.send_to(&frame, group);
+                            for (udp, group) in &discovery {
+                                let _ = udp.send_to(&frame, group);
+                            }
                         }
                         next_announce = now + ANNOUNCE;
                     }
@@ -581,26 +597,29 @@ mod tests {
         let file = block(a.capture(ClipPayload::Files(vec![source.to_str().unwrap().into()])))
             .unwrap()
             .unwrap();
-        let port = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let occupied = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let spare = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let ports = [
+            occupied.local_addr().unwrap().port(),
+            spare.local_addr().unwrap().port(),
+        ];
+        drop(spare);
+        assert!(discovery_socket(ports[0]).is_err());
         let key = [17; 32];
-        let first = Lan::start_on_port(
+        let first = Lan::start_on_ports(
             a.clone(),
             block(a.replica_device()).unwrap().parse().unwrap(),
             key,
-            port,
+            ports,
         )
         .unwrap();
         // Start B during A's discovery window; A must still coordinate.
         thread::sleep(Duration::from_millis(550));
-        let second = Lan::start_on_port(
+        let second = Lan::start_on_ports(
             b.clone(),
             block(b.replica_device()).unwrap().parse().unwrap(),
             key,
-            port,
+            ports,
         )
         .unwrap();
         wait_for(|| {
