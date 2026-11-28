@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type {
   SyncCapacity,
   SyncJoinMode,
@@ -13,6 +13,7 @@ import { formatTimestamp, getLocale, t } from '../i18n';
 import { safeError } from '../platform/client';
 
 type RemoteKind = 'off' | SyncRemoteInput['kind'];
+const USAGE_REFRESH_INTERVAL = 6000;
 
 function formatBytes(bytes: number) {
   const units = ['B', 'KiB', 'MiB', 'GiB'];
@@ -50,6 +51,7 @@ export function SyncSettings({ active }: { active: boolean }) {
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const saving = useRef(false);
+  const lastUsageRead = useRef(-Infinity);
   const needsStatus = active || !status;
   const readsUsage = active && !!status?.paired;
 
@@ -93,6 +95,7 @@ export function SyncSettings({ active }: { active: boolean }) {
         const [capacity, localOnlyRecords] =
           await invoke<[SyncCapacity, number]>('sync_history_usage');
         if (current()) {
+          lastUsageRead.current = performance.now();
           setStatus((previous) =>
             previous?.paired ? { ...previous, capacity, localOnlyRecords } : previous,
           );
@@ -101,14 +104,28 @@ export function SyncSettings({ active }: { active: boolean }) {
       } catch (failure) {
         if (current()) setUsageError(safeError(failure).message);
       }
-      if (running) timer = setTimeout(refresh, 6000);
+      if (running) timer = setTimeout(refresh, USAGE_REFRESH_INTERVAL);
     };
-    void refresh();
+    const delay = USAGE_REFRESH_INTERVAL - (performance.now() - lastUsageRead.current);
+    if (delay > 0) timer = setTimeout(refresh, delay);
+    else void refresh();
     return () => {
       running = false;
       clearTimeout(timer);
     };
   }, [busy, readsUsage]);
+
+  function acceptUpdatedStatus(next: SyncStatus) {
+    if (next.capacity) {
+      lastUsageRead.current = performance.now();
+      setUsageError('');
+    }
+    setStatus(next);
+  }
+
+  function pairingStarted() {
+    setStatus((current) => (current ? { ...current, pairingActive: true } : current));
+  }
 
   async function run(operation: SyncOperation) {
     if (saving.current) return;
@@ -126,7 +143,8 @@ export function SyncSettings({ active }: { active: boolean }) {
   return active ? (
     <SyncSettingsForm
       status={status}
-      setStatus={setStatus}
+      onStatusUpdated={acceptUpdatedStatus}
+      onPairingStarted={pairingStarted}
       loadingError={loadingError}
       usageError={usageError}
       busy={busy}
@@ -137,14 +155,16 @@ export function SyncSettings({ active }: { active: boolean }) {
 
 function SyncSettingsForm({
   status,
-  setStatus,
+  onStatusUpdated,
+  onPairingStarted,
   loadingError,
   usageError,
   busy,
   run,
 }: {
   status: SyncStatus | null;
-  setStatus: Dispatch<SetStateAction<SyncStatus | null>>;
+  onStatusUpdated: (next: SyncStatus) => void;
+  onPairingStarted: () => void;
   loadingError: string;
   usageError: string;
   busy: boolean;
@@ -194,7 +214,7 @@ function SyncSettingsForm({
   const update = (request: UpdateSync) =>
     perform(async () => {
       const next = await invoke<SyncStatus>('update_sync', { request });
-      setStatus(next);
+      onStatusUpdated(next);
       if (request.action === 'finish_join' || request.action === 'cancel_join') {
         setPendingJoin(null);
         setConfirmReplace(false);
@@ -217,7 +237,7 @@ function SyncSettingsForm({
     return perform(async () => {
       try {
         const nextCode = await invoke<string>('sync_pairing_code');
-        setStatus((current) => (current ? { ...current, pairingActive: true } : current));
+        onPairingStarted();
         setVisibleCode(nextCode);
       } catch (failure) {
         if (safeError(failure).code !== 'sync_connection') throw failure;

@@ -8,7 +8,7 @@ test('unknown errors and server messages never expose arbitrary content', () => 
   expect(safeError({ code: 'invented', message: 'secret' }).code).toBe('unavailable');
 });
 
-test.each([1, 2, 999])(
+test.each([1, 2, 3, 999])(
   'contract version %s fails instead of accepting an incompatible snapshot',
   async (contractVersion) => {
     vi.stubGlobal('window', {});

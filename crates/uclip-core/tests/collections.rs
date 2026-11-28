@@ -57,7 +57,7 @@ fn names_are_bounded_unique_and_renaming_preserves_identity_and_membership() {
     }
     let a = category(&mut s, "  Work 🦀  ");
     assert_eq!(a.name, "Work 🦀");
-    assert_eq!(a.item_count, 0);
+    assert_eq!(s.collection_counts().unwrap().counts[&a.id], 0);
     assert_eq!(
         s.create_collection(CreateCollection {
             name: "work 🦀".into()
@@ -78,7 +78,7 @@ fn names_are_bounded_unique_and_renaming_preserves_identity_and_membership() {
         })
         .unwrap();
     assert_eq!(renamed.id, a.id);
-    assert_eq!(renamed.item_count, 1);
+    assert_eq!(s.collection_counts().unwrap().counts[&a.id], 1);
     assert_eq!(s.history(query(Some(&a.id))).unwrap().items[0].id, id);
     assert_eq!(
         s.rename_collection(RenameCollection {
@@ -126,13 +126,9 @@ fn moving_keeps_identity_pin_and_order_and_copying_creates_unpinned_independent_
     let a = category(&mut s, "A");
     let b = category(&mut s, "B");
     let counts = |storage: &Storage| {
-        storage
-            .collections()
-            .unwrap()
-            .items
-            .into_iter()
-            .map(|item| item.item_count)
-            .collect::<Vec<_>>()
+        let snapshot = storage.collection_counts().unwrap();
+        assert_eq!(snapshot.revision, storage.history_revision().unwrap());
+        [snapshot.counts[&a.id], snapshot.counts[&b.id]]
     };
     let source = s.create_text("正文 🦀\n  ".into()).unwrap();
     let original = s.history(query(None)).unwrap().items[0].clone();
@@ -455,6 +451,7 @@ fn deleting_a_collection_rolls_back_as_one_unit_and_preserves_trash_identity() {
         .unwrap();
     assert_eq!(storage.delete_collection(delete).unwrap(), 1);
     assert!(storage.collections().unwrap().items.is_empty());
+    assert!(storage.collection_counts().unwrap().counts.is_empty());
     assert_eq!(storage.history(query(None)).unwrap().total, 0);
     let trash = storage.history_window(query(None), true, None).unwrap();
     assert_eq!(trash.items[0].id, clip);

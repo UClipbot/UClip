@@ -29,6 +29,7 @@ fn main() {
         DeduplicationSnapshot::decl(&config),
         CollectionItem::decl(&config),
         CollectionsSnapshot::decl(&config),
+        CollectionCounts::decl(&config),
         CreateCollection::decl(&config),
         RenameCollection::decl(&config),
         DeleteCollection::decl(&config),

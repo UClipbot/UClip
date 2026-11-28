@@ -22,6 +22,7 @@ import {
 } from './demo/clips';
 import { useClipQuery } from './demo/useClipQuery';
 import { useHistory } from './platform/useHistory';
+import { useCollectionCounts } from './platform/useCollectionCounts';
 import { KeyboardSettings } from './components/KeyboardSettings';
 import { AboutSettings } from './components/AboutSettings';
 import { SyncSettings } from './components/SyncSettings';
@@ -175,19 +176,6 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
     settingsWindow,
   );
   const currentCollection = live.collections.find((item) => item.id === nativeCollectionId);
-  const scopeOptions: { value: string; label: string; collection?: CollectionItem }[] =
-    appearance.native
-      ? [
-          { value: 'all', label: t('all_history') },
-          { value: 'pinned', label: t('pinned') },
-          ...live.collections.map((collection) => ({
-            value: `collection:${collection.id}`,
-            label: collection.name,
-            collection,
-          })),
-          { value: 'trash', label: t('trash') },
-        ]
-      : Object.entries(viewTitles).map(([value, label]) => ({ value, label: t(label) }));
   const demoResult = useClipQuery(
     clips,
     appearance.native ? 'all' : (view as View),
@@ -472,6 +460,29 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
               : undefined,
         }
       : previewBase;
+  const sidebarVisible = appearance.native && !settingsWindow && collectionsOpen && !previewClip;
+  const collectionCounts = useCollectionCounts(
+    sidebarVisible && live.collections.length > 0,
+    live.status?.historyRevision,
+  );
+  const scopeOptions: {
+    value: string;
+    label: string;
+    collection?: CollectionItem;
+    count?: number;
+  }[] = appearance.native
+    ? [
+        { value: 'all', label: t('all_history') },
+        { value: 'pinned', label: t('pinned') },
+        ...live.collections.map((collection) => ({
+          value: `collection:${collection.id}`,
+          label: collection.name,
+          collection,
+          count: collectionCounts?.[collection.id],
+        })),
+        { value: 'trash', label: t('trash') },
+      ]
+    : Object.entries(viewTitles).map(([value, label]) => ({ value, label: t(label) }));
   const menuClip = menu?.clipId ? result.items.find((clip) => clip.id === menu.clipId) : undefined;
   const menuCollection = menu?.collectionId
     ? live.collections.find((collection) => collection.id === menu.collectionId)
@@ -1273,10 +1284,8 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
             </button>
           </div>
         )}
-        <main
-          className={`content-workspace ${collectionsOpen && !previewClip ? 'workspace-with-collections' : ''}`}
-        >
-          {appearance.native && collectionsOpen && !previewClip && (
+        <main className={`content-workspace ${sidebarVisible ? 'workspace-with-collections' : ''}`}>
+          {sidebarVisible && (
             <nav
               id="collection-sidebar"
               aria-label={t('collections_sidebar')}
@@ -1297,7 +1306,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                 </button>
               </div>
               <div className="collection-sidebar-items">
-                {scopeOptions.map(({ value, label, collection }) => (
+                {scopeOptions.map(({ value, label, collection, count }) => (
                   <div className="collection-sidebar-row" key={value}>
                     <button
                       className="collection-sidebar-link"
@@ -1322,11 +1331,11 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                       {collection && (
                         <>
                           <span className="collection-sidebar-count" aria-hidden="true">
-                            {collection.itemCount.toLocaleString(getLocale())}
+                            {count?.toLocaleString(getLocale()) ?? '…'}
                           </span>
-                          <span className="sr-only">
-                            {t('0_records', { 0: collection.itemCount })}
-                          </span>
+                          {count !== undefined && (
+                            <span className="sr-only">{t('0_records', { 0: count })}</span>
+                          )}
                         </>
                       )}
                     </button>
@@ -1641,7 +1650,7 @@ export function App({ historyKeymap }: { historyKeymap?: HistoryKeymap }) {
                 aria-label={t('collections_sidebar')}
                 title={t('collections_sidebar')}
                 aria-expanded={collectionsOpen}
-                aria-controls={collectionsOpen && !previewClip ? 'collection-sidebar' : undefined}
+                aria-controls={sidebarVisible ? 'collection-sidebar' : undefined}
                 onClick={() => {
                   setPreview(null);
                   setCollectionsOpen(!collectionsOpen);

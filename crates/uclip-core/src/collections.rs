@@ -4,11 +4,12 @@ use crate::{
         ensure_tab_capacity, history_payload_bytes, mutation_revision, now, prune_protecting,
         read_capture_policy, trash_count,
     },
-    AppError, ClipTransferBatch, ClipTransferSnapshot, CollectionItem, CollectionsSnapshot,
-    CreateCollection, DeleteCollection, ErrorCode, RenameCollection, Storage, TransferClip,
-    TransferClips, TransferMode,
+    AppError, ClipTransferBatch, ClipTransferSnapshot, CollectionCounts, CollectionItem,
+    CollectionsSnapshot, CreateCollection, DeleteCollection, ErrorCode, RenameCollection, Storage,
+    TransferClip, TransferClips, TransferMode,
 };
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use std::collections::BTreeMap;
 
 pub(crate) const MAX_COLLECTIONS: u32 = 64;
 
@@ -42,9 +43,7 @@ impl Storage {
     pub fn collections(&self) -> Result<CollectionsSnapshot, AppError> {
         let snapshot = self.connection.unchecked_transaction()?;
         let mut statement = snapshot.prepare(
-            "SELECT c.id,c.name,c.revision,
-                    (SELECT count(*) FROM clips WHERE collection=c.id AND deleted=0)
-             FROM collections c WHERE c.deleted=0 ORDER BY c.sequence,c.id",
+            "SELECT id,name,revision FROM collections WHERE deleted=0 ORDER BY sequence,id",
         )?;
         let items = statement
             .query_map([], |r| {
@@ -52,12 +51,26 @@ impl Storage {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     revision: r.get::<_, i64>(2)?.to_string(),
-                    item_count: r.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(CollectionsSnapshot {
             items,
+            revision: self.history_revision()?,
+        })
+    }
+
+    pub fn collection_counts(&self) -> Result<CollectionCounts, AppError> {
+        let snapshot = self.connection.unchecked_transaction()?;
+        let mut statement = snapshot.prepare(
+            "SELECT c.id,(SELECT count(*) FROM clips WHERE collection=c.id AND deleted=0)
+             FROM collections c WHERE c.deleted=0",
+        )?;
+        let counts = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        Ok(CollectionCounts {
+            counts,
             revision: self.history_revision()?,
         })
     }
@@ -98,7 +111,6 @@ impl Storage {
             id,
             name,
             revision: "0".into(),
-            item_count: 0,
         })
     }
 
@@ -133,17 +145,11 @@ impl Storage {
             "UPDATE history_meta SET revision=revision+1 WHERE singleton=1",
             [],
         )?;
-        let item_count = tx.query_row(
-            "SELECT count(*) FROM clips WHERE collection=?1 AND deleted=0",
-            [&request.id],
-            |row| row.get(0),
-        )?;
         tx.commit()?;
         Ok(CollectionItem {
             id: request.id,
             name,
             revision: (revision + 1).to_string(),
-            item_count,
         })
     }
 

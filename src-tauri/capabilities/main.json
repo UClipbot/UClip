@@ -26,6 +26,7 @@
     "allow-change-clip-pin",
     "allow-deduplicate-pinned",
     "allow-collections-list",
+    "allow-collection-counts",
     "allow-create-collection",
     "allow-rename-collection",
     "allow-delete-collection",

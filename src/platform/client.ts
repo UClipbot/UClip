@@ -89,7 +89,7 @@ export const desktop = {
     call<void>('open_project_page', { page }),
   async bootstrap(): Promise<BootstrapSnapshot> {
     const snapshot = await call<BootstrapSnapshot>('bootstrap');
-    if (snapshot.contractVersion !== 3) {
+    if (snapshot.contractVersion !== 4) {
       throw {
         code: 'unavailable',
         message: 'the_interface_and_desktop_service_versions_do_not_match_restart_or_reinstall',

@@ -786,6 +786,18 @@ pub async fn collections_list(
 }
 
 #[tauri::command]
+pub async fn collection_counts(
+    state: State<'_, AppState>,
+) -> Result<uclip_core::CollectionCounts, AppError> {
+    state
+        .core
+        .as_ref()
+        .map_err(Clone::clone)?
+        .collection_counts()
+        .await
+}
+
+#[tauri::command]
 pub async fn create_collection(
     state: State<'_, AppState>,
     request: uclip_core::CreateCollection,

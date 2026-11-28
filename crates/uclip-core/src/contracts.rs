@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use ts_rs::TS;
 
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -367,13 +368,19 @@ pub struct CollectionItem {
     pub id: String,
     pub name: String,
     pub revision: String,
-    pub item_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionsSnapshot {
     pub items: Vec<CollectionItem>,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionCounts {
+    pub counts: BTreeMap<String, u32>,
     pub revision: String,
 }
 

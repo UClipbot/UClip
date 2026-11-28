@@ -24,6 +24,7 @@ fn main() {
             "change_clip_pin",
             "deduplicate_pinned",
             "collections_list",
+            "collection_counts",
             "create_collection",
             "rename_collection",
             "delete_collection",

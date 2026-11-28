@@ -52,9 +52,11 @@ expectedRevision: string, };
 
 export type DeduplicationSnapshot = { removed: number, revision: string, };
 
-export type CollectionItem = { id: string, name: string, revision: string, itemCount: number, };
+export type CollectionItem = { id: string, name: string, revision: string, };
 
 export type CollectionsSnapshot = { items: Array<CollectionItem>, revision: string, };
+
+export type CollectionCounts = { counts: { [key in string]: number }, revision: string, };
 
 export type CreateCollection = { name: string, };
 

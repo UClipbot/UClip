@@ -118,6 +118,7 @@ pub fn run() {
             commands::change_clip_pin,
             commands::deduplicate_pinned,
             commands::collections_list,
+            commands::collection_counts,
             commands::create_collection,
             commands::rename_collection,
             commands::delete_collection,

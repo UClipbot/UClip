@@ -241,6 +241,9 @@ impl CoreService {
     pub async fn collections(&self) -> Result<crate::CollectionsSnapshot, AppError> {
         self.operation(|s| s.collections()).await
     }
+    pub async fn collection_counts(&self) -> Result<crate::CollectionCounts, AppError> {
+        self.operation(|s| s.collection_counts()).await
+    }
     pub async fn create_collection(
         &self,
         request: crate::CreateCollection,
