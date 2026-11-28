@@ -29,25 +29,37 @@ export function TrayMenuWindow() {
   useLayoutEffect(() => {
     const element = menu.current;
     if (!appearance.native || !element) return;
+    let previousWidth = 0;
     let previousHeight = 0;
     const resize = () => {
-      const { marginTop, marginBottom } = getComputedStyle(element);
-      const height = Math.ceil(
-        (element.getBoundingClientRect().height +
-          parseFloat(marginTop) +
-          parseFloat(marginBottom)) *
-          window.devicePixelRatio,
+      const { marginLeft, marginRight, marginTop, marginBottom } = getComputedStyle(element);
+      const { width, height } = element.getBoundingClientRect();
+      const scale = window.devicePixelRatio;
+      const physicalWidth = Math.ceil(
+        (width + parseFloat(marginLeft) + parseFloat(marginRight)) * scale,
       );
-      if (height <= 0 || height === previousHeight) return;
-      previousHeight = height;
-      void invoke('resize_tray_menu', { physicalHeight: height }).catch(() => {});
+      const physicalHeight = Math.ceil(
+        (height + parseFloat(marginTop) + parseFloat(marginBottom)) * scale,
+      );
+      if (
+        !(physicalWidth > 0 && physicalHeight > 0) ||
+        (physicalWidth === previousWidth && physicalHeight === previousHeight)
+      ) {
+        return;
+      }
+      previousWidth = physicalWidth;
+      previousHeight = physicalHeight;
+      void invoke('resize_tray_menu', { physicalWidth, physicalHeight }).catch(() => {});
     };
+    resize();
     const observer = new ResizeObserver(resize);
     observer.observe(element, { box: 'border-box' });
     window.addEventListener('resize', resize);
+    window.addEventListener('focus', resize);
     return () => {
       observer.disconnect();
       window.removeEventListener('resize', resize);
+      window.removeEventListener('focus', resize);
     };
   }, [appearance.native]);
 

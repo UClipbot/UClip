@@ -2,6 +2,10 @@ body.tray-menu-window {
   background: transparent;
 }
 
+.tray-menu-window #root {
+  width: 272px;
+}
+
 .tray-menu {
   flex: none;
   padding: 7px;

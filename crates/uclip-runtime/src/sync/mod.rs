@@ -28,7 +28,7 @@ use uclip_core::{
 use uuid::Uuid;
 
 use self::{
-    archive::{Archive, ArchiveStore},
+    archive::{Archive, ArchiveCache, ArchiveStore},
     lan::{derive, Lan},
     transport::{block, limit, reconcile_with_progress, unavailable},
 };
@@ -199,6 +199,7 @@ impl RemoteWorker {
         thread::Builder::new()
             .name("uclip-sync-storage".into())
             .spawn(move || {
+                let mut cache = ArchiveCache::new();
                 while !signal.load(Ordering::Acquire) {
                     let progress = |stage| {
                         if let Ok(mut report) = status.lock() {
@@ -214,7 +215,7 @@ impl RemoteWorker {
                             username,
                             password,
                         } => dav::Dav::connect(url, username, password, &name).and_then(|store| {
-                            archive_round(&core, store, key, &device, &signal, progress)
+                            archive_round(&core, store, key, &device, &signal, &mut cache, progress)
                         }),
                         SyncRemoteInput::Sftp {
                             host,
@@ -227,7 +228,7 @@ impl RemoteWorker {
                             host, *port, directory, username, password, host_key, &name,
                         )
                         .and_then(|store| {
-                            archive_round(&core, store, key, &device, &signal, progress)
+                            archive_round(&core, store, key, &device, &signal, &mut cache, progress)
                         }),
                     };
                     if let Ok(mut status) = status.lock() {
@@ -278,9 +279,10 @@ fn archive_round<S: ArchiveStore>(
     key: [u8; 32],
     device: &str,
     stop: &AtomicBool,
+    cache: &mut ArchiveCache,
     progress: impl FnMut(SyncRemoteProgress),
 ) -> Result<Option<u32>, AppError> {
-    let mut remote = Archive::new(ActiveStore(store, stop), key, device.into());
+    let mut remote = Archive::with_cache(ActiveStore(store, stop), key, device.into(), cache);
     reconcile_with_progress(core, &mut remote, progress)
 }
 
@@ -296,17 +298,17 @@ impl<S> ActiveStore<'_, S> {
 }
 
 impl<S: ArchiveStore> ArchiveStore for ActiveStore<'_, S> {
-    fn list(&mut self, area: archive::Area) -> Result<Vec<String>, AppError> {
+    fn list(&mut self, area: archive::Area) -> Result<Vec<archive::ArchiveFile>, AppError> {
         self.active()?;
         let result = self.0.list(area)?;
         self.active()?;
         Ok(result)
     }
-    fn object_exists(&mut self, name: &str) -> Result<bool, AppError> {
+    fn object_revision(&mut self, name: &str) -> Result<Option<archive::FileRevision>, AppError> {
         self.active()?;
-        let exists = self.0.object_exists(name)?;
+        let revision = self.0.object_revision(name)?;
         self.active()?;
-        Ok(exists)
+        Ok(revision)
     }
 
     fn read(
@@ -320,6 +322,25 @@ impl<S: ArchiveStore> ArchiveStore for ActiveStore<'_, S> {
         self.active()?;
         Ok(data)
     }
+    fn read_batch_size(&self) -> usize {
+        self.0.read_batch_size()
+    }
+    fn read_objects(
+        &mut self,
+        names: &[String],
+        bound: usize,
+        _: Option<&AtomicBool>,
+    ) -> Vec<archive::ObjectRead> {
+        if self.active().is_err() {
+            return names.iter().map(|_| Err(unavailable())).collect();
+        }
+        let objects = self.0.read_objects(names, bound, Some(self.1));
+        if self.active().is_err() {
+            return names.iter().map(|_| Err(unavailable())).collect();
+        }
+        objects
+    }
+
     fn create(&mut self, area: archive::Area, name: &str, data: Vec<u8>) -> Result<bool, AppError> {
         self.active()?;
         self.0.create(area, name, data)
@@ -914,7 +935,8 @@ mod tests {
         device: &str,
         stop: &AtomicBool,
     ) -> Result<bool, AppError> {
-        super::archive_round(core, store, key, device, stop, |_| {})
+        let mut cache = ArchiveCache::new();
+        super::archive_round(core, store, key, device, stop, &mut cache, |_| {})
             .map(|records| records.is_some())
     }
 

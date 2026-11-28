@@ -1,11 +1,10 @@
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Manager, PhysicalSize, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, LogicalSize, Manager, PhysicalSize, WebviewWindow, WindowEvent};
 use uclip_core::{AppError, ErrorCode};
 
 pub(crate) const LABEL: &str = "tray-menu";
-const WIDTH: f64 = 272.0;
-const INITIAL_HEIGHT: f64 = 272.0;
+const INITIAL_SIZE: LogicalSize<f64> = LogicalSize::new(272.0, 272.0);
 const GAP: f64 = 6.0;
 
 #[cfg(not(target_os = "macos"))]
@@ -51,7 +50,7 @@ pub fn open(app: &AppHandle, cursor: Anchor) {
             let window =
                 crate::window_frame::builder(&app, LABEL, "index.html?window=tray-menu", false)
                     .title("UClip Menu")
-                    .inner_size(WIDTH, INITIAL_HEIGHT)
+                    .inner_size(INITIAL_SIZE.width, INITIAL_SIZE.height)
                     .always_on_top(true)
                     .skip_taskbar(true)
                     .resizable(false)
@@ -81,14 +80,12 @@ pub fn open(app: &AppHandle, cursor: Anchor) {
             if let Ok(mut anchor) = window.state::<TrayMenuAnchor>().0.lock() {
                 *anchor = Some(cursor);
             }
-            let height = window
+            let size = window
                 .inner_size()
                 .ok()
                 .zip(window.scale_factor().ok())
-                .map_or(INITIAL_HEIGHT, |(size, scale)| {
-                    size.to_logical::<f64>(scale).height
-                });
-            position(&window, cursor, height);
+                .map_or(INITIAL_SIZE, |(size, scale)| size.to_logical::<f64>(scale));
+            position(&window, cursor, size);
             if let Err(error) = window.show().and_then(|_| window.set_focus()) {
                 let _ = window.hide();
                 eprintln!("tray_menu_show_failed: {error}");
@@ -110,24 +107,29 @@ pub fn open(app: &AppHandle, cursor: Anchor) {
 }
 
 #[tauri::command]
-pub async fn resize_tray_menu(window: WebviewWindow, physical_height: u32) -> Result<(), AppError> {
+pub async fn resize_tray_menu(
+    window: WebviewWindow,
+    physical_width: u32,
+    physical_height: u32,
+) -> Result<(), AppError> {
     if window.label() != LABEL {
         return Err(AppError::new(ErrorCode::Restricted));
     }
-    if !(1..=4096).contains(&physical_height) {
+    if !(1..=4096).contains(&physical_width) || !(1..=4096).contains(&physical_height) {
         return Err(AppError::new(ErrorCode::InvalidInput));
     }
+    let requested = PhysicalSize::new(physical_width, physical_height);
     let handle = window.clone();
     window
         .run_on_main_thread(move || {
             let (Ok(size), Ok(scale)) = (handle.inner_size(), handle.scale_factor()) else {
                 return;
             };
-            if size.height == physical_height {
+            if size == requested {
                 return;
             }
             // WebView zoom changes the ratio between CSS pixels and native logical units.
-            if let Err(error) = handle.set_size(PhysicalSize::new(size.width, physical_height)) {
+            if let Err(error) = handle.set_size(requested) {
                 eprintln!("tray_menu_resize_failed: {error}");
                 return;
             }
@@ -138,14 +140,14 @@ pub async fn resize_tray_menu(window: WebviewWindow, physical_height: u32) -> Re
                 .ok()
                 .and_then(|anchor| *anchor);
             if let Some(anchor) = anchor {
-                position(&handle, anchor, f64::from(physical_height) / scale);
+                position(&handle, anchor, requested.to_logical(scale));
             }
         })
         .map_err(|_| AppError::new(ErrorCode::Unavailable))
 }
 
 #[cfg(not(target_os = "macos"))]
-fn position(window: &WebviewWindow, cursor: Anchor, height: f64) {
+fn position(window: &WebviewWindow, cursor: Anchor, size: LogicalSize<f64>) {
     let Some((cursor, monitor)) = cursor.and_then(|cursor| {
         window
             .monitor_from_point(cursor.x, cursor.y)
@@ -162,14 +164,14 @@ fn position(window: &WebviewWindow, cursor: Anchor, height: f64) {
         cursor.x,
         work.position.x.into(),
         work.size.width.into(),
-        WIDTH * scale,
+        size.width * scale,
         GAP * scale,
     );
     let y = popup_axis(
         cursor.y,
         work.position.y.into(),
         work.size.height.into(),
-        height * scale,
+        size.height * scale,
         GAP * scale,
     );
     let _ = window.set_position(tauri::PhysicalPosition::new(
@@ -179,7 +181,7 @@ fn position(window: &WebviewWindow, cursor: Anchor, height: f64) {
 }
 
 #[cfg(target_os = "macos")]
-fn position(window: &WebviewWindow, cursor: Anchor, height: f64) {
+fn position(window: &WebviewWindow, cursor: Anchor, size: LogicalSize<f64>) {
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSScreen, NSWindow};
     use objc2_foundation::NSPoint;
@@ -203,12 +205,12 @@ fn position(window: &WebviewWindow, cursor: Anchor, height: f64) {
             && cursor.y < frame.origin.y + frame.size.height
         {
             let work = screen.visibleFrame();
-            let x = popup_axis(cursor.x, work.origin.x, work.size.width, WIDTH, GAP);
+            let x = popup_axis(cursor.x, work.origin.x, work.size.width, size.width, GAP);
             let y = -popup_axis(
                 -cursor.y,
                 -(work.origin.y + work.size.height),
                 work.size.height,
-                height,
+                size.height,
                 GAP,
             );
             native.setFrameTopLeftPoint(NSPoint::new(x, y));

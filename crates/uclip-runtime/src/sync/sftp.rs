@@ -1,7 +1,9 @@
 use std::{
     io::{Read, Write},
+    iter,
     net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
@@ -12,7 +14,9 @@ use uclip_core::{AppError, ErrorCode};
 use uuid::Uuid;
 
 use super::{
-    archive::{ArchiveStore, Area},
+    archive::{
+        read_parallel, ArchiveFile, ArchiveStore, Area, FileRevision, ObjectRead, PARALLEL_READS,
+    },
     transport::{invalid, limit, unavailable},
 };
 
@@ -21,6 +25,17 @@ const DEADLINE: Duration = Duration::from_secs(8);
 pub(super) struct Ssh {
     channel: Sftp,
     root: PathBuf,
+    login: Login,
+    readers: Vec<Sftp>,
+    read_batch_limit: usize,
+}
+
+struct Login {
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    expected_key: Vec<u8>,
 }
 
 pub(super) fn fingerprint(fingerprint: &str) -> Result<Vec<u8>, AppError> {
@@ -33,18 +48,9 @@ pub(super) fn fingerprint(fingerprint: &str) -> Result<Vec<u8>, AppError> {
     Ok(digest)
 }
 
-impl Ssh {
-    pub fn connect(
-        host: &str,
-        port: u16,
-        directory: &str,
-        username: &str,
-        password: &str,
-        host_key: &str,
-        namespace: &str,
-    ) -> Result<Self, AppError> {
-        let expected = fingerprint(host_key)?;
-        let stream = (host, port)
+impl Login {
+    fn channel(&self) -> Result<Sftp, AppError> {
+        let stream = (self.host.as_str(), self.port)
             .to_socket_addrs()
             .map_err(|_| unavailable())?
             .take(4)
@@ -55,15 +61,42 @@ impl Ssh {
         session.set_tcp_stream(stream);
         session.handshake().map_err(|_| unavailable())?;
         let (key, _) = session.host_key().ok_or_else(unavailable)?;
-        if &Sha256::digest(key)[..] != expected.as_slice() {
+        if &Sha256::digest(key)[..] != self.expected_key.as_slice() {
             return Err(AppError::new(ErrorCode::SyncAuthentication));
         }
         session
-            .userauth_password(username, password)
+            .userauth_password(&self.username, &self.password)
             .map_err(|_| AppError::new(ErrorCode::SyncAuthentication))?;
-        let channel = session.sftp().map_err(|_| unavailable())?;
+        session.sftp().map_err(|_| unavailable())
+    }
+}
+
+impl Ssh {
+    pub fn connect(
+        host: &str,
+        port: u16,
+        directory: &str,
+        username: &str,
+        password: &str,
+        host_key: &str,
+        namespace: &str,
+    ) -> Result<Self, AppError> {
+        let login = Login {
+            host: host.into(),
+            port,
+            username: username.into(),
+            password: password.into(),
+            expected_key: fingerprint(host_key)?,
+        };
+        let channel = login.channel()?;
         let root = PathBuf::from(format!("{}/{namespace}", directory.trim_end_matches('/')));
-        let this = Self { channel, root };
+        let this = Self {
+            channel,
+            root,
+            login,
+            readers: Vec::new(),
+            read_batch_limit: PARALLEL_READS,
+        };
         this.directory(&this.root)?;
         for area in [Area::Manifests, Area::Objects] {
             this.directory(&this.path(area, ""))?;
@@ -84,6 +117,29 @@ impl Ssh {
             Err(error) => Err(sftp_error(error)),
         }
     }
+
+    fn get(channel: &Sftp, path: &Path, bound: usize) -> ObjectRead {
+        let stat = match channel.lstat(path) {
+            Ok(stat) if stat.is_file() => stat,
+            Ok(_) => return Err(invalid()),
+            Err(error) if error.code() == ssh2::ErrorCode::SFTP(2) => return Ok(None),
+            Err(error) => return Err(sftp_error(error)),
+        };
+        if stat.size.is_some_and(|size| size > bound as u64) {
+            return Err(limit());
+        }
+        let mut data = Vec::new();
+        channel
+            .open(path)
+            .map_err(sftp_error)?
+            .take(bound as u64 + 1)
+            .read_to_end(&mut data)
+            .map_err(|_| unavailable())?;
+        if data.len() > bound {
+            return Err(limit());
+        }
+        Ok(Some(data))
+    }
 }
 
 fn sftp_error(error: ssh2::Error) -> AppError {
@@ -93,8 +149,15 @@ fn sftp_error(error: ssh2::Error) -> AppError {
     }
 }
 
+fn file_revision(stat: ssh2::FileStat) -> FileRevision {
+    FileRevision {
+        size: stat.size,
+        validator: stat.mtime.map(|modified| modified.to_string()),
+    }
+}
+
 impl ArchiveStore for Ssh {
-    fn list(&mut self, area: Area) -> Result<Vec<String>, AppError> {
+    fn list(&mut self, area: Area) -> Result<Vec<ArchiveFile>, AppError> {
         let mut directory = self
             .channel
             .opendir(self.path(area, ""))
@@ -110,9 +173,12 @@ impl ArchiveStore for Ssh {
                     if let Some(name) = name
                         .file_name()
                         .and_then(|part| part.to_str())
-                        .filter(|part| part.ends_with(area.suffix()))
+                        .filter(|part| area.matches(part))
                     {
-                        names.push(name.to_string());
+                        names.push(ArchiveFile {
+                            name: name.to_owned(),
+                            revision: file_revision(stat),
+                        });
                     }
                 }
                 Ok(_) => {}
@@ -124,37 +190,87 @@ impl ArchiveStore for Ssh {
         Err(limit())
     }
 
-    fn object_exists(&mut self, name: &str) -> Result<bool, AppError> {
+    fn object_revision(&mut self, name: &str) -> Result<Option<FileRevision>, AppError> {
         match self.channel.lstat(&self.path(Area::Objects, name)) {
-            Ok(stat) if stat.is_file() => Ok(true),
+            Ok(stat) if stat.is_file() => Ok(Some(file_revision(stat))),
             Ok(_) => Err(invalid()),
-            Err(error) if error.code() == ssh2::ErrorCode::SFTP(2) => Ok(false),
+            Err(error) if error.code() == ssh2::ErrorCode::SFTP(2) => Ok(None),
             Err(error) => Err(sftp_error(error)),
         }
     }
 
     fn read(&mut self, area: Area, name: &str, bound: usize) -> Result<Option<Vec<u8>>, AppError> {
-        let path = self.path(area, name);
-        let stat = match self.channel.lstat(&path) {
-            Ok(stat) if stat.is_file() => stat,
-            Ok(_) => return Err(invalid()),
-            Err(error) if error.code() == ssh2::ErrorCode::SFTP(2) => return Ok(None),
-            Err(error) => return Err(sftp_error(error)),
-        };
-        if stat.size.is_some_and(|size| size > bound as u64) {
-            return Err(limit());
+        Self::get(&self.channel, &self.path(area, name), bound)
+    }
+
+    fn read_batch_size(&self) -> usize {
+        self.read_batch_limit
+    }
+
+    fn read_objects(
+        &mut self,
+        names: &[String],
+        bound: usize,
+        stopped: Option<&AtomicBool>,
+    ) -> Vec<ObjectRead> {
+        let target = names.len().min(self.read_batch_limit);
+        // Objects from the same blocking SSH session share a lock during I/O.
+        while 1 + self.readers.len() < target
+            && !stopped.is_some_and(|flag| flag.load(Ordering::Acquire))
+        {
+            match self.login.channel() {
+                Ok(reader) => self.readers.push(reader),
+                Err(_) => {
+                    self.read_batch_limit = 1 + self.readers.len();
+                    break;
+                }
+            }
         }
-        let mut data = Vec::new();
-        self.channel
-            .open(&path)
-            .map_err(sftp_error)?
-            .take(bound as u64 + 1)
-            .read_to_end(&mut data)
-            .map_err(|_| unavailable())?;
-        if data.len() > bound {
-            return Err(limit());
+        let mut results = Vec::with_capacity(names.len());
+        let mut offset = 0;
+        while offset < names.len() {
+            if stopped.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+                results.extend((offset..names.len()).map(|_| Err(unavailable())));
+                break;
+            }
+            let width = (1 + self.readers.len()).min(names.len() - offset);
+            let chunk = &names[offset..offset + width];
+            let channels = iter::once(&self.channel).chain(&self.readers);
+            let mut batch = read_parallel(channels.zip(chunk), stopped, |(channel, name)| {
+                Self::get(channel, &self.path(Area::Objects, name), bound)
+            });
+            let mut aborted = stopped.is_some_and(|flag| flag.load(Ordering::Acquire));
+            let has_connection_error = batch.iter().any(
+                |result| matches!(result, Err(error) if error.code == ErrorCode::SyncConnection),
+            );
+            if !aborted && chunk.len() > 1 && has_connection_error {
+                // A server may drop concurrent SFTP sessions. Drop extra channels and retry serially.
+                self.readers.clear();
+                self.read_batch_limit = 1;
+                for (name, result) in chunk.iter().zip(&mut batch) {
+                    if stopped.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+                        aborted = true;
+                        break;
+                    }
+                    if matches!(result, Err(error) if error.code == ErrorCode::SyncConnection) {
+                        *result = Self::get(&self.channel, &self.path(Area::Objects, name), bound);
+                        if matches!(result, Err(error) if error.code == ErrorCode::SyncConnection) {
+                            aborted = true;
+                            break;
+                        }
+                    }
+                }
+            } else if has_connection_error {
+                aborted = true;
+            }
+            results.extend(batch);
+            offset += chunk.len();
+            if aborted {
+                results.extend((offset..names.len()).map(|_| Err(unavailable())));
+                break;
+            }
         }
-        Ok(Some(data))
+        results
     }
 
     fn create(&mut self, area: Area, name: &str, data: Vec<u8>) -> Result<bool, AppError> {
