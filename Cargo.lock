@@ -5213,7 +5213,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "uclip-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -5234,7 +5234,7 @@ dependencies = [
 
 [[package]]
 name = "uclip-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "regex",
  "rmp-serde",
@@ -5252,7 +5252,7 @@ dependencies = [
 
 [[package]]
 name = "uclip-desktop"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "clipboard-rs",
@@ -5280,7 +5280,7 @@ dependencies = [
 
 [[package]]
 name = "uclip-runtime"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
